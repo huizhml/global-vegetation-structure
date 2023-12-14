@@ -1,0 +1,50 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+env/
+build/
+dist/
+eggs/
+*.egg-info/
+bin/
+include/
+lib/
+local/
+pip-wheel-metadata/
+share/
+.vscode/
+.idea/
+
+# PyCharm
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Pytest
+pytest_cache/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+
+*.out
+*test*
+*key.json
+logs/
+keys/
+./ipynb_checkpoints
+output*
+.env

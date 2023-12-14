@@ -1,0 +1,9 @@
+zone: 32M
+partition_size: 100
+
+
+hydra:
+  job:
+    chdir: False
+  run:
+    dir: ./logs/${zone}_${partition_size}_${now:%Y-%m-%d_%H-%M-%S}
