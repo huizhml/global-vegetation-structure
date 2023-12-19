@@ -1,13 +1,19 @@
+#%%
+import re
+import json
+from datetime import datetime, timedelta
 from pathlib import Path
+import ipdb
+
 import dask
 import dask.dataframe as dd
 import geopandas as gpd
-import re
-from datetime import datetime, timedelta
-import json
-from shapely.geometry import shape
 import dask_geopandas as dgd
-import ipdb
+from shapely.geometry import shape
+
+from const import dtypes
+
+#%%
 
 def getDate(year, doy):
     start_of_year = datetime(int(year), 1, 1)
@@ -17,16 +23,17 @@ def getDate(year, doy):
 
 def addTrackNumberForFile(csvFile):
     search = re.search(r'(\d{4})(\d{3})', csvFile.stem)
-    df = dd.read_csv(csvFile, dtype={'system:index': 'object'})
+    df = dd.read_csv(csvFile, dtype=dtypes, usecols=list(dtypes.keys()))
     df['date'] = getDate(search.group(1), search.group(2))
     df['track_id'] = re.search(r'(\d{13})_O(\d{5})_.*_T(\d{5})',
                                csvFile.stem)[0]
 
-    df['geometry'] = df['.geo'].apply(lambda x: shape(json.loads(x)),
-                                      meta=('geometry', object))
+    df['x'] = df['.geo'].apply(lambda x: json.loads(x)['coordinates'][0],
+                                      meta=('geometry', 'float'))
+    df['y'] = df['.geo'].apply(lambda x: json.loads(x)['coordinates'][1],
+                                      meta=('geometry', 'float'))
     df = df.drop('.geo', axis=1)
-    ddf = dgd.from_dask_dataframe(df).compute()
-    ddf.to_parquet(csvFile.with_suffix('.parquet'))
+    df.to_parquet(csvFile.with_suffix('.parquet'))
     return
 
 
@@ -36,4 +43,7 @@ def addTrackNumber():
     res = []
     for file in csvFiles:
         res.append(dask.delayed(addTrackNumberForFile)(file))
-    dask.compute(res)
+    # dask.compute(res)
+#%%
+if __name__ == '__main__':
+    addTrackNumber()   
