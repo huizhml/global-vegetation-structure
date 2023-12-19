@@ -11,7 +11,7 @@ import geopandas as gpd
 import dask_geopandas as dgd
 from shapely.geometry import shape
 
-from const import dtypes
+# from const import dtypes
 
 #%%
 
@@ -33,7 +33,7 @@ def addTrackNumberForFile(csvFile):
     df['y'] = df['.geo'].apply(lambda x: json.loads(x)['coordinates'][1],
                                       meta=('geometry', 'float'))
     df = df.drop('.geo', axis=1)
-    df.to_parquet(csvFile.with_suffix('.parquet'))
+    df.to_parquet(csvFile.parent, name_function=lambda x: csvFile.stem + '.parquet')
     return
 
 
