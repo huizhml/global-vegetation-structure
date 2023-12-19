@@ -1,29 +1,31 @@
+#%%
 import os
-import dask
-import numpy as np
-import matplotlib.pyplot as plt
-import planetary_computer
-import numpy as np
-from numpy import datetime64
+import time
 from pathlib import Path
+import matplotlib.pyplot as plt
+
+import numpy as np
+import xarray as xr
+
+import pystac
 import pystac_client
-import pandas as pd
+import planetary_computer
+import retry
+
+
+import dask
 import dask.array as da
-from datetime import datetime, timedelta
-from shapely.geometry import box, shape, MultiPoint, Point
+import dask.dataframe as ddf
+import pandas as pd
 import geopandas as gpd
 import dask_geopandas as dgd
-import xarray as xr
+
 import ipdb
-import pystac
-import time
 import hydra
 
-import retry
 from utils._stackstac import stack
 
-
-
+#%%
 stac_endpoint = 'https://planetarycomputer.microsoft.com/api/stac/v1'
 api = pystac_client.Client.open(stac_endpoint,
                                 modifier=planetary_computer.sign_inplace)
@@ -383,12 +385,16 @@ class S2Downloader:
         return pd.Series([item, item.properties['proj:epsg']],
                          index=['item', 'epsg'])
 
-
-@hydra.main(config_path="config", config_name="s2_download")
+#%%
+@hydra.main(config_path="config", config_name="s2_download", version_base="1.2")
 def main(cfg):
+    from dask.distributed import Client, LocalCluster
+    cluster = LocalCluster()
+    client = Client(cluster)
     time_start = time.time()
     s2downloader = S2Downloader("GEDI2019", partition_size=cfg.partition_size)
-    res = s2downloader.get_s2_for_zone(cfg.zone)
+    # client.submit(s2downloader.get_s2_for_zone, cfg.zone)
+    res = client.submit(s2downloader.get_s2_for_zone, '40M')
     print('time:', time.time() - time_start)
 
     # from dask.distributed import Client
@@ -397,16 +403,8 @@ def main(cfg):
     # ipdb.set_trace()
     # print(res)
 
+#%%
 if __name__ == "__main__":
 
     # with ipdb.launch_ipdb_on_exception():
     main()
-    # time_start = time.time()
-    # s2downloader = S2Downloader("GEDI2019", debug=True, method='stacapi')
-    # print('start working...')
-    # res = s2downloader.get_s2_for_zone('32M')
-    
-    # print('time:', time.time() - time_start)
-
-
- 
