@@ -43,7 +43,7 @@ def addTrackNumber():
     res = []
     for file in csvFiles:
         res.append(dask.delayed(addTrackNumberForFile)(file))
-    # dask.compute(res)
+    dask.compute(res)
 #%%
 if __name__ == '__main__':
     addTrackNumber()   
