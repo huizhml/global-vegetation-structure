@@ -152,10 +152,10 @@ class S2Downloader:
         xrrs = partition.apply(self.get_best_s2_for_p, axis=1, args=(esa_wc_items,))
         xrrs = dask.compute(*xrrs)
         xrrs = xr.concat(xrrs, dim='time', compat='override', coords='minimal', join='override')
-        # xrrs = xrrs.chunk({'time': 10, 'band':14, 'x': 15, 'y': 15})
+        xrrs = xrrs.chunk({'time': 1, 'band':14, 'x': 15, 'y': 15})
         xrrs['time'].encoding['dtype'] = 'float64'
         try:
-            xrrs.to_zarr(self.save_folder / f'{zone}.zarr', group=f'partition_{partition_info["number"]}', mode='w')
+            xrrs.to_netcdf(self.save_folder / f'{zone}.nc', engine='h5netcdf', group=f'partition_{partition_info["number"]}', mode='w')
             print(f'finish partition {partition_info["number"]}')
             flag.touch()
             flag.write_text(f'{xrrs.shape[0]} locations downloaded, {len(partition) - xrrs.shape[0]} locations failed')
@@ -251,7 +251,7 @@ class S2Downloader:
         items = group['item'].values.tolist()
         epsg = items[0].properties['proj:epsg']
         # Do the buffer for different epsg
-        geom = gpd.GeoSeries(geom).to_crs(epsg)
+        geom = geom.to_crs(epsg)
         bounds = geom[0].buffer(70).bounds
         try:
             patch = stack(items, ['SCL'], resolution=10, bounds=bounds, fill_value=0)
@@ -372,15 +372,16 @@ def main(cfg):
     # print(res)
 
 #%%
-# if __name__ == "__main__":
+if __name__ == "__main__":
 # from dask.distributed import Client, LocalCluster
 # cluster = LocalCluster()
 # client = Client(cluster)
-s2downloader = S2Downloader("GEDI2019", partition_size=100)
-res = s2downloader.get_s2_for_zone('01G')
+# client.submit(s2downloader.get_s2_for_zone, '01G')
+    s2downloader = S2Downloader("GEDI2019", partition_size=100)
+    res = s2downloader.get_s2_for_zone('01G')
     # with ipdb.launch_ipdb_on_exception():
     # main()
 
 # %%
-    
+
 # %%
