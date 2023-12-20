@@ -192,7 +192,7 @@ class S2Downloader:
 
         # get patch and calculate defective cover
 
-        items_df = items_df.groupby('epsg').apply(self.calculate_defective_cover, geom, point['shot_number'])
+        items_df = items_df.groupby('epsg', group_keys=False).apply(self.calculate_defective_cover, geom, point['shot_number'])
 
         if items_df['defectiveCover'].isna().all():
             return None
