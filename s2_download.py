@@ -117,32 +117,29 @@ class S2Downloader:
         Filter S2 tiles for each GEDI zone
         '''
         zoneFolder = self.gediFolder / zone
+        flag = self.save_folder/ f'{zone}_done'
+        if flag.exists():
+            print(f'{zone} has been processed.')
+            return
         gediDf = ddf.read_parquet(zoneFolder / '*.parquet', dropna=True, usecols=list(dtypes.keys()))
-
-        
-        # if self.debug:
-        #     num_partitions = gediDf.npartitions
-        #     for partition_index in range(num_partitions):
-        #         partition_df = gediDf.partitions[partition_index]
-        #         self.get_patch_for_partition(partition_df, esa_wc_items, zone, partition_info={'number': partition_index})
 
         gediDf = gediDf.set_index('system:index')
         # get the number of partitions based on the number of points
         ll = gediDf.map_partitions(len).compute()
         total_points = ll.sum()
+        print(f'processing {total_points} locations...')
         partitions = total_points // self.partition_size + 1 
         gediDf = gediDf.repartition(npartitions=partitions)
-
         res = gediDf.map_partitions(self.get_patch_for_partition, zone, meta=(None, 'string')).compute()
-        flag = self.save_folder/ f'{zone}.zarr'/f'done'
+        
         flag.touch()
         flag.write_text(f'partition size used: {self.partition_size}')
         return 
 
     def get_patch_for_partition(self, partition, zone, partition_info=None):
-        flag = self.save_folder/ f'{zone}.zarr'/f'partition_{partition_info["number"]}' / "done"
+        flag = self.save_folder/ f'{zone}_partition_{partition_info["number"]}_done'
         if flag.exists():
-            print(f'partition {partition_info["number"]} already exists')
+            print(f'{zone} partition {partition_info["number"]} already exists')
             return
         geom = gpd.points_from_xy(partition['x'], partition['y'])
         esa_wc_items = api.search(
@@ -154,16 +151,15 @@ class S2Downloader:
         xrrs = xr.concat(xrrs, dim='time', compat='override', coords='minimal', join='override')
         xrrs = xrrs.chunk({'time': 1, 'band':14, 'x': 15, 'y': 15})
         xrrs['time'].encoding['dtype'] = 'float64'
-        try:
-            xrrs.to_netcdf(self.save_folder / f'{zone}.nc', engine='h5netcdf', group=f'partition_{partition_info["number"]}', mode='w')
-            print(f'finish partition {partition_info["number"]}')
-            flag.touch()
-            flag.write_text(f'{xrrs.shape[0]} locations downloaded, {len(partition) - xrrs.shape[0]} locations failed')
-        except:
-            print(f'{zone}.zarr/partition {partition_info["number"]} failed')
-            failed = self.save_folder / f'{zone}.zarr'/f'partition_{partition_info["number"]}_failed'
-            failed.touch()
-        
+
+        xrrs.to_netcdf(self.save_folder / f'{zone}.h5', format='NETCDF4', engine='h5netcdf', group=f'partition_{partition_info["number"]}', mode='a')
+        print(f'finish {zone} partition {partition_info["number"]}')
+            # flag.touch()
+            # flag.write_text(f'{xrrs.shape[0]} locations downloaded, {len(partition) - xrrs.shape[0]} locations failed')
+        # except:
+        #     print(f'{zone} partition {partition_info["number"]} failed')
+        #     failed = self.save_folder / f'{zone}_partition_{partition_info["number"]}_failed'
+        #     failed.touch()
         return
 
 
@@ -194,10 +190,10 @@ class S2Downloader:
 
         items_df = items_df.groupby('epsg', group_keys=False).apply(self.calculate_defective_cover, geom, point['shot_number'])
 
-        if items_df['defectiveCover'].isna().all():
+        if items_df['defective_cover'].isna().all():
             return None
 
-        items_df = items_df.sort_values(['defectiveCover', 'delta_day'])
+        items_df = items_df.sort_values(['defective_cover', 'delta_day'])
         best = items_df.iloc[0]
 
         # get patch
@@ -268,7 +264,7 @@ class S2Downloader:
 
         df = pd.DataFrame({
             's2_id': patch.id.values,
-            'defectiveCover': patch.data,
+            'defective_cover': patch.data,
             'delta_day': group.delta_day,
             'items': items,
             'shot_number': shot_number
@@ -302,7 +298,7 @@ class S2Downloader:
                     pd.Timestamp(date, tz='UTC')).days
             } for item in items))
         if len(items) == 0 and (end - start).days < 365:
-            print(f'No S2 tile found between {start} - {end}, extend the range by 30 days')
+            print(f'No S2 tile found between {start} - {end}, extend the range by {self.extendDays.days*2} days')
             items_df = self.query_s2_for_p(start - self.extendDays,
                                            end + self.extendDays, geom, date)
             return items_df
@@ -373,12 +369,14 @@ def main(cfg):
 
 #%%
 if __name__ == "__main__":
-# from dask.distributed import Client, LocalCluster
-# cluster = LocalCluster()
-# client = Client(cluster)
+    from dask.distributed import Client, LocalCluster
+    cluster = LocalCluster()
+    client = Client(cluster)
 # client.submit(s2downloader.get_s2_for_zone, '01G')
+    t0 = time.time()
     s2downloader = S2Downloader("GEDI2019", partition_size=100)
     res = s2downloader.get_s2_for_zone('01G')
+    print('time: ', time.time() - t0)
     # with ipdb.launch_ipdb_on_exception():
     # main()
 
