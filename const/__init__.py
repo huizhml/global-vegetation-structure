@@ -1,5 +1,5 @@
 #%%
-rh_type = {f'rh{i}': 'float32' for i in range(100)}
+rh_type = {f'rh{i}': 'float32' for i in range(101)}
 dtypes = {
     'system:index': 'object',
     'beam': 'uint16',
