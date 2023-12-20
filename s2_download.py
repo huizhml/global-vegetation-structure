@@ -19,11 +19,13 @@ import dask.dataframe as ddf
 import pandas as pd
 import geopandas as gpd
 import dask_geopandas as dgd
+from shapely.geometry import MultiPoint
 
 import ipdb
 import hydra
 
 from utils._stackstac import stack
+from const import dtypes
 
 #%%
 stac_endpoint = 'https://planetarycomputer.microsoft.com/api/stac/v1'
@@ -113,62 +115,20 @@ class S2Downloader:
         ]
       
 
-    def plotHistogram(self, ):
-        keyRhs = ['rh10', 'rh25', 'rh50', 'rh75', 'rh90', 'rh98']
-        dataFolder = Path('output')
-        for file in dataFolder.glob(f'value_counts_*.csv/0.part'):
-            with open(file, 'r') as f:
-                counts = f.readlines()[1:]
-                counts = [x.strip().split(',') for x in counts]
-                counts = np.array(counts, dtype=float)
-
-            number_of_bins = 100
-            min_value = -10
-            max_value = 90
-            bins = np.linspace(min_value, max_value, number_of_bins)
-
-            indices = np.digitize(counts[:, 0], bins)
-
-            # Now we sum up the counts for each bin
-            binned_counts = np.zeros(len(bins))
-
-            for i, count in enumerate(counts[:, 1]):
-                bin_index = indices[
-                    i] - 1  # -1 because `digitize` bins are 1-indexed
-                binned_counts[bin_index] += count
-
-            # Plotting the histogram with the binned counts
-            # plt.figure()
-            plt.bar(bins,
-                    binned_counts,
-                    width=np.diff(bins)[0],
-                    align='edge',
-                    alpha=0.7,
-                    label=f'RH{file.parent.name[-6:-4]}')
-        plt.xlabel('Height')
-        plt.ylabel(f'Number of Points (total: {counts[:,1].sum():.2e})')
-        plt.title(f'RH{file.parent.name[-6:-4]}')
-        plt.legend()
-        plt.savefig(file.parent.parent / 'histogram.png')
-
     
     def get_s2_for_zone(self, zone):
         '''
         Filter S2 tiles for each GEDI zone
         '''
         zoneFolder = self.gediFolder / zone
-        gediDf = dgd.read_parquet(zoneFolder / '*.parquet', dropna=True)
+        gediDf = ddf.read_parquet(zoneFolder / '*.parquet', dropna=True, usecols=list(dtypes.keys()))
 
-        esa_wc_items = api.search(
-                collections=['esa-worldcover'],
-                bbox=gediDf.total_bounds,
-                datetime=f'{self.esa_wc_year}-01-01/{self.esa_wc_year}-12-31').item_collection()
         
-        if self.debug:
-            num_partitions = gediDf.npartitions
-            for partition_index in range(num_partitions):
-                partition_df = gediDf.partitions[partition_index]
-                self.get_patch_for_partition(partition_df, esa_wc_items, zone, partition_info={'number': partition_index})
+        # if self.debug:
+        #     num_partitions = gediDf.npartitions
+        #     for partition_index in range(num_partitions):
+        #         partition_df = gediDf.partitions[partition_index]
+        #         self.get_patch_for_partition(partition_df, esa_wc_items, zone, partition_info={'number': partition_index})
 
         gediDf = gediDf.set_index('system:index')
         # get the number of partitions based on the number of points
@@ -184,11 +144,16 @@ class S2Downloader:
         flag.write_text(f'partition size used: {self.partition_size}')
         return 
 
-    def get_patch_for_partition(self, partition, esa_wc_items, zone, partition_info=None):
+    def get_patch_for_partition(self, partition, zone, partition_info=None):
         flag = self.save_folder/ f'{zone}.zarr'/f'partition_{partition_info["number"]}' / "done"
         if flag.exists():
             print(f'partition {partition_info["number"]} already exists')
             return
+        geom = gpd.points_from_xy(partition['x'], partition['y'])
+        esa_wc_items = api.search(
+            collections=['esa-worldcover'],
+            bbox=geom.total_bounds,
+            datetime=f'{self.esa_wc_year}-01-01/{self.esa_wc_year}-12-31').item_collection()
         xrrs = partition.apply(self.get_best_s2_for_p, axis=1, args=(esa_wc_items,))
         xrrs = dask.compute(*xrrs)
         xrrs = xr.concat(xrrs, dim='time', compat='override', coords='minimal', join='override')
@@ -405,6 +370,14 @@ def main(cfg):
 
 #%%
 if __name__ == "__main__":
-
+    from dask.distributed import Client, LocalCluster
+    cluster = LocalCluster()
+    client = Client(cluster)
+    s2downloader = S2Downloader("GEDI2019", partition_size=100)
+    res = client.submit(s2downloader.get_s2_for_zone, '11T')
     # with ipdb.launch_ipdb_on_exception():
-    main()
+    # main()
+
+# %%
+    
+# %%

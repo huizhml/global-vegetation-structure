@@ -87,6 +87,44 @@ class GEDIReader:
     def plotCountMap(self):
         sampledTable = pd.read_json(self.dataFolder / f'SampledTable{self.year}.json')
 
+    def plotHistogram(self, ):
+        keyRhs = ['rh10', 'rh25', 'rh50', 'rh75', 'rh90', 'rh98']
+        dataFolder = Path('output')
+        for file in dataFolder.glob(f'value_counts_*.csv/0.part'):
+            with open(file, 'r') as f:
+                counts = f.readlines()[1:]
+                counts = [x.strip().split(',') for x in counts]
+                counts = np.array(counts, dtype=float)
+
+            number_of_bins = 100
+            min_value = -10
+            max_value = 90
+            bins = np.linspace(min_value, max_value, number_of_bins)
+
+            indices = np.digitize(counts[:, 0], bins)
+
+            # Now we sum up the counts for each bin
+            binned_counts = np.zeros(len(bins))
+
+            for i, count in enumerate(counts[:, 1]):
+                bin_index = indices[
+                    i] - 1  # -1 because `digitize` bins are 1-indexed
+                binned_counts[bin_index] += count
+
+            # Plotting the histogram with the binned counts
+            # plt.figure()
+            plt.bar(bins,
+                    binned_counts,
+                    width=np.diff(bins)[0],
+                    align='edge',
+                    alpha=0.7,
+                    label=f'RH{file.parent.name[-6:-4]}')
+        plt.xlabel('Height')
+        plt.ylabel(f'Number of Points (total: {counts[:,1].sum():.2e})')
+        plt.title(f'RH{file.parent.name[-6:-4]}')
+        plt.legend()
+        plt.savefig(file.parent.parent / 'histogram.png')
+
     def checkObitUniqueness(self):
         '''if each track has one unique orbit number, the number of unique orbit numbers should be the same as the number of tracks (csv files)'''
         cvsFiles = len(list(self.dataFolder / f'GEDI02**/*.csv'))
