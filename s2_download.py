@@ -41,6 +41,12 @@ dropped_vars = [
     's2:generation_time', 's2:granule_id', 's2:mean_solar_azimuth', 's2:mean_solar_zenith', 's2:processing_baseline', 's2:product_type',
     's2:product_uri', 's2:reflectance_conversion_factor'
 ]
+comp = {
+    "zlib": True,
+    "complevel": 7,
+    "fletcher32": True,
+    "chunksizes": (1,101,14,15,15)
+}
 
 
 def resign_items(items):
@@ -149,10 +155,11 @@ class S2Downloader:
         xrrs = partition.apply(self.get_best_s2_for_p, axis=1, args=(esa_wc_items,))
         xrrs = dask.compute(*xrrs)
         xrrs = xr.concat(xrrs, dim='time', compat='override', coords='minimal', join='override')
-        xrrs = xrrs.chunk({'time': 1, 'band':14, 'x': 15, 'y': 15})
+        # xrrs = xrrs.chunk({'time': 1, 'RHs': 101, 'band':14, 'x': 15, 'y': 15})
         xrrs['time'].encoding['dtype'] = 'float64'
 
-        xrrs.to_netcdf(self.save_folder / f'{zone}.h5', format='NETCDF4', engine='h5netcdf', group=f'partition_{partition_info["number"]}', mode='a')
+
+        xrrs.to_netcdf(self.save_folder / f'{zone}.h5', format='NETCDF4', engine='h5netcdf', encoding={xrrs.name: comp}, group=f'partition_{partition_info["number"]}', mode='a')
         print(f'finish {zone} partition {partition_info["number"]}')
             # flag.touch()
             # flag.write_text(f'{xrrs.shape[0]} locations downloaded, {len(partition) - xrrs.shape[0]} locations failed')
