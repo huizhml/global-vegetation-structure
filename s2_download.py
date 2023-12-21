@@ -16,6 +16,7 @@ import retry
 import dask
 import dask.array as da
 import dask.dataframe as ddf
+from dask.distributed import Lock
 import pandas as pd
 import geopandas as gpd
 import dask_geopandas as dgd
@@ -153,7 +154,8 @@ class S2Downloader:
         xrrs = xr.concat(xrrs, dim='time', compat='override', coords='minimal', join='override')
         # xrrs = xrrs.chunk({'time': 1, 'RHs': 101, 'band':14, 'x': 15, 'y': 15})
         xrrs['time'].encoding['dtype'] = 'float64'
-        xrrs.to_netcdf(self.save_folder / f'{zone}.h5', format='NETCDF4', engine='h5netcdf', encoding={xrrs.name: comp}, group=f'partition_{partition_info["number"]}', mode='a')
+        with Lock('netcdf_lock'):
+            xrrs.to_netcdf(self.save_folder / f'{zone}.h5', format='NETCDF4', engine='h5netcdf', encoding={xrrs.name: comp}, group=f'partition_{partition_info["number"]}', mode='a')
         print(f'finish {zone} partition {partition_info["number"]}')
         return
 
