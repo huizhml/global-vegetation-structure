@@ -143,10 +143,6 @@ class S2Downloader:
         return 
 
     def get_patch_for_partition(self, partition, zone, partition_info=None):
-        flag = self.save_folder/ f'{zone}_partition_{partition_info["number"]}_done'
-        if flag.exists():
-            print(f'{zone} partition {partition_info["number"]} already exists')
-            return
         geom = gpd.points_from_xy(partition['x'], partition['y'])
         esa_wc_items = api.search(
             collections=['esa-worldcover'],
@@ -157,16 +153,8 @@ class S2Downloader:
         xrrs = xr.concat(xrrs, dim='time', compat='override', coords='minimal', join='override')
         # xrrs = xrrs.chunk({'time': 1, 'RHs': 101, 'band':14, 'x': 15, 'y': 15})
         xrrs['time'].encoding['dtype'] = 'float64'
-
-
         xrrs.to_netcdf(self.save_folder / f'{zone}.h5', format='NETCDF4', engine='h5netcdf', encoding={xrrs.name: comp}, group=f'partition_{partition_info["number"]}', mode='a')
         print(f'finish {zone} partition {partition_info["number"]}')
-            # flag.touch()
-            # flag.write_text(f'{xrrs.shape[0]} locations downloaded, {len(partition) - xrrs.shape[0]} locations failed')
-        # except:
-        #     print(f'{zone} partition {partition_info["number"]} failed')
-        #     failed = self.save_folder / f'{zone}_partition_{partition_info["number"]}_failed'
-        #     failed.touch()
         return
 
 
