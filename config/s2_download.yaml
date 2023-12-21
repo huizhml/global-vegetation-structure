@@ -1,5 +1,5 @@
 zone: 32M
-partition_size: 100
+partition_size: 64K
 
 
 hydra:

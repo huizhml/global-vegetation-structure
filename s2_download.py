@@ -89,7 +89,7 @@ class S2Downloader:
 
     def __init__(self,
                  gediFolder='GEDI2019',
-                 partition_size=100,
+                 partition_size='64K',
                  debug=False):
         self.gediFolder = Path.home() / gediFolder
         self.save_folder = Path.home() / 'data'/ 'GEDI'
@@ -131,14 +131,10 @@ class S2Downloader:
         gediDf = ddf.read_parquet(zoneFolder / '*.parquet', dropna=True, usecols=list(dtypes.keys()))
 
         gediDf = gediDf.set_index('system:index')
-        # get the number of partitions based on the number of points
-        ll = gediDf.map_partitions(len).compute()
-        total_points = ll.sum()
-        print(f'processing {total_points} locations...')
-        partitions = total_points // self.partition_size + 1 
-        gediDf = gediDf.repartition(npartitions=partitions)
+        gediDf = gediDf.repartition(partition_size=self.partition_size)
+        print(f'Processing {gediDf.npartitions} partitions...')
         res = gediDf.map_partitions(self.get_patch_for_partition, zone, meta=(None, 'string')).compute()
-        
+
         flag.touch()
         flag.write_text(f'partition size used: {self.partition_size}')
         return 
