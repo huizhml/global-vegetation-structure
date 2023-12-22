@@ -11,7 +11,7 @@ import geopandas as gpd
 import dask_geopandas as dgd
 from shapely.geometry import shape
 
-# from const import dtypes
+from const import dtypes
 
 #%%
 
@@ -37,13 +37,18 @@ def addTrackNumberForFile(csvFile):
     return
 
 
-def addTrackNumber():
+def addTrackNumber(zone=None):
+    zone = zone or '**'
     dataFolder = Path.home() / 'GEDI2019'
-    csvFiles = dataFolder.glob('**/GEDI02*.csv')
+    csvFiles = dataFolder.glob(f'{zone}/GEDI02*.csv')
     res = []
     for file in csvFiles:
         res.append(dask.delayed(addTrackNumberForFile)(file))
     dask.compute(res)
 #%%
 if __name__ == '__main__':
-    addTrackNumber()   
+    from dask.distributed import Client, LocalCluster
+    cluster = LocalCluster()
+    client = Client(cluster, asynchronous=True)
+    futures = client.submit(addTrackNumber, '56H')
+    client.gather(futures)
