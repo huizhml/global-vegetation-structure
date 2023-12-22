@@ -24,14 +24,18 @@ from shapely.geometry import MultiPoint
 
 import ipdb
 import hydra
+import load_dotenv
 
 from utils._stackstac import stack
 from const import dtypes
 
+MPC_API_KEY = os.environ.get('MPC_API_KEY')
+
 #%%
 stac_endpoint = 'https://planetarycomputer.microsoft.com/api/stac/v1'
-api = pystac_client.Client.open(stac_endpoint,
-                                modifier=planetary_computer.sign_inplace)
+api = pystac_client.Client.open(stac_endpoint, 
+            headers={'Ocp-Apim-Subscription-Key': MPC_API_KEY},
+            modifier=planetary_computer.sign_inplace)
 s2asset = api.get_collection("sentinel-2-l2a").assets["geoparquet-items"]
 defective_SCL = [
     0, 1, 8, 9, 10, 11
@@ -266,9 +270,7 @@ class S2Downloader:
         return df
 
     @retry.retry(tries=10, delay=1)
-    def query_s2_for_p(self, start, end, geom, date):
-        api = pystac_client.Client.open(
-            stac_endpoint, modifier=planetary_computer.sign_inplace)
+    def query_s2_for_p(self, start, end, geom, date):   
         search = api.search(collections=['sentinel-2-l2a'],
                             query={
                                 "eo:cloud_cover": {
