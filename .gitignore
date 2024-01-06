@@ -48,3 +48,4 @@ keys/
 ./ipynb_checkpoints
 output*
 .env
+.planetarycomputer
