@@ -40,3 +40,52 @@ dtypes = {
 }
 dtypes.update(rh_type)
 # %%
+
+s2_item_props = ['datetime', 
+    # 'platform', 
+    'proj:epsg', 
+    # 'instruments', 
+    's2:mgrs_tile', 
+    # 'constellation', 
+    # 's2:granule_id', 
+    # 'eo:cloud_cover', 
+    # 's2:datatake_id', 
+    # 's2:product_uri', 
+    # 's2:datastrip_id', 
+    # 's2:product_type', 
+    # 'sat:orbit_state', 
+    # 's2:datatake_type', 
+    # 's2:generation_time', 
+    # 'sat:relative_orbit', 
+    # 's2:water_percentage', 
+    # 's2:mean_solar_zenith', 
+    # 's2:mean_solar_azimuth', 
+    # 's2:processing_baseline', 
+    # 's2:snow_ice_percentage', 
+    # 's2:vegetation_percentage', 
+    # 's2:thin_cirrus_percentage', 
+    # 's2:cloud_shadow_percentage', 
+    # 's2:nodata_pixel_percentage', 
+    # 's2:unclassified_percentage', 
+    # 's2:dark_features_percentage', 
+    # 's2:not_vegetated_percentage', 
+    # 's2:degraded_msi_data_percentage',
+    # 's2:high_proba_clouds_percentage', 
+    # 's2:reflectance_conversion_factor', 
+    # 's2:medium_proba_clouds_percentage', 
+    # 's2:saturated_defective_pixel_percentage'
+    ]
+wc_item_props = [
+    # 'created', 
+    # 'mission',
+    # 'datetime', 
+    # 'platform', 
+    # 'grid:code', 
+    # 'proj:epsg', 
+    # 'description', 
+    # 'instruments', 
+    # 'end_datetime', 
+    # 'start_datetime', 
+    'esa_worldcover:product_tile', 
+    # 'esa_worldcover:product_version'
+    ]
