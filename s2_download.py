@@ -1,12 +1,14 @@
 #%%
 import os
 import time
+import json
 from pathlib import Path
 import matplotlib.pyplot as plt
 
 import numpy as np
 import xarray as xr
 
+import ee
 import pystac
 import pystac_client
 import planetary_computer
@@ -16,7 +18,8 @@ import retry
 import dask
 import dask.array as da
 import dask.dataframe as ddf
-from dask.distributed import Lock
+from dask.distributed import Lock, as_completed, futures_of
+from distributed import get_client
 import pandas as pd
 import geopandas as gpd
 import dask_geopandas as dgd
@@ -24,17 +27,18 @@ from shapely.geometry import MultiPoint
 
 import ipdb
 import hydra
-import load_dotenv
+from dotenv import load_dotenv
 
 from utils._stackstac import stack
-from const import dtypes
+from const import dtypes, s2_item_props, wc_item_props
 
-MPC_API_KEY = os.environ.get('MPC_API_KEY')
+load_dotenv('.planetarycomputer/settings.env')
+# MPC_API_KEY = os.environ.get('PC_SDK_SUBSCRIPTION_KEY')
 
 #%%
 stac_endpoint = 'https://planetarycomputer.microsoft.com/api/stac/v1'
 api = pystac_client.Client.open(stac_endpoint, 
-            headers={'Ocp-Apim-Subscription-Key': MPC_API_KEY},
+            # headers={'Ocp-Apim-Subscription-Key': MPC_API_KEY},
             modifier=planetary_computer.sign_inplace)
 s2asset = api.get_collection("sentinel-2-l2a").assets["geoparquet-items"]
 defective_SCL = [
@@ -121,13 +125,22 @@ class S2Downloader:
             's2:nodata_pixel_percentage'
         ]
       
-
+    def get_zone_bbox(self, zone):
+        mgrs = ee.FeatureCollection('projects/gisproject-1/assets/gedi_count_mgrs_aggregated_landmass')
+        bounds = mgrs.filter(ee.Filter.eq('MGRS_UTM', zone)).first().geometry().bounds()
+        bounds = bounds.getInfo()['coordinates'][0]
+        bounds = [*bounds[0], *bounds[2]]
+        if bounds[2] > 180:
+            bounds[0] = -bounds[0]
+            bounds[2] = bounds[0] + 6
+        return bounds
     
     def get_s2_for_zone(self, zone):
         '''
         Filter S2 tiles for each GEDI zone
         '''
         zoneFolder = self.gediFolder / zone
+        (self.save_folder/zone).mkdir(exist_ok=True)
         flag = self.save_folder/ f'{zone}_done'
         if flag.exists():
             print(f'{zone} has been processed.')
@@ -137,28 +150,50 @@ class S2Downloader:
         gediDf = gediDf.set_index('system:index')
         gediDf = gediDf.repartition(partition_size=self.partition_size)
         print(f'Processing {gediDf.npartitions} partitions...')
-        res = gediDf.map_partitions(self.get_patch_for_partition, zone, meta=(None, 'string')).compute()
 
-        flag.touch()
-        flag.write_text(f'partition size used: {self.partition_size}')
-        return 
-
-    def get_patch_for_partition(self, partition, zone, partition_info=None):
-        geom = gpd.points_from_xy(partition['x'], partition['y'])
+        bounds = self.get_zone_bbox(zone)
         esa_wc_items = api.search(
             collections=['esa-worldcover'],
-            bbox=geom.total_bounds,
+            bbox=bounds,
             datetime=f'{self.esa_wc_year}-01-01/{self.esa_wc_year}-12-31').item_collection()
+
+        df = gediDf.map_partitions(self.get_patch_for_partition, zone, esa_wc_items, meta=(None, 'string'))
+        # xrrs = gediDf.apply(self.get_best_s2_for_p, axis=1, args=(esa_wc_items,), meta=('arr', 'object'))
+        # xrrs = xr.concat(xrrs, dim='time', compat='override', coords='minimal', join='override')
+        # xrrs['time'].encoding['dtype'] = 'float64'
+        # xrrs = xrrs.to_dataset()
+        # paths = [self.save_folder/zone/f'partition_{i}' for i in range(gediDf.npartitions)]
+        # xr.save_mfdataset(xrrs, [self.save_folder/f'{zone}.h5'])
+        client = get_client()
+        res = client.compute(df)
+        res.result()
+        # flag.touch()
+        # flag.write_text(f'partition size used: {self.partition_size}')
+        return
+
+    def get_patch_for_partition(self, partition, zone, esa_wc_items, partition_info=None):
+        # if (self.save_folder / f'{zone}'/f'partition_{partition_info["number"]}.h5').exists():
+        #     print(f'{zone} partition_{partition_info["number"]} has been processed.')
+        #     return
         xrrs = partition.apply(self.get_best_s2_for_p, axis=1, args=(esa_wc_items,))
         xrrs = dask.compute(*xrrs)
         xrrs = xr.concat(xrrs, dim='time', compat='override', coords='minimal', join='override')
+        xrrs['time'].encoding['dtype'] = 'float32'
+        
+        # client = get_client()
+        # future = client.compute(self.save_patches, xrrs, zone, partition_info['number'])
         # xrrs = xrrs.chunk({'time': 1, 'RHs': 101, 'band':14, 'x': 15, 'y': 15})
-        xrrs['time'].encoding['dtype'] = 'float64'
-        with Lock('netcdf_lock'):
-            xrrs.to_netcdf(self.save_folder / f'{zone}.h5', format='NETCDF4', engine='h5netcdf', encoding={xrrs.name: comp}, group=f'partition_{partition_info["number"]}', mode='a')
+        # with Lock('netcdf_lock'):
+        #     xrrs.load().to_netcdf(self.save_folder / f'{zone}'/f'partition_{partition_info["number"]}.h5', format='NETCDF4', engine='h5netcdf', encoding={xrrs.name: comp}, mode='w')
         print(f'finish {zone} partition {partition_info["number"]}')
-        return
+        return 
 
+    def save_patches(self, patches, zone, partition_num):
+        # client = get_client()
+        # patches = client.compute(patches)
+        with Lock('netcdf_lock'):
+            patches.to_netcdf(self.save_folder / f'{zone}'/f'partition_{partition_num}.h5', format='NETCDF4', engine='h5netcdf', encoding={patches.name: comp}, mode='w')
+        print(f'finish {zone} partition {partition_num}')
 
     # @dask.delayed        
     def get_best_s2_for_p(self, point, esa_wc_items):
@@ -184,8 +219,7 @@ class S2Downloader:
             return None
 
         # get patch and calculate defective cover
-
-        items_df = items_df.groupby('epsg', group_keys=False).apply(self.calculate_defective_cover, geom, point['shot_number'])
+        items_df = items_df.groupby('epsg', group_keys=False).apply(self.calculate_defective_cover, geom, point['date'])
 
         if items_df['defective_cover'].isna().all():
             return None
@@ -198,20 +232,28 @@ class S2Downloader:
         geom = geom.to_crs(epsg)
         bounds = geom[0].buffer(70).bounds
         
-
+        kwargs = dict(
+            assets=self.bands, resolution=10, bounds=bounds, band_coords=False, properties=s2_item_props       
+        )
         try:
-            s2xrr = stack(best['items'], self.bands, resolution=10, bounds=bounds)
+            s2xrr = stack(best['items'], **kwargs)
         except:
             # token might expire, sign again
             items = resign_items(best['items'])
-            s2xrr = stack(items, self.bands, resolution=10, bounds=bounds)
+            s2xrr = stack(items, **kwargs)
 
+        kwargs = dict(
+            assets=['map'],
+            band_coords=False,
+            resolution=10, 
+            bounds=bounds, epsg=epsg, properties=wc_item_props
+        )
         try:
-            xrr = stack(esa_wc_items, ['map'], resolution=10, bounds=bounds, epsg=epsg)
+            xrr = stack(esa_wc_items, **kwargs)
         except:
             # token might expire, sign again
             items = resign_items(esa_wc_items)
-            xrr = stack(items, ['map'], resolution=10, bounds=bounds, epsg=epsg)
+            xrr = stack(items, **kwargs)
 
         xrr = xrr.dropna(dim='time', how='all') # drop nan time slices
         if xrr.shape[0] == 1: # bbox cross two grid celss of esa wc
@@ -220,16 +262,18 @@ class S2Downloader:
             xrr = xrr.max(dim='time', keep_attrs=True) #TODO: check if this is correct
             xrr = xrr.expand_dims(dim={'time': s2xrr['time'].data}, axis=0)
         del s2xrr.attrs['spec']
-        xrr = xr.DataArray(da.concatenate([s2xrr.data, xrr.data], axis=1), dims=['time', 'band', 'x', 'y'], coords={'time': s2xrr['time'].data, 'band': self.bands+['esa_wc'], 'x': s2xrr['x'], 'y': s2xrr['y']}, attrs=s2xrr.attrs)
+        xrr = xr.concat([s2xrr, xrr], dim='band', compat='override', coords='minimal')
+        # xrr = xr.DataArray(da.concatenate([s2xrr.data, xrr.data], axis=1), dims=['time', 'band', 'x', 'y'], coords={'time': s2xrr['time'].data, 'band': self.bands+['esa_wc'], 'x': s2xrr['x'], 'y': s2xrr['y']}, attrs=s2xrr.attrs)
         xrr = xrr.expand_dims(dim={'RHs': np.array(point[f'rh{x}'] for x in range(101))}, axis=1)
         del best['items']
         point = point.drop(['track_id'])
         new_coords = {k: ("time", [v]) for k, v in best.items()}
         new_coords.update({k: ("time", [v]) for k, v in point.items() if not k.startswith('rh')})
         xrr = xrr.assign_coords(new_coords)
+        # xrr = xrr.chunk({'time': 1, 'RHs': 101, 'band':14, 'x': 15, 'y': 15})
         return xrr
     
-    def calculate_defective_cover(self, group, geom, shot_number):
+    def calculate_defective_cover(self, group, geom, date):
         '''
         Calculate defective cover (patch level) for tiles with the same epsg
         
@@ -241,33 +285,38 @@ class S2Downloader:
         Returns:
             pandas.DataFrame: DataFrame containing calculated defective cover information
         '''
-        items = group['item'].values.tolist()
+        items = group['items'].values.tolist()
         epsg = items[0].properties['proj:epsg']
         # Do the buffer for different epsg
         geom = geom.to_crs(epsg)
         bounds = geom[0].buffer(70).bounds
+
         try:
-            patch = stack(items, ['SCL'], resolution=10, bounds=bounds, fill_value=0)
+            patch = stack(items, ['SCL'], resolution=10, bounds=bounds, fill_value=0, band_coords=False, properties=False)
         except:
             # token might expire, sign again
             items = resign_items(items)
-            patch = stack(items, ['SCL'], resolution=10, bounds=bounds, fill_value=0)
+            patch = stack(items, ['SCL'], resolution=10, bounds=bounds, fill_value=0, band_coords=False, properties=False)
         
         patch = patch.sel(band='SCL').isin(defective_SCL).sum(dim=['x', 'y']) / np.prod(patch.shape[-2:])
-        if len(group) != len(patch):
-            group['id'] = group.apply(lambda x: x['item'].id, axis=1)
-            group = group[group['id'].isin(patch.id.values)]
-            items = group['item'].values.tolist()
 
-        df = pd.DataFrame({
-            's2_id': patch.id.values,
-            'defective_cover': patch.data,
-            'delta_day': group.delta_day,
-            'items': items,
-            'shot_number': shot_number
-        })
+        patch = patch.assign_coords({'delta_day':('time', [np.abs(t - pd.Timestamp(date)).days for t in patch.time.values])})
+        patch.name = 'defective_cover'
 
-        return df
+        patch = patch.to_dask_dataframe().sort_values(['defective_cover', 'delta_day'])
+        # if len(group) != len(patch):
+        #     group['id'] = group.apply(lambda x: x['item'].id, axis=1)
+        #     group = group[group['id'].isin(patch.id.values)]
+        #     items = group['items'].values.tolist()
+
+        # df = pd.DataFrame({
+        #     's2_id': patch.id.values,
+        #     'defective_cover': patch.data,
+        #     'delta_day': group.delta_day,
+        #     'items': items,
+        # })
+
+        return patch
 
     @retry.retry(tries=10, delay=1)
     def query_s2_for_p(self, start, end, geom, date):   
@@ -285,12 +334,12 @@ class S2Downloader:
         items = search.item_collection()
         if len(items) > 0:
             return pd.DataFrame(({
-                'item': item,
-                'epsg':item.properties['proj:epsg'],
-                'delta_day':
-                np.abs(
-                    pd.Timestamp(item.properties['datetime'], tz='UTC') -
-                    pd.Timestamp(date, tz='UTC')).days
+                'items': item,
+                'epsg':item.properties['proj:epsg']
+                # 'delta_day':
+                # np.abs(
+                #     pd.Timestamp(item.properties['datetime'], tz='UTC') -
+                #     pd.Timestamp(date, tz='UTC')).days
             } for item in items))
         if len(items) == 0 and (end - start).days < 365:
             print(f'No S2 tile found between {start} - {end}, extend the range by {self.extendDays.days*2} days')
@@ -364,12 +413,16 @@ def main(cfg):
 
 #%%
 if __name__ == "__main__":
+    key_file = 'keys/private-key.json'
+    key = json.load(open(key_file))
+    credentials = ee.ServiceAccountCredentials(key['client_email'], key_file)
+    ee.Initialize(credentials)
     from dask.distributed import Client, LocalCluster
     cluster = LocalCluster()
     client = Client(cluster)
 # client.submit(s2downloader.get_s2_for_zone, '01G')
     t0 = time.time()
-    s2downloader = S2Downloader("GEDI2019", partition_size=100)
+    s2downloader = S2Downloader("GEDI2019", partition_size='64K')
     res = s2downloader.get_s2_for_zone('01G')
     print('time: ', time.time() - t0)
     # with ipdb.launch_ipdb_on_exception():
