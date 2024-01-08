@@ -124,8 +124,9 @@ class S2Downloader:
         # gediDf = gediDf.set_index('system:index')
         # gediDf = gediDf.repartition(npartitions=16)
         print(f'Processing {gediDf.npartitions} partitions...')
+        # number = 98
+        # df = self.get_patch_for_partition(gediDf.get_partition(number).compute(), zone, esa_wc_items, partition_info={'number': number})
         df = gediDf.map_partitions(self.get_patch_for_partition, zone, esa_wc_items, meta=(None, 'string')).compute()
-        # df = self.get_patch_for_partition(gediDf.get_partition(433).compute(), zone, esa_wc_items) 
         # client = get_client()
         # res = client.compute(df)
         # res.result()
@@ -332,10 +333,6 @@ def download(func, zone):
 
 #%%
 if __name__ == "__main__":
-    key_file = 'keys/private-key.json'
-    key = json.load(open(key_file))
-    credentials = ee.ServiceAccountCredentials(key['client_email'], key_file)
-    ee.Initialize(credentials)
     from dask.distributed import Client, LocalCluster
     cluster = LocalCluster(threads_per_worker=2)
     client = Client(cluster)
