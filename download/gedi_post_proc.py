@@ -45,6 +45,19 @@ def addTrackNumber(zone=None):
     for file in csvFiles:
         res.append(dask.delayed(addTrackNumberForFile)(file))
     dask.compute(res)
+
+def addTrackNumberAndRepartition(zone=None):
+    zone = zone or '**'
+    dataFolder = Path.home() / 'GEDI2019' / zone
+    df = dd.read_csv(dataFolder / '*.csv', dtype=dtypes, usecols=list(dtypes.keys()))
+    df['x'] = df['.geo'].apply(lambda x: json.loads(x)['coordinates'][0],
+                                      meta=('geometry', 'float'))
+    df['y'] = df['.geo'].apply(lambda x: json.loads(x)['coordinates'][1],
+                                      meta=('geometry', 'float'))
+    df = df.drop('.geo', axis=1)
+    df = df.repartition(partition_size='64K')
+    df.to_parquet(dataFolder, name_function=lambda x: f'partition_{x}.parquet')
+
 #%%
 if __name__ == '__main__':
     from dask.distributed import Client, LocalCluster
