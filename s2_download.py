@@ -37,9 +37,8 @@ load_dotenv('.planetarycomputer/settings.env')
 
 #%%
 stac_endpoint = 'https://planetarycomputer.microsoft.com/api/stac/v1'
-api = pystac_client.Client.open(stac_endpoint, 
-            # headers={'Ocp-Apim-Subscription-Key': MPC_API_KEY},
-            modifier=planetary_computer.sign_inplace)
+api = pystac_client.Client.open(stac_endpoint, modifier=planetary_computer.sign_inplace)
+
 s2asset = api.get_collection("sentinel-2-l2a").assets["geoparquet-items"]
 defective_SCL = [
     0, 1, 8, 9, 10, 11
@@ -90,6 +89,13 @@ def filter_S2_by_gs(leaf_on_date, leaf_off_date, tile_group):
             tile_group)  # widen the range #? infinite loop?
     return filtered
 
+def get_tile_by_id(tile_id):
+    """
+    Get the sentinel-2 tile by tile id.
+    """
+    url = f'{stac_endpoint}/collections/sentinel-2-l2a/items/{tile_id}'
+    item = pystac.Item.from_file(url)
+    return planetary_computer.sign_inplace(item)
 
 class S2Downloader:
     test_file = 'GEDI02_A_2019111131802_O02014_01_T03046_02_003_01_V002.parquet'
@@ -102,6 +108,7 @@ class S2Downloader:
         self.gediFolder = Path.home() / gediFolder
         self.save_folder = Path.home() / 'data'/ 'GEDI'
         self.year = int(gediFolder[-4:])
+        self.gedi_start = pd.Timestamp('2018-01-01', tz='UTC')
         self.yearStart = pd.Timestamp(f'{self.year}-01-01', tz='UTC')  # np.datetime64(f'{self.year}-01-01', 'D') #
         self.esa_wc_year = 2020 if self.year <= 2020 else 2021
         self.maxCloudCover = 50
@@ -126,6 +133,10 @@ class S2Downloader:
         ]
       
     def get_zone_bbox(self, zone):
+        key_file = 'keys/private-key.json'
+        key = json.load(open(key_file))
+        credentials = ee.ServiceAccountCredentials(key['client_email'], key_file)
+        ee.Initialize(credentials)
         mgrs = ee.FeatureCollection('projects/gisproject-1/assets/gedi_count_mgrs_aggregated_landmass')
         bounds = mgrs.filter(ee.Filter.eq('MGRS_UTM', zone)).first().geometry().bounds()
         bounds = bounds.getInfo()['coordinates'][0]
@@ -145,11 +156,21 @@ class S2Downloader:
         if flag.exists():
             print(f'{zone} has been processed.')
             return
-        gediDf = ddf.read_parquet(zoneFolder / '*.parquet', dropna=True, usecols=list(dtypes.keys()))
-
-        gediDf = gediDf.set_index('system:index')
-        gediDf = gediDf.repartition(partition_size=self.partition_size)
+        gediDf = ddf.read_parquet(zoneFolder / 'partition_*.parquet', dropna=True, usecols=list(dtypes.keys()))
         print(f'Processing {gediDf.npartitions} partitions...')
+        # with_growing_season = gediDf['leaf_on_doy'] < 366
+        # # leaf off date is in the next year
+        # reverse = gediDf['leaf_on_doy'] > gediDf['leaf_off_doy']
+        # gediDf['leaf_off_doy'] = gediDf['leaf_off_doy'].mask(reverse, gediDf['leaf_off_doy'] + 365)
+        # gediDf['leaf_on_doy'] = gediDf['leaf_on_doy'].astype('int16')
+        # gediDf['leaf_on_doy'] = ddf.to_timedelta(gediDf['leaf_on_doy'], unit='D')
+        # gediDf['leaf_off_doy'] = gediDf['leaf_off_doy'].astype('int16')
+        # gediDf['leaf_off_doy'] = ddf.to_timedelta(gediDf['leaf_off_doy'], unit='D')
+
+        # gediDf['start'] = ddf.to_datetime(gediDf['date']) - self.queryDaysRange
+        # gediDf['end'] = ddf.to_datetime(gediDf['date']) + self.queryDaysRange
+        # gediDf['start'] = gediDf['start'].mask(with_growing_season, self.yearStart + gediDf['leaf_on_doy'])
+        # gediDf['end'] = gediDf['end'].mask(with_growing_season, self.yearStart + gediDf['leaf_off_doy'])
 
         bounds = self.get_zone_bbox(zone)
         esa_wc_items = api.search(
@@ -157,16 +178,17 @@ class S2Downloader:
             bbox=bounds,
             datetime=f'{self.esa_wc_year}-01-01/{self.esa_wc_year}-12-31').item_collection()
 
-        df = gediDf.map_partitions(self.get_patch_for_partition, zone, esa_wc_items, meta=(None, 'string'))
+        df = gediDf.map_partitions(self.get_patch_for_partition, zone, esa_wc_items, meta=(None, 'string')).compute()
+        # df = self.get_patch_for_partition(gediDf.get_partition(0).compute(), zone, esa_wc_items)
         # xrrs = gediDf.apply(self.get_best_s2_for_p, axis=1, args=(esa_wc_items,), meta=('arr', 'object'))
         # xrrs = xr.concat(xrrs, dim='time', compat='override', coords='minimal', join='override')
         # xrrs['time'].encoding['dtype'] = 'float64'
         # xrrs = xrrs.to_dataset()
         # paths = [self.save_folder/zone/f'partition_{i}' for i in range(gediDf.npartitions)]
         # xr.save_mfdataset(xrrs, [self.save_folder/f'{zone}.h5'])
-        client = get_client()
-        res = client.compute(df)
-        res.result()
+        # client = get_client()
+        # res = client.compute(df)
+        # res.result()
         # flag.touch()
         # flag.write_text(f'partition size used: {self.partition_size}')
         return
@@ -175,18 +197,18 @@ class S2Downloader:
         # if (self.save_folder / f'{zone}'/f'partition_{partition_info["number"]}.h5').exists():
         #     print(f'{zone} partition_{partition_info["number"]} has been processed.')
         #     return
+        # client = get_client()
         xrrs = partition.apply(self.get_best_s2_for_p, axis=1, args=(esa_wc_items,))
         xrrs = dask.compute(*xrrs)
         xrrs = xr.concat(xrrs, dim='time', compat='override', coords='minimal', join='override')
         xrrs['time'].encoding['dtype'] = 'float32'
-        
-        # client = get_client()
-        # future = client.compute(self.save_patches, xrrs, zone, partition_info['number'])
+        # xrrs = client.compute(xrrs)
         # xrrs = xrrs.chunk({'time': 1, 'RHs': 101, 'band':14, 'x': 15, 'y': 15})
-        # with Lock('netcdf_lock'):
-        #     xrrs.load().to_netcdf(self.save_folder / f'{zone}'/f'partition_{partition_info["number"]}.h5', format='NETCDF4', engine='h5netcdf', encoding={xrrs.name: comp}, mode='w')
+        with Lock('netcdf_lock'):
+            xrrs.to_netcdf(self.save_folder / f'{zone}'/f'partition_{partition_info["number"]}.h5', format='NETCDF4', engine='h5netcdf', encoding={xrrs.name: comp}, mode='w')
         print(f'finish {zone} partition {partition_info["number"]}')
-        return 
+        del partition
+        del xrrs
 
     def save_patches(self, patches, zone, partition_num):
         # client = get_client()
@@ -201,31 +223,32 @@ class S2Downloader:
         Filter S2 tiles for each GEDI point
         Query by date, cloud cover, water percentage, and Filter by leaf on/off dates
         '''
+        delta_time = pd.to_timedelta(int(point['delta_time']), unit='S')
+        date = self.gedi_start + delta_time
         # get the time range
-        leaf_on_doy = pd.to_timedelta(int(point['leaf_on_doy']), unit='D')
-        leaf_off_doy = pd.to_timedelta(int(point['leaf_off_doy']), unit='D')
-        if leaf_on_doy > leaf_off_doy:
-            leaf_off_doy += pd.to_timedelta(365, unit='D')
-        if leaf_on_doy.days < 366:
+        if point['leaf_on_doy'] < 366 and point['leaf_off_flag'] == 0: # point captured in growing season
+            leaf_on_doy = pd.to_timedelta(int(point['leaf_on_doy']), unit='D')
+            leaf_off_doy = pd.to_timedelta(int(point['leaf_off_doy']), unit='D')
+            if leaf_on_doy > leaf_off_doy:
+                leaf_off_doy += pd.to_timedelta(365, unit='D')
             start = self.yearStart + leaf_on_doy
             end = self.yearStart + leaf_off_doy
         else:
-            start = pd.Timestamp(point['date'], tz='UTC') - self.queryDaysRange
-            end = pd.Timestamp(point['date'], tz='UTC') + self.queryDaysRange
+            start = date  - self.queryDaysRange
+            end = date + self.queryDaysRange
         geom = gpd.points_from_xy([point['x']], [point['y']], crs='epsg:4326')
-        items_df = self.query_s2_for_p(start, end, geom, point['date'])
+        items_df = self.query_s2_for_p(start, end, geom) #? how to make it non-blocking, return a future
         
         if items_df is None:
             return None
 
         # get patch and calculate defective cover
-        items_df = items_df.groupby('epsg', group_keys=False).apply(self.calculate_defective_cover, geom, point['date'])
-
-        if items_df['defective_cover'].isna().all():
-            return None
-
+        # items_df = gpd.GeoDataFrame.from_dict(items.to_dict(), crs="epsg:4326")
+        items_df = items_df.groupby('epsg', group_keys=False).apply(self.calculate_defective_cover, geom, date)
         items_df = items_df.sort_values(['defective_cover', 'delta_day'])
         best = items_df.iloc[0]
+        if items_df['defective_cover'].isna().all():
+            return None
 
         # get patch
         epsg = best['items'].properties['proj:epsg']
@@ -235,6 +258,7 @@ class S2Downloader:
         kwargs = dict(
             assets=self.bands, resolution=10, bounds=bounds, band_coords=False, properties=s2_item_props       
         )
+        # items = get_tile_by_id(best['id'])
         try:
             s2xrr = stack(best['items'], **kwargs)
         except:
@@ -265,9 +289,8 @@ class S2Downloader:
         xrr = xr.concat([s2xrr, xrr], dim='band', compat='override', coords='minimal')
         # xrr = xr.DataArray(da.concatenate([s2xrr.data, xrr.data], axis=1), dims=['time', 'band', 'x', 'y'], coords={'time': s2xrr['time'].data, 'band': self.bands+['esa_wc'], 'x': s2xrr['x'], 'y': s2xrr['y']}, attrs=s2xrr.attrs)
         xrr = xrr.expand_dims(dim={'RHs': np.array(point[f'rh{x}'] for x in range(101))}, axis=1)
-        del best['items']
-        point = point.drop(['track_id'])
-        new_coords = {k: ("time", [v]) for k, v in best.items()}
+        point = point.drop(['track_id']) #, 'start', 'end'
+        new_coords = {k: ("time", [v]) for k, v in best[['delta_day', 'defective_cover']].items()}
         new_coords.update({k: ("time", [v]) for k, v in point.items() if not k.startswith('rh')})
         xrr = xrr.assign_coords(new_coords)
         # xrr = xrr.chunk({'time': 1, 'RHs': 101, 'band':14, 'x': 15, 'y': 15})
@@ -280,7 +303,6 @@ class S2Downloader:
         Args:
             group (pandas.DataFrame): DataFrame of sentinel-2 tiles with the same epsg
             geom (geopandas.GeometryArray): geometry of the point
-            shot_number (int): unique id of the point
             
         Returns:
             pandas.DataFrame: DataFrame containing calculated defective cover information
@@ -300,26 +322,31 @@ class S2Downloader:
         
         patch = patch.sel(band='SCL').isin(defective_SCL).sum(dim=['x', 'y']) / np.prod(patch.shape[-2:])
 
-        patch = patch.assign_coords({'delta_day':('time', [np.abs(t - pd.Timestamp(date)).days for t in patch.time.values])})
+        # patch = patch.assign_coords({'delta_day':('time', [np.abs(t - pd.Timestamp(date)).days for t in patch.time.values])})
         patch.name = 'defective_cover'
 
-        patch = patch.to_dask_dataframe().sort_values(['defective_cover', 'delta_day'])
-        # if len(group) != len(patch):
-        #     group['id'] = group.apply(lambda x: x['item'].id, axis=1)
-        #     group = group[group['id'].isin(patch.id.values)]
-        #     items = group['items'].values.tolist()
+        # patch.to_dataframe()
+        # patch = patch.to_dask_dataframe()#.sort_values(['defective_cover', 'delta_day'])
+        if len(group) != len(patch):
+            group['id'] = group.apply(lambda x: x['items'].id, axis=1)
+            group = group[group['id'].isin(patch.id.values)]
+            items = group['items'].values.tolist()
 
-        # df = pd.DataFrame({
-        #     's2_id': patch.id.values,
-        #     'defective_cover': patch.data,
-        #     'delta_day': group.delta_day,
-        #     'items': items,
-        # })
-
-        return patch
+        try:
+            df = pd.DataFrame({
+                's2_id': patch.id.values,
+                'defective_cover': patch.data,
+                'delta_day': [np.abs(t - pd.Timestamp(date)).days for t in patch.time.values],
+                'items': items,
+            })
+        except:
+            time.sleep(60*10)
+            df = self.calculate_defective_cover(group, geom, date)
+        return df
 
     @retry.retry(tries=10, delay=1)
-    def query_s2_for_p(self, start, end, geom, date):   
+    def query_s2_for_p(self, start, end, geom):   
+        api = pystac_client.Client.open(stac_endpoint, modifier=planetary_computer.sign_inplace)
         search = api.search(collections=['sentinel-2-l2a'],
                             query={
                                 "eo:cloud_cover": {
@@ -333,7 +360,9 @@ class S2Downloader:
                             datetime=f'{str(start)[:10]}/{str(end)[:10]}')
         items = search.item_collection()
         if len(items) > 0:
+            # return items
             return pd.DataFrame(({
+                'id': item.id,
                 'items': item,
                 'epsg':item.properties['proj:epsg']
                 # 'delta_day':
@@ -343,55 +372,12 @@ class S2Downloader:
             } for item in items))
         if len(items) == 0 and (end - start).days < 365:
             print(f'No S2 tile found between {start} - {end}, extend the range by {self.extendDays.days*2} days')
-            items_df = self.query_s2_for_p(start - self.extendDays,
-                                           end + self.extendDays, geom, date)
-            return items_df
+            items = self.query_s2_for_p(start - self.extendDays,
+                                           end + self.extendDays, geom)
+            return items
         else:
             return None
 
-    def query_parquet_by_date(self, start, end, p):
-        s2l2a = dgd.read_parquet(
-            s2asset.href,
-            filters=[[('datetime', '>=', start), ('datetime', '<=', end)]],
-            storage_options=s2asset.extra_fields["table:storage_options"],
-            chunksize='10MB')
-        if s2l2a.npartitions < 1:
-            print('No S2 tile found')
-            items_df = self.query_parquet_by_date(start - self.extendDays,
-                                                  end + self.extendDays, p)
-
-            # query s2 by location and quality
-        geom = gpd.points_from_xy(p['x'], p['y'], crs='epsg:4326') # new data has separated x and y columns
-        mask = ((ddf["eo:cloud_cover"] < self.maxCloudCover) &
-                (ddf["s2:nodata_pixel_percentage"] < self.maxWaterPercentage)
-                & ddf.intersects(geom))
-
-        # if mask.sum() == 0: # TODO: this operation need to call compute()
-        #     # ? should we increase the cloud cover threshold?
-        #     return
-
-        ddf = ddf[mask]
-
-        gediDate = pd.Timestamp(p['date'], tz='UTC')
-        # get stac items & calculate delta days
-        items_df = ddf.apply(self.row_to_stac_item,
-                             args=(gediDate, ),
-                             axis=1,
-                             meta={
-                                 'item': object,
-                                 'epsg': 'string'
-                             })
-        return items_df
-
-    def row_to_stac_item(self, row, gediDate):
-        item = row[self.stac_item_keys].to_dict()
-        props = row[self.stac_item_props].to_dict()
-        props['delta_day'] = np.abs(row['datetime'] - gediDate).days
-        props['datetime'] = props['datetime'].strftime('%Y-%m-%d %H:%M:%S.%f')
-        item['properties'] = props
-        item = planetary_computer.sign(pystac.Item.from_dict(item))
-        return pd.Series([item, item.properties['proj:epsg']],
-                         index=['item', 'epsg'])
 
 #%%
 @hydra.main(config_path="config", config_name="s2_download", version_base="1.2")
@@ -411,6 +397,15 @@ def main(cfg):
     # ipdb.set_trace()
     # print(res)
 
+def download(func, zone):
+    try:
+        func(zone)
+    except Exception as e:
+        print(e)
+        time.sleep(60*10)
+        print("restarting")
+        download(func, zone)
+
 #%%
 if __name__ == "__main__":
     key_file = 'keys/private-key.json'
@@ -420,9 +415,10 @@ if __name__ == "__main__":
     from dask.distributed import Client, LocalCluster
     cluster = LocalCluster()
     client = Client(cluster)
-# client.submit(s2downloader.get_s2_for_zone, '01G')
+
     t0 = time.time()
     s2downloader = S2Downloader("GEDI2019", partition_size='64K')
+    # download(s2downloader.get_s2_for_zone, '56H')
     res = s2downloader.get_s2_for_zone('01G')
     print('time: ', time.time() - t0)
     # with ipdb.launch_ipdb_on_exception():
