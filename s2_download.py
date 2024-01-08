@@ -137,7 +137,7 @@ class S2Downloader:
         if (self.save_folder / f'{zone}'/f'partition_{partition_info["number"]}.h5').exists():
             print(f'{zone} partition_{partition_info["number"]} has been processed.')
             return
-        xrrs = partition.apply(self.get_best_s2_for_p, axis=1, args=(esa_wc_items,))
+        xrrs = partition.apply(self.get_best_s2_for_p, axis=1, args=(esa_wc_items,)).dropna()
         xrrs = dask.compute(*xrrs)
         xrrs = xr.concat(xrrs, dim='time', compat='override', coords='minimal', join='override')
         xrrs['time'].encoding['dtype'] = 'float32'
@@ -173,7 +173,10 @@ class S2Downloader:
             return None
 
         # get patch and calculate defective cover
-        items_df = items_df.groupby('epsg', group_keys=False).apply(self.calculate_defective_cover, geom, point['date'])
+        items_df = items_df.groupby('epsg', group_keys=False).apply(self.calculate_defective_cover, geom, point['date']).dropna()
+        if items_df.empty:
+            return None
+
         items_df = items_df.sort_values(['defective_cover', 'delta_day'])
 
         best = items_df.iloc[0]
@@ -211,6 +214,8 @@ class S2Downloader:
         xrr = xrr.dropna(dim='time', how='all') # drop nan time slices
         if xrr.shape[0] == 1: # bbox cross two grid celss of esa wc
             xrr['time'] = s2xrr['time'].data
+        elif xrr.shape[0] == 0:
+            return None
         else:
             xrr = xrr.max(dim='time', keep_attrs=True) #TODO: check if this is correct
             xrr = xrr.expand_dims(dim={'time': s2xrr['time'].data}, axis=0)
@@ -246,6 +251,9 @@ class S2Downloader:
             items = resign_items(items)
             patch = stack(items, ['SCL'], resolution=10, bounds=bounds, fill_value=0, band_coords=False, properties=False)
         
+        if patch.shape[0] == 0:
+            return None
+
         patch = patch.sel(band='SCL').isin(defective_SCL).sum(dim=['x', 'y']) / np.prod(patch.shape[-2:])
 
         # patch = patch.assign_coords({'delta_day':('time', [np.abs(t - pd.Timestamp(date)).days for t in patch.time.values])})
