@@ -18,6 +18,7 @@ import retry
 import dask
 import dask.array as da
 import dask.dataframe as ddf
+from dask import delayed
 from dask.distributed import Lock, as_completed, futures_of
 from distributed import get_client
 import pandas as pd
@@ -61,6 +62,14 @@ def get_tile_by_id(tile_id):
     url = f'{stac_endpoint}/collections/sentinel-2-l2a/items/{tile_id}'
     item = pystac.Item.from_file(url)
     return planetary_computer.sign_inplace(item) #TO CHCEK: the token generated seems to be only valid for 1 hour
+
+def get_most_common_epsg(items):
+    """
+    Get the most common epsg code for a list of items.
+    """
+    epsgs = [item.properties['proj:epsg'] for item in items]
+    return max(set(epsgs), key=epsgs.count)
+
 
 class S2Downloader:
     test_file = 'GEDI02_A_2019111131802_O02014_01_T03046_02_003_01_V002.parquet'
@@ -124,7 +133,7 @@ class S2Downloader:
         # gediDf = gediDf.set_index('system:index')
         # gediDf = gediDf.repartition(npartitions=16)
         print(f'Processing {gediDf.npartitions} partitions...')
-        # number = 98
+        # number = 6
         # df = self.get_patch_for_partition(gediDf.get_partition(number).compute(), zone, esa_wc_items, partition_info={'number': number})
         df = gediDf.map_partitions(self.get_patch_for_partition, zone, esa_wc_items, meta=(None, 'string')).compute()
         # client = get_client()
@@ -168,49 +177,42 @@ class S2Downloader:
             start = pd.Timestamp(point['date'], tz='UTC') - self.queryDaysRange
             end = pd.Timestamp(point['date'], tz='UTC') + self.queryDaysRange
         geom = gpd.points_from_xy([point['x']], [point['y']], crs='epsg:4326')
-        items_df = self.query_s2_for_p(start, end, geom) #? how to make it non-blocking, return a future
+        items = self.query_s2_for_p(start, end, geom) #? how to make it non-blocking, return a future
         
-        if items_df is None:
+        if items is None:
             return None
 
         # get patch and calculate defective cover
-        items_df = items_df.groupby('epsg', group_keys=False).apply(self.calculate_defective_cover, geom, point['date']).dropna()
-        if items_df.empty:
-            return None
-
-        items_df = items_df.sort_values(['defective_cover', 'delta_day'])
-
-        best = items_df.iloc[0]
-        if items_df['defective_cover'].isna().all():
-            return None
-
-        # get patch
-        epsg = best['items'].properties['proj:epsg']
-        geom = geom.to_crs(epsg)
-        bounds = geom[0].buffer(70).bounds
-        
-        kwargs = dict(
+        epsg = get_most_common_epsg(items)
+        bounds = geom.to_crs(epsg)[0].buffer(70).bounds
+        s2_kwargs = dict(
             assets=self.bands, resolution=10, bounds=bounds, band_coords=False, properties=s2_item_props       
         )
-        try:
-            s2xrr = stack(best['items'], **kwargs)
-        except:
-            # token might expire, sign again
-            items = resign_items(best['items'])
-            s2xrr = stack(items, **kwargs)
-
-        kwargs = dict(
+        wc_kwargs = dict(
             assets=['map'],
             band_coords=False,
             resolution=10, 
             bounds=bounds, epsg=epsg, properties=False
         )
+        rh_arr = np.array(point[f'rh{x}'] for x in range(101))
+        gedi_attr = {k: ("time", [v]) for k, v in point.items() if not k.startswith('rh')}
+
+        best = self.calculate_defective_cover(items, bounds, point['date'], epsg)
+        best_item = [item for item in items if item.id == best.id][0]
         try:
-            xrr = stack(esa_wc_items, **kwargs)
+            s2xrr = stack(best_item, **s2_kwargs)
+        except:
+            # token might expire, sign again
+            items = resign_items(best_item)
+            s2xrr = stack(items, **s2_kwargs)
+
+
+        try:
+            xrr = stack(esa_wc_items, **wc_kwargs)
         except:
             # token might expire, sign again
             items = resign_items(esa_wc_items)
-            xrr = stack(items, **kwargs)
+            xrr = stack(items, **wc_kwargs)
 
         xrr = xrr.dropna(dim='time', how='all') # drop nan time slices
         if xrr.shape[0] == 1: # bbox cross two grid celss of esa wc
@@ -222,13 +224,18 @@ class S2Downloader:
             xrr = xrr.expand_dims(dim={'time': s2xrr['time'].data}, axis=0)
         del s2xrr.attrs['spec']
         xrr = xr.concat([s2xrr, xrr], dim='band', compat='override', coords='minimal')
-        xrr = xrr.expand_dims(dim={'RHs': np.array(point[f'rh{x}'] for x in range(101))}, axis=1)
-        new_coords = {k: ("time", [v]) for k, v in best[['delta_day', 'defective_cover']].items()}
-        new_coords.update({k: ("time", [v]) for k, v in point.items() if not k.startswith('rh')})
+        xrr = xrr.expand_dims(dim={'RHs': rh_arr}, axis=1)
+        new_coords = {k: ("time", [best[k]]) for k in ['delta_day','defective_cover']}
+        new_coords.update(gedi_attr)
         xrr = xrr.assign_coords(new_coords)
+
+        del items
+        del gedi_attr
+        del rh_arr
         return xrr
+
     
-    def calculate_defective_cover(self, group, geom, date):
+    def calculate_defective_cover(self, items, bounds, date, epsg):
         '''
         Calculate defective cover (patch level) for tiles with the same epsg
         
@@ -239,45 +246,52 @@ class S2Downloader:
         Returns:
             pandas.DataFrame: DataFrame containing calculated defective cover information
         '''
-        items = group['items'].values.tolist()
-        epsg = items[0].properties['proj:epsg']
         # Do the buffer for different epsg
-        geom = geom.to_crs(epsg)
-        bounds = geom[0].buffer(70).bounds
 
         try:
-            patch = stack(items, ['SCL'], resolution=10, bounds=bounds, fill_value=0, band_coords=False, properties=False)
+            patch = stack(items, ['SCL'], resolution=10, bounds=bounds, epsg=epsg, fill_value=0, band_coords=False, properties=False)
         except:
             # token might expire, sign again
             items = resign_items(items)
-            patch = stack(items, ['SCL'], resolution=10, bounds=bounds, fill_value=0, band_coords=False, properties=False)
+            patch = stack(items, ['SCL'], resolution=10, bounds=bounds, epsg=epsg, fill_value=0, band_coords=False, properties=False)
         
         if patch.shape[0] == 0:
             return None
 
         patch = patch.sel(band='SCL').isin(defective_SCL).sum(dim=['x', 'y']) / np.prod(patch.shape[-2:])
-
         # patch = patch.assign_coords({'delta_day':('time', [np.abs(t - pd.Timestamp(date)).days for t in patch.time.values])})
         patch.name = 'defective_cover'
-
+        # patch_df = patch.to_dask_dataframe()
+        patch_df = pd.DataFrame({
+            'id': patch.id.values,
+            'defective_cover': patch.data,
+            'delta_day': [np.abs(t - pd.Timestamp(date)).days for t in patch.time.values],
+        })
+        if patch_df.empty or patch_df['defective_cover'].isna().all():
+            return None
+        
+        patch_df = patch_df.sort_values(['defective_cover', 'delta_day'])
+        best = patch_df.iloc[0]
+        del patch_df
+        return best
         # patch.to_dataframe()
         # patch = patch.to_dask_dataframe()#.sort_values(['defective_cover', 'delta_day'])
-        if len(group) != len(patch):
-            group['id'] = group.apply(lambda x: x['items'].id, axis=1)
-            group = group[group['id'].isin(patch.id.values)]
-            items = group['items'].values.tolist()
+        # if len(group) != len(patch):
+        #     group['id'] = group.apply(lambda x: x['items'].id, axis=1)
+        #     group = group[group['id'].isin(patch.id.values)]
+        #     items = group['items'].values.tolist()
 
-        try:
-            df = pd.DataFrame({
-                's2_id': patch.id.values,
-                'defective_cover': patch.data,
-                'delta_day': [np.abs(t - pd.Timestamp(date)).days for t in patch.time.values],
-                'items': items,
-            })
-        except:
-            time.sleep(60*10)
-            df = self.calculate_defective_cover(group, geom, date)
-        return df
+        # try:
+        #     df = pd.DataFrame({
+        #         's2_id': patch.id.values,
+        #         'defective_cover': patch.data,
+        #         'delta_day': [np.abs(t - pd.Timestamp(date)).days for t in patch.time.values],
+        #         'items': items,
+        #     })
+        # except:
+        #     time.sleep(60*10)
+        #     df = self.calculate_defective_cover(group, geom, date)
+        # return df
 
     @retry.retry(tries=10, delay=1)
     def query_s2_for_p(self, start, end, geom):   
@@ -295,12 +309,12 @@ class S2Downloader:
                             datetime=f'{str(start)[:10]}/{str(end)[:10]}')
         items = search.item_collection()
         if len(items) > 0:
-            # return items
-            return pd.DataFrame(({
-                'id': item.id,
-                'items': item,
-                'epsg':item.properties['proj:epsg']
-            } for item in items))
+            return items
+            # return pd.DataFrame(({
+            #     'id': item.id,
+            #     'items': item,
+            #     'epsg':item.properties['proj:epsg']
+            # } for item in items))
         if len(items) == 0 and (end - start).days < 365:
             print(f'No S2 tile found between {start} - {end}, extend the range by {self.extendDays.days*2} days')
             items = self.query_s2_for_p(start - self.extendDays,
@@ -334,13 +348,13 @@ def download(func, zone):
 #%%
 if __name__ == "__main__":
     from dask.distributed import Client, LocalCluster
-    cluster = LocalCluster(threads_per_worker=2)
+    cluster = LocalCluster()
     client = Client(cluster)
 
     t0 = time.time()
     s2downloader = S2Downloader("GEDI2019", partition_size='64K')
     # download(s2downloader.get_s2_for_zone, '56H')
-    res = s2downloader.get_s2_for_zone('56H')
+    res = s2downloader.get_s2_for_zone('01G')
     print('time: ', time.time() - t0)
     # with ipdb.launch_ipdb_on_exception():
     # main()
