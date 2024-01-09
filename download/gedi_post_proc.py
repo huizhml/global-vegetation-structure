@@ -7,12 +7,11 @@ import ipdb
 
 import dask
 import dask.dataframe as dd
-import geopandas as gpd
-import dask_geopandas as dgd
-from shapely.geometry import shape
+import pandas as pd
 
 from const import dtypes
 
+GEDI_START = pd.Timestamp('2019-01-01')
 #%%
 
 def getDate(year, doy):
@@ -44,7 +43,8 @@ def addTrackNumber(zone=None):
     res = []
     for file in csvFiles:
         res.append(dask.delayed(addTrackNumberForFile)(file))
-    dask.compute(res)
+    res = dask.compute(res)
+    return res
 
 def addTrackNumberAndRepartition(zone=None):
     zone = zone or '**'
@@ -55,6 +55,8 @@ def addTrackNumberAndRepartition(zone=None):
     df['y'] = df['.geo'].apply(lambda x: json.loads(x)['coordinates'][1],
                                       meta=('geometry', 'float'))
     df = df.drop('.geo', axis=1)
+    df['date'] = dd.to_timedelta(df['delta_time'], unit='S') + GEDI_START
+    df['date'] = df['date'].dt.strftime('%Y-%m-%d')#.astype(str)
     df = df.repartition(partition_size='64K')
     df.to_parquet(dataFolder, name_function=lambda x: f'partition_{x}.parquet')
 
@@ -63,5 +65,4 @@ if __name__ == '__main__':
     from dask.distributed import Client, LocalCluster
     cluster = LocalCluster()
     client = Client(cluster, asynchronous=True)
-    futures = client.submit(addTrackNumber, '56H')
-    client.gather(futures)
+    addTrackNumberAndRepartition('56H')
