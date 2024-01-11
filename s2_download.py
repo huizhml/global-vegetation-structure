@@ -19,7 +19,6 @@ from distributed import get_client
 import pandas as pd
 import geopandas as gpd
 
-
 import ipdb
 import hydra
 from dotenv import load_dotenv
@@ -36,10 +35,18 @@ api = pystac_client.Client.open(stac_endpoint, modifier=planetary_computer.sign_
 
 defective_SCL = [0, 1, 8, 9, 10, 11]  # keep cloud shadows, model should learn to be invariant to cloud shadows
 comp = {
-    "zlib": True,
-    "complevel": 7,
-    "fletcher32": True,
-    "chunksizes": (1,101,14,15,15)
+    'input':{
+        "zlib": True,
+        "complevel": 7,
+        "fletcher32": True,
+        "chunksizes": (1,14,15,15)
+    },
+    'rhs':{
+        "zlib": True,
+        "complevel": 7,
+        "fletcher32": True,
+        "chunksizes": (1,101)
+    }
 }
 
 def resign_items(items):
@@ -76,7 +83,7 @@ class S2Downloader:
         self.gediFolder = Path.home() / gediFolder
         self.save_folder = Path.home() / 'data'/ 'GEDI'
         self.year = int(gediFolder[-4:])
-        self.yearStart = pd.Timestamp(f'{self.year}-01-01', tz='UTC')
+        self.yearStart = pd.Timestamp(f'{self.year}-01-01', tz='UTC') 
         self.esa_wc_year = 2020
         self.maxCloudCover = 50
         self.maxWaterPercentage = 100
@@ -136,10 +143,11 @@ class S2Downloader:
         xrrs = partition.apply(self.get_best_s2_for_p, axis=1, args=(esa_wc_items,)).dropna()
         xrrs = dask.compute(*xrrs)
         xrrs = xr.concat(xrrs, dim='time', compat='override', coords='minimal', join='override')
+        xrrs = xrrs.to_dataset('input')
         xrrs['time'].encoding['dtype'] = 'float32'
 
         with Lock('netcdf_lock'):
-            xrrs.to_netcdf(self.save_folder / f'{zone}'/f'partition_{partition_info["number"]}.h5', format='NETCDF4', engine='h5netcdf', encoding={xrrs.name: comp}, mode='w')
+            xrrs.to_netcdf(self.save_folder / f'{zone}'/f'partition_{partition_info["number"]}.h5', format='NETCDF4', engine='h5netcdf', encoding=comp, mode='w')
         print(f'finish {zone} partition {partition_info["number"]}')
 
     def get_best_s2_for_p(self, point, esa_wc_items):
@@ -168,18 +176,20 @@ class S2Downloader:
         epsg = get_most_common_epsg(items)
         bounds = geom.to_crs(epsg)[0].buffer(70).bounds
         s2_kwargs = dict(
-            assets=self.bands, resolution=10, bounds=bounds, band_coords=False, properties=s2_item_props       
+            assets=self.bands, resolution=10, bounds=bounds, band_coords=False, properties=s2_item_props, epsg=epsg, dtype="uint16", fill_value=0
         )
         wc_kwargs = dict(
             assets=['map'],
             band_coords=False,
             resolution=10, 
-            bounds=bounds, epsg=epsg, properties=False
+            bounds=bounds, epsg=epsg, properties=False, dtype="uint8", fill_value=0
         )
-        rh_arr = np.array(point[f'rh{x}'] for x in range(101))
+        rh_arr = np.array([[point[f'rh{x}'] for x in range(101)]])
         gedi_attr = {k: ("time", [v]) for k, v in point.items() if not k.startswith('rh')}
 
         best = self.calculate_defective_cover(items, bounds, point['date'], epsg)
+        if best is None:
+            return 
         best_item = [item for item in items if item.id == best.id][0]
         try:
             s2xrr = stack(best_item, **s2_kwargs)
@@ -195,7 +205,7 @@ class S2Downloader:
             xrr = stack(items, **wc_kwargs)
 
         xrr = xrr.dropna(dim='time', how='all') # drop nan time slices
-        if xrr.shape[0] == 1: # bbox cross two grid celss of esa wc
+        if xrr.shape[0] == 1: # bbox cross two grid cells of esa wc
             xrr['time'] = s2xrr['time'].data
         elif xrr.shape[0] == 0:
             return None
@@ -203,11 +213,15 @@ class S2Downloader:
             xrr = xrr.max(dim='time', keep_attrs=True) #TODO: check if this is correct
             xrr = xrr.expand_dims(dim={'time': s2xrr['time'].data}, axis=0)
         del s2xrr.attrs['spec']
+        xrr = xrr.assign_coords(band=['esa_wc'])
         xrr = xr.concat([s2xrr, xrr], dim='band', compat='override', coords='minimal')
-        xrr = xrr.expand_dims(dim={'RHs': rh_arr}, axis=1)
+        xrr.name = 'input'
+        xrr = xrr.to_dataset()
+        xrr = xrr.assign(rhs=(('time', 'rhs'), rh_arr))
         new_coords = {k: ("time", [best[k]]) for k in ['delta_day','defective_cover']}
         new_coords.update(gedi_attr)
         xrr = xrr.assign_coords(new_coords)
+        xrr = xrr.to_dataarray('input')
         return xrr
 
     
@@ -223,11 +237,11 @@ class S2Downloader:
             pandas.DataFrame: DataFrame containing calculated defective cover information
         '''
         try:
-            patch = stack(items, ['SCL'], resolution=10, bounds=bounds, epsg=epsg, fill_value=0, band_coords=False, properties=False)
+            patch = stack(items, ['SCL'], resolution=10, bounds=bounds, epsg=epsg, fill_value=0, band_coords=False, properties=False, dtype='uint8')
         except:
             # token might expire, sign again
             items = resign_items(items)
-            patch = stack(items, ['SCL'], resolution=10, bounds=bounds, epsg=epsg, fill_value=0, band_coords=False, properties=False)
+            patch = stack(items, ['SCL'], resolution=10, bounds=bounds, epsg=epsg, fill_value=0, band_coords=False, properties=False, dtype='uint8')
         
         if patch.shape[0] == 0:
             return None
@@ -244,11 +258,11 @@ class S2Downloader:
         
         patch_df = patch_df.sort_values(['defective_cover', 'delta_day'])
         best = patch_df.iloc[0]
+
         return best
 
     @retry.retry(tries=10, delay=1)
     def query_s2_for_p(self, start, end, geom):   
-        api = pystac_client.Client.open(stac_endpoint, modifier=planetary_computer.sign_inplace)
         search = api.search(collections=['sentinel-2-l2a'],
                             query={
                                 "eo:cloud_cover": {
@@ -302,7 +316,7 @@ if __name__ == "__main__":
     t0 = time.time()
     s2downloader = S2Downloader("GEDI2019", partition_size='64K')
     # download(s2downloader.get_s2_for_zone, '56H')
-    res = s2downloader.get_s2_for_zone('01G')
+    res = s2downloader.get_s2_for_zone('56H')
     print('time: ', time.time() - t0)
     # with ipdb.launch_ipdb_on_exception():
     # main()
