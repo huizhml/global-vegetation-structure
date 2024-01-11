@@ -77,7 +77,7 @@ class S2Downloader:
         self.save_folder = Path.home() / 'data'/ 'GEDI'
         self.year = int(gediFolder[-4:])
         self.yearStart = pd.Timestamp(f'{self.year}-01-01', tz='UTC')
-        self.esa_wc_year = 2020 if self.year <= 2020 else 2021
+        self.esa_wc_year = 2020
         self.maxCloudCover = 50
         self.maxWaterPercentage = 100
         self.queryDaysRange = pd.to_timedelta(90, unit='D')
