@@ -5,14 +5,17 @@ from datetime import datetime, timedelta
 from pathlib import Path
 import ipdb
 
+import pandas as pd
 import dask
 import dask.dataframe as dd
-import pandas as pd
+import geopandas as gpd
+import dask_geopandas as dgd
+from shapely.geometry import shape
 
 from const import dtypes
 
-GEDI_START = pd.Timestamp('2019-01-01')
 #%%
+GEDI_START = pd.Timestamp('2019-01-01')
 
 def getDate(year, doy):
     start_of_year = datetime(int(year), 1, 1)
@@ -43,8 +46,7 @@ def addTrackNumber(zone=None):
     res = []
     for file in csvFiles:
         res.append(dask.delayed(addTrackNumberForFile)(file))
-    res = dask.compute(res)
-    return res
+    dask.compute(res)
 
 def addTrackNumberAndRepartition(zone=None):
     zone = zone or '**'
@@ -65,4 +67,6 @@ if __name__ == '__main__':
     from dask.distributed import Client, LocalCluster
     cluster = LocalCluster()
     client = Client(cluster, asynchronous=True)
-    addTrackNumberAndRepartition('56H')
+    # futures = client.submit(addTrackNumber, '56H')
+    addTrackNumberAndRepartition('20M')
+    # client.gather(futures)

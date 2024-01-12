@@ -33,6 +33,7 @@ load_dotenv('.planetarycomputer/settings.env')
 stac_endpoint = 'https://planetarycomputer.microsoft.com/api/stac/v1'
 api = pystac_client.Client.open(stac_endpoint, modifier=planetary_computer.sign_inplace)
 
+dtypes.pop('.geo')
 defective_SCL = [0, 1, 8, 9, 10, 11]  # keep cloud shadows, model should learn to be invariant to cloud shadows
 comp = {
     'input':{
@@ -185,7 +186,7 @@ class S2Downloader:
             bounds=bounds, epsg=epsg, properties=False, dtype="uint8", fill_value=0
         )
         rh_arr = np.array([[point[f'rh{x}'] for x in range(101)]])
-        gedi_attr = {k: ("time", [v]) for k, v in point.items() if not k.startswith('rh')}
+        gedi_attr = {k: ("time", [point[k]]) for k  in dtypes.keys()}
 
         best = self.calculate_defective_cover(items, bounds, point['date'], epsg)
         if best is None:
