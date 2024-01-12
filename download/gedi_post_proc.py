@@ -48,7 +48,7 @@ def addTrackNumber(zone=None):
         res.append(dask.delayed(addTrackNumberForFile)(file))
     dask.compute(res)
 
-def addTrackNumberAndRepartition(zone=None):
+def addTrackNumberAndRepartition(zone=None, partition_size='64K'):
     zone = zone or '**'
     dataFolder = Path.home() / 'GEDI2019' / zone
     df = dd.read_csv(dataFolder / '*.csv', dtype=dtypes, usecols=list(dtypes.keys()))
@@ -59,7 +59,7 @@ def addTrackNumberAndRepartition(zone=None):
     df = df.drop('.geo', axis=1)
     df['date'] = dd.to_timedelta(df['delta_time'], unit='S') + GEDI_START
     df['date'] = df['date'].dt.strftime('%Y-%m-%d')#.astype(str)
-    df = df.repartition(partition_size='64K')
+    df = df.repartition(partition_size=partition_size)
     df.to_parquet(dataFolder, name_function=lambda x: f'partition_{x}.parquet')
 
 #%%
@@ -68,5 +68,5 @@ if __name__ == '__main__':
     cluster = LocalCluster()
     client = Client(cluster, asynchronous=True)
     # futures = client.submit(addTrackNumber, '56H')
-    addTrackNumberAndRepartition('20M')
+    addTrackNumberAndRepartition('20M', partition_size='4M')
     # client.gather(futures)
