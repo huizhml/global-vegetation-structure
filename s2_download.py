@@ -28,7 +28,7 @@ from utils._stackstac import stack
 from const import dtypes, s2_item_props
 
 load_dotenv('.planetarycomputer/settings.env')
-# MPC_API_KEY = os.environ.get('PC_SDK_SUBSCRIPTION_KEY')
+os.environ["GDAL_HTTP_MAX_RETRY"] = "3"
 
 #%%
 stac_endpoint = 'https://planetarycomputer.microsoft.com/api/stac/v1'
