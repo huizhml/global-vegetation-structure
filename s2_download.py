@@ -1,4 +1,5 @@
 #%%
+import os
 import time
 import json
 from pathlib import Path
@@ -14,7 +15,7 @@ import retry
 
 import dask
 import dask.dataframe as dd
-from dask.distributed import Lock
+from dask.distributed import Lock, as_completed
 from distributed import get_client
 import pandas as pd
 import geopandas as gpd
@@ -79,7 +80,7 @@ class S2Downloader:
 
     def __init__(self,
                  gediFolder='GEDI2019',
-                 partition_size='64K',
+                 n_parallel=100,
                  debug=False):
         self.gediFolder = Path.home() / gediFolder
         self.save_folder = Path.home() / 'data'/ 'GEDI'
@@ -90,7 +91,7 @@ class S2Downloader:
         self.maxWaterPercentage = 100
         self.queryDaysRange = pd.to_timedelta(90, unit='D')
         self.extendDays = pd.to_timedelta(30, unit='D')
-        self.partition_size = partition_size
+        self.n_parallel = n_parallel
         self.debug = debug
         self.bands = [
             'B01', 'B04', 'B03', 'B02', 'B05', 'B06', 'B07', 'B08', 'B8A',
@@ -134,8 +135,31 @@ class S2Downloader:
         print(f'Processing {gediDf.npartitions} partitions...')
         # number = 6
         # df = self.get_patch_for_partition(gediDf.get_partition(number).compute(), zone, esa_wc_items, partition_info={'number': number})
-        df = gediDf.map_partitions(self.get_patch_for_partition, zone, esa_wc_items, meta=(None, 'string')).compute()
-        return
+        res = gediDf.map_partitions(self.get_patch_for_partition, zone, esa_wc_items, meta=(None, 'string'))
+        if gediDf.npartitions <= self.n_parallel:
+            res.compute()
+        else:
+            client = get_client()
+            futures = []
+            for i in range(self.n_parallel):
+                future = client.compute(res.get_partition(i))
+                futures.append(future)
+            
+            f_gen = as_completed(futures, with_results=False)
+            n_left = gediDf.npartitions - self.n_parallel 
+            while f_gen.count() > 0:
+                f = next(f_gen)
+                if f.status == 'error':
+                    client.retry(f)  
+                    f_gen.add(f)
+                    continue
+                if n_left > 0:
+                    future = client.compute(res.get_partition(gediDf.npartitions - n_left))
+                    f_gen.add(future)
+                    print(f'************ partition {gediDf.npartitions - n_left} submitted ****************')
+                    print(f'{f_gen.count()} in processing, {n_left} waiting')
+                    n_left -= 1
+        return 'done'
 
     def get_patch_for_partition(self, partition, zone, esa_wc_items, partition_info=None):
         if (self.save_folder / f'{zone}'/f'partition_{partition_info["number"]}.h5').exists():
@@ -315,7 +339,7 @@ if __name__ == "__main__":
     client = Client(cluster)
 
     t0 = time.time()
-    s2downloader = S2Downloader("GEDI2019", partition_size='64K')
+    s2downloader = S2Downloader("GEDI2019", n_parallel=100)
     # download(s2downloader.get_s2_for_zone, '56H')
     res = s2downloader.get_s2_for_zone('56H')
     print('time: ', time.time() - t0)
