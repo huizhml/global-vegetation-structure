@@ -166,6 +166,8 @@ class S2Downloader:
             print(f'{zone} partition_{partition_info["number"]} has been processed.')
             return
         xrrs = partition.apply(self.get_best_s2_for_p, axis=1, args=(esa_wc_items,)).dropna()
+        if xrrs.empty:
+            return
         xrrs = dask.compute(*xrrs)
         xrrs = xr.concat(xrrs, dim='time', compat='override', coords='minimal', join='override')
         xrrs = xrrs.to_dataset('input')
