@@ -326,7 +326,7 @@ class S2Downloader:
             items = resign_items(items)
             patch = stack(items, ['SCL'], resolution=10, bounds=bounds, epsg=epsg, fill_value=0, band_coords=False, properties=False, dtype='uint8')
         
-        if patch.shape[0] == 0:
+        if patch.shape[0] == 0 or patch.shape[-2:] != (self.patch_size, self.patch_size): # why there're cases that the output shape is (14,15)? fill_value doesn't work?
             return None
 
         patch = patch.sel(band='SCL').compute() # simplify compute graph, not sure if this is necessary
