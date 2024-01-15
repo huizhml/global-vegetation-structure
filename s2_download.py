@@ -140,7 +140,7 @@ class S2Downloader:
                 bounds[2] = bounds[0] + 6
             return bounds
     
-    def download_zone(self, zone:str=None, update:bool=False):
+    def download_zone(self, zone:str=None, rewrite:bool=False):
             '''
             Filter S2 tiles for each GEDI zone.
 
@@ -153,7 +153,7 @@ class S2Downloader:
             zoneFolder = self.gediFolder / zone
             (self.save_dir/zone).mkdir(exist_ok=True)
             flag = self.save_dir/ f'{zone}_{self.year}_done'
-            if flag.exists() and not update:
+            if flag.exists() and not rewrite:
                 print(f'{zone} {self.year} has been processed.')
                 return
             
@@ -203,7 +203,7 @@ class S2Downloader:
             flag.touch()
             return 'done'
 
-    def get_patch_for_partition(self, partition, zone:str, esa_wc_items:pystac.ItemCollection, partition_info:dict=None):
+    def get_patch_for_partition(self, partition, zone:str, esa_wc_items:pystac.ItemCollection, rewrite:bool=False, partition_info:dict=None):
             """
             Query, filter, and stack S2 and ESA world cover patches for each GEDI partition.
             GEDI data is partitioned to cache a number of locations for the sake of memory efficiency.
@@ -216,7 +216,7 @@ class S2Downloader:
             """
             
             flag = self.save_dir / zone / f'partition_{partition_info["number"]}_done'
-            if flag.exists():
+            if flag.exists() and not rewrite:
                 print(f'{zone} partition_{partition_info["number"]} has been processed.')
                 return
             xrrs = partition.apply(self.get_best_s2_for_point, axis=1, args=(esa_wc_items,)).dropna()
@@ -228,7 +228,7 @@ class S2Downloader:
             xrrs['time'].encoding['dtype'] = 'float32'
 
             with Lock('netcdf_lock'):
-                xrrs.to_netcdf(self.save_dir / f'{zone}.h5', group=f'partition_{partition_info["number"]}', format='NETCDF4', engine='h5netcdf', encoding=comp, mode='w')
+                xrrs.to_netcdf(self.save_dir / f'{zone}.h5', group=f'partition_{partition_info["number"]}', format='NETCDF4', engine='h5netcdf', encoding=self.comp, mode='w')
             print(f'finish {zone} partition {partition_info["number"]}')
             flag.touch()
 
@@ -393,7 +393,7 @@ def main(cfg):
 
     t0 = time.time()
     s2downloader = S2Downloader(2019, n_parallel=cfg.n_parallel, save_dir=cfg.save_dir)
-    res = s2downloader.download_zone(cfg.zone, cfg.update)
+    res = s2downloader.download_zone(cfg.zone, cfg.rewrite)
     print('time: ', time.time() - t0)
 
 
