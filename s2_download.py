@@ -173,7 +173,11 @@ class S2Downloader:
         return 'done'
 
     def get_patch_for_partition(self, partition, zone, esa_wc_items, partition_info=None):
-        if (self.save_folder / f'{zone}'/f'partition_{partition_info["number"]}.h5').exists():
+        # if (self.save_folder / f'{zone}'/f'partition_{partition_info["number"]}.h5').exists():
+        #     print(f'{zone} partition_{partition_info["number"]} has been processed.')
+        #     return
+        flag = self.save_folder / zone / f'partition_{partition_info["number"]}_done'
+        if flag.exists():
             print(f'{zone} partition_{partition_info["number"]} has been processed.')
             return
         xrrs = partition.apply(self.get_best_s2_for_p, axis=1, args=(esa_wc_items,)).dropna()
@@ -185,8 +189,9 @@ class S2Downloader:
         xrrs['time'].encoding['dtype'] = 'float32'
 
         with Lock('netcdf_lock'):
-            xrrs.to_netcdf(self.save_folder / f'{zone}'/f'partition_{partition_info["number"]}.h5', format='NETCDF4', engine='h5netcdf', encoding=comp, mode='w')
+            xrrs.to_netcdf(self.save_folder / f'{zone}.h5', group=f'partition_{partition_info["number"]}', format='NETCDF4', engine='h5netcdf', encoding=comp, mode='w')
         print(f'finish {zone} partition {partition_info["number"]}')
+        flag.touch()
 
     def get_best_s2_for_p(self, point, esa_wc_items):
         '''
