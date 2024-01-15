@@ -38,22 +38,17 @@ api = pystac_client.Client.open(stac_endpoint, modifier=planetary_computer.sign_
 
 dtypes.pop('.geo')
 defective_SCL = [0, 1, 8, 9, 10, 11]  # keep cloud shadows, model should learn to be invariant to cloud shadows
-comp = {
-    'input':{
-        "zlib": True,
-        "complevel": 7,
-        "fletcher32": True,
-        "chunksizes": (1,14,15,15)
-    },
-    'rhs':{
-        "zlib": True,
-        "complevel": 7,
-        "fletcher32": True,
-        "chunksizes": (1,101)
-    }
-}
 
 def resign_items(items):
+    """
+    Resigns a list of items using the planetary_computer.sign() function.
+
+    Args:
+        items (list): A list of items to be resigned.
+
+    Returns:
+        list: A list of resigned items.
+    """
     res = []
     for item in items:
         item = planetary_computer.sign(item)
@@ -79,119 +74,169 @@ def get_most_common_epsg(items):
 class S2Downloader:
 
     def __init__(self,
-                 gediFolder='GEDI2019',
-                 n_parallel=100,
-                 debug=False):
-        self.gediFolder = Path.home() / gediFolder
-        self.save_folder = Path.home() / 'data'/ 'GEDI'
-        self.year = int(gediFolder[-4:])
-        self.yearStart = pd.Timestamp(f'{self.year}-01-01', tz='UTC') 
-        self.esa_wc_year = 2020
-        self.maxCloudCover = 50
-        self.maxWaterPercentage = 100
-        self.queryDaysRange = pd.to_timedelta(90, unit='D')
-        self.extendDays = pd.to_timedelta(30, unit='D')
+                 year: int = 2019,
+                 n_parallel: int = 100,
+                 save_dir: str = 'data/GEDI',
+                 patch_size: int = 15,
+                 maxCloudCover: int = 50,
+                 maxWaterPercentage: int = 100,
+                 queryDaysRange: int = 90,
+                 extendDays: int = 30,
+                 esa_wc_year: int = 2021,
+                 comp_level: int = 7,
+                ) -> None:
+        self.gediFolder = Path.home() / f'GEDI{year}'
+        self.save_dir = Path.home() / save_dir
+        self.year = year 
+        self.esa_wc_year = esa_wc_year
+        self.yearStart = pd.Timestamp(f'{self.year}-01-01', tz='UTC')
+        self.queryDaysRange = pd.to_timedelta(queryDaysRange, unit='D')
+        self.extendDays = pd.to_timedelta(extendDays, unit='D')
+        self.maxCloudCover = maxCloudCover
+        self.maxWaterPercentage = maxWaterPercentage
         self.n_parallel = n_parallel
-        self.debug = debug
         self.bands = [
             'B01', 'B04', 'B03', 'B02', 'B05', 'B06', 'B07', 'B08', 'B8A',
             'B09', 'B11', 'B12', 'SCL'
         ]
-        self.patch_size = 15
+        self.patch_size = patch_size
+        self.comp = {
+            'input':{
+                "zlib": True,
+                "complevel": comp_level,
+                "fletcher32": True,
+                "chunksizes": (1,14,15,15)
+            },
+            'rhs':{
+                "zlib": True,
+                "complevel": comp_level,
+                "fletcher32": True,
+                "chunksizes": (1,101)
+            }
+        }
 
       
-    def get_zone_bbox(self, zone):
-        key_file = 'keys/private-key.json'
-        key = json.load(open(key_file))
-        credentials = ee.ServiceAccountCredentials(key['client_email'], key_file)
-        ee.Initialize(credentials)
-        mgrs = ee.FeatureCollection('projects/gisproject-1/assets/gedi_count_mgrs_aggregated_landmass')
-        bounds = mgrs.filter(ee.Filter.eq('MGRS_UTM', zone)).first().geometry().bounds()
-        bounds = bounds.getInfo()['coordinates'][0]
-        bounds = [*bounds[0], *bounds[2]]
-        if bounds[2] > 180:
-            bounds[0] = -bounds[0]
-            bounds[2] = bounds[0] + 6
-        return bounds
-    
-    def get_s2_for_zone(self, zone):
-        '''
-        Filter S2 tiles for each GEDI zone
-        '''
-        zoneFolder = self.gediFolder / zone
-        (self.save_folder/zone).mkdir(exist_ok=True)
-        flag = self.save_folder/ f'{zone}_done'
-        if flag.exists():
-            print(f'{zone} has been processed.')
-            return
-        
-        bounds = self.get_zone_bbox(zone)
-        esa_wc_items = api.search(
-            collections=['esa-worldcover'],
-            bbox=bounds,
-            datetime=f'{self.esa_wc_year}-01-01/{self.esa_wc_year}-12-31').item_collection()
-        
-        gediDf = dd.read_parquet(zoneFolder / 'partition_*.parquet', dropna=True, usecols=list(dtypes.keys()))
-        print(f'Processing {gediDf.npartitions} partitions...')
-        # number = 6
-        # df = self.get_patch_for_partition(gediDf.get_partition(number).compute(), zone, esa_wc_items, partition_info={'number': number})
-        res = gediDf.map_partitions(self.get_patch_for_partition, zone, esa_wc_items, meta=(None, 'string'))
-        if gediDf.npartitions <= self.n_parallel:
-            res.compute() #? how to retry failed partitions in this way?
-        else:
-            client = get_client()
-            futures = []
-            for i in range(self.n_parallel):
-                future = client.compute(res.get_partition(i))
-                futures.append(future)
+    def get_zone_bbox(self, zone:str=None):
+            """
+            Retrieves the bounding box coordinates for a given zone.
+
+            Parameters:
+            - zone (str): The MGRS zone identifier.
+
+            Returns:
+            - bounds (list): The bounding box coordinates [min_lon, min_lat, max_lon, max_lat].
+            """
             
-            futures_monitor = as_completed(futures, with_results=False)
-            n_left = gediDf.npartitions - self.n_parallel
-            max_retries = 3
-            retry_counter: Dict[str, int] = defaultdict(lambda: 0)   
-            while futures_monitor.count() > 0:
-                f = next(futures_monitor)
-                if f.status == 'error':
-                    if retry_counter.get(future, 0) < max_retries:
-                        try:
-                            f.retry()
-                            futures_monitor.add(f)
-                            retry_counter[future.key] += 1
-                        except Exception as e:
-                            print(e)
-                            f.retry() #TODO: key eror in self.futures[key] when first retry, why? related to distributed.scheduler - ERROR - Couldn't gather keys: {('sum-aggregate-ce2045d27a178c14f0a6884069ecef48', 0): 'processing'}?
-                            futures_monitor.add(f)
-                        continue
-                if n_left > 0:
-                    future = client.compute(res.get_partition(gediDf.npartitions - n_left))
-                    futures_monitor.add(future)
-                    print(f'************ partition {gediDf.npartitions - n_left} submitted ****************')
-                    print(f'{futures_monitor.count()} in processing, {n_left} waiting')
-                    n_left -= 1
-        return 'done'
+            key_file = 'keys/private-key.json'
+            key = json.load(open(key_file))
+            credentials = ee.ServiceAccountCredentials(key['client_email'], key_file)
+            ee.Initialize(credentials)
+            mgrs = ee.FeatureCollection('projects/gisproject-1/assets/gedi_count_mgrs_aggregated_landmass')
+            bounds = mgrs.filter(ee.Filter.eq('MGRS_UTM', zone)).first().geometry().bounds()
+            bounds = bounds.getInfo()['coordinates'][0]
+            bounds = [*bounds[0], *bounds[2]]
+            if bounds[2] > 180:
+                bounds[0] = -bounds[0]
+                bounds[2] = bounds[0] + 6
+            return bounds
+    
+    def get_s2_for_zone(self, zone:str=None):
+            '''
+            Filter S2 tiles for each GEDI zone.
 
-    def get_patch_for_partition(self, partition, zone, esa_wc_items, partition_info=None):
-        flag = self.save_folder / zone / f'partition_{partition_info["number"]}_done'
-        if flag.exists():
-            print(f'{zone} partition_{partition_info["number"]} has been processed.')
-            return
-        xrrs = partition.apply(self.get_best_s2_for_p, axis=1, args=(esa_wc_items,)).dropna()
-        if xrrs.empty:
-            return
-        xrrs = dask.compute(*xrrs)
-        xrrs = xr.concat(xrrs, dim='time', compat='override', coords='minimal', join='override')
-        xrrs = xrrs.to_dataset('input')
-        xrrs['time'].encoding['dtype'] = 'float32'
+            Args:
+                zone (str): The GEDI zone to filter S2 tiles for.
 
-        with Lock('netcdf_lock'):
-            xrrs.to_netcdf(self.save_folder / f'{zone}.h5', group=f'partition_{partition_info["number"]}', format='NETCDF4', engine='h5netcdf', encoding=comp, mode='w')
-        print(f'finish {zone} partition {partition_info["number"]}')
-        flag.touch()
+            Returns:
+                str: A string indicating the status of the processing. Returns 'done' if the zone and year have already been processed.
+            '''
+            zoneFolder = self.gediFolder / zone
+            (self.save_dir/zone).mkdir(exist_ok=True)
+            flag = self.save_dir/ f'{zone}_{self.year}_done'
+            if flag.exists():
+                print(f'{zone} {self.year} has been processed.')
+                return
+            
+            bounds = self.get_zone_bbox(zone)
+            esa_wc_items = api.search(
+                collections=['esa-worldcover'],
+                bbox=bounds,
+                datetime=f'{self.esa_wc_year}-01-01/{self.esa_wc_year}-12-31').item_collection()
+            
+            gediDf = dd.read_parquet(zoneFolder / 'partition_*.parquet', dropna=True, usecols=list(dtypes.keys()))
+            print(f'Processing {gediDf.npartitions} partitions...')
+            # number = 6
+            # df = self.get_patch_for_partition(gediDf.get_partition(number).compute(), zone, esa_wc_items, partition_info={'number': number})
+            res = gediDf.map_partitions(self.get_patch_for_partition, zone, esa_wc_items, meta=(None, 'string'))
+            if gediDf.npartitions <= self.n_parallel:
+                res.compute() #? how to retry failed partitions in this way?
+            else:
+                client = get_client()
+                futures = []
+                for i in range(self.n_parallel):
+                    future = client.compute(res.get_partition(i))
+                    futures.append(future)
+                
+                futures_monitor = as_completed(futures, with_results=False)
+                n_left = gediDf.npartitions - self.n_parallel
+                max_retries = 3
+                retry_counter: Dict[str, int] = defaultdict(lambda: 0)   
+                while futures_monitor.count() > 0:
+                    f = next(futures_monitor)
+                    if f.status == 'error':
+                        if retry_counter.get(future, 0) < max_retries:
+                            try:
+                                f.retry()
+                                futures_monitor.add(f)
+                                retry_counter[future.key] += 1
+                            except Exception as e:
+                                print(e)
+                                f.retry() #TODO: key eror in self.futures[key] when first retry, why? related to distributed.scheduler - ERROR - Couldn't gather keys: {('sum-aggregate-ce2045d27a178c14f0a6884069ecef48', 0): 'processing'}?
+                                futures_monitor.add(f)
+                            continue
+                    if n_left > 0:
+                        future = client.compute(res.get_partition(gediDf.npartitions - n_left))
+                        futures_monitor.add(future)
+                        print(f'************ partition {gediDf.npartitions - n_left} submitted ****************')
+                        print(f'{futures_monitor.count()} in processing, {n_left} waiting')
+                        n_left -= 1
+            flag.touch()
+            return 'done'
 
-    def get_best_s2_for_p(self, point, esa_wc_items):
+    def get_patch_for_partition(self, partition, zone:str, esa_wc_items:pystac.ItemCollection, partition_info:dict=None):
+            """
+            Query, filter, and stack S2 and ESA world cover patches for each GEDI partition.
+            GEDI data is partitioned to cache a number of locations for the sake of memory efficiency.
+
+            Args:
+                partition (pandas.DataFrame): The partition containing the data.
+                zone (str): The zone identifier.
+                esa_wc_items (pystac.ItemCollection): The collection of ESA WC items.
+                partition_info (dict, optional): Information about the partition.
+            """
+            
+            flag = self.save_dir / zone / f'partition_{partition_info["number"]}_done'
+            if flag.exists():
+                print(f'{zone} partition_{partition_info["number"]} has been processed.')
+                return
+            xrrs = partition.apply(self.get_best_s2_for_point, axis=1, args=(esa_wc_items,)).dropna()
+            if xrrs.empty:
+                return
+            xrrs = dask.compute(*xrrs)
+            xrrs = xr.concat(xrrs, dim='time', compat='override', coords='minimal', join='override')
+            xrrs = xrrs.to_dataset('input')
+            xrrs['time'].encoding['dtype'] = 'float32'
+
+            with Lock('netcdf_lock'):
+                xrrs.to_netcdf(self.save_dir / f'{zone}.h5', group=f'partition_{partition_info["number"]}', format='NETCDF4', engine='h5netcdf', encoding=comp, mode='w')
+            print(f'finish {zone} partition {partition_info["number"]}')
+            flag.touch()
+
+    def get_best_s2_for_point(self, point, esa_wc_items):
         '''
-        Filter S2 tiles for each GEDI point
-        Query by date, cloud cover, water percentage, and Filter by leaf on/off dates
+        Qeury and Filter S2 tiles for each GEDI point
+        - Query by date, cloud cover, water percentage, and Filter by leaf on/off dates
+        - Filter by defective cover (patch level)
         '''
         # get the time range
         if point['leaf_on_doy'] < 366 and point['leaf_off_flag'] == 0: # point captured in growing season
@@ -272,7 +317,7 @@ class S2Downloader:
             geom (geopandas.GeometryArray): geometry of the point
             
         Returns:
-            pandas.DataFrame: DataFrame containing calculated defective cover information
+            pandas.Series: Series containing the best item
         '''
         try:
             patch = stack(items, ['SCL'], resolution=10, bounds=bounds, epsg=epsg, fill_value=0, band_coords=False, properties=False, dtype='uint8')
@@ -301,7 +346,19 @@ class S2Downloader:
         return best
 
     @retry.retry(tries=10, delay=1)
-    def query_s2_for_p(self, start, end, geom):   
+    def query_s2_for_p(self, start, end, geom):
+        """
+        Query Sentinel-2 data for a given time range and geometry. 
+        If no items are found, extend the time range by 60 days and try again, util the time range covers 365 days.
+
+        Args:
+            start (datetime): Start date of the time range.
+            end (datetime): End date of the time range.
+            geom (shapely.geometry): Geometry object representing the area of interest.
+
+        Returns:
+            list: List of Sentinel-2 items matching the query criteria, or None if no items found.
+        """
         search = api.search(collections=['sentinel-2-l2a'],
                             query={
                                 "eo:cloud_cover": {
@@ -329,12 +386,15 @@ class S2Downloader:
 @hydra.main(config_path="config", config_name="s2_download", version_base="1.2")
 def main(cfg):
     from dask.distributed import Client, LocalCluster
+    from dask import config 
+    config.set({'interface': 'lo'}) # failed to fix the error: dask.distributed - ERROR - Failed to gather key
     cluster = LocalCluster()
-    client = Client(cluster)
-    time_start = time.time()
-    s2downloader = S2Downloader("GEDI2019", partition_size=cfg.partition_size)
-    res = s2downloader.get_s2_for_zone('56H')
-    print('time:', time.time() - time_start)
+    client = Client(cluster)#timeout
+
+    t0 = time.time()
+    s2downloader = S2Downloader(2019, n_parallel=cfg.n_parallel, save_dir='data/GEDI')
+    res = s2downloader.get_s2_for_zone(cfg.zone)
+    print('time: ', time.time() - t0)
 
 
 def download(func, zone):
@@ -348,17 +408,7 @@ def download(func, zone):
 
 #%%
 if __name__ == "__main__":
-    from dask.distributed import Client, LocalCluster
-    from dask import config 
-    config.set({'interface': 'lo'}) # failed to fix the error: dask.distributed - ERROR - Failed to gather key
-    cluster = LocalCluster()
-    client = Client(cluster)
-
-    t0 = time.time()
-    s2downloader = S2Downloader("GEDI2019", n_parallel=100)
-    res = s2downloader.get_s2_for_zone('56H')
-    print('time: ', time.time() - t0)
-    # main()
+    main()
 
 # %%
 
