@@ -1,4 +1,6 @@
 zone: 32M
+year: 2019
+n_parallel: 100
 partition_size: 64K
 
 
@@ -6,4 +8,4 @@ hydra:
   job:
     chdir: False
   run:
-    dir: ./logs/${zone}_${partition_size}_${now:%Y-%m-%d_%H-%M-%S}
+    dir: ./logs/${zone}_${n_parallel}_${now:%Y-%m-%d_%H-%M-%S}

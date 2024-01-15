@@ -4,13 +4,11 @@ import json
 from datetime import datetime, timedelta
 from pathlib import Path
 import ipdb
+import hydra
 
 import pandas as pd
 import dask
 import dask.dataframe as dd
-import geopandas as gpd
-import dask_geopandas as dgd
-from shapely.geometry import shape
 
 from const import dtypes
 
@@ -48,9 +46,7 @@ def addTrackNumber(zone=None):
         res.append(dask.delayed(addTrackNumberForFile)(file))
     dask.compute(res)
 
-def addTrackNumberAndRepartition(zone=None, partition_size='64K'):
-    zone = zone or '**'
-    dataFolder = Path.home() / 'GEDI2019' / zone
+def addTrackNumberAndRepartition(dataFolder=None, partition_size='64K'):
     df = dd.read_csv(dataFolder / '*.csv', dtype=dtypes, usecols=list(dtypes.keys()))
     df['x'] = df['.geo'].apply(lambda x: json.loads(x)['coordinates'][0],
                                       meta=('geometry', 'float'))
@@ -61,12 +57,20 @@ def addTrackNumberAndRepartition(zone=None, partition_size='64K'):
     df['date'] = df['date'].dt.strftime('%Y-%m-%d')#.astype(str)
     df = df.repartition(partition_size=partition_size)
     df.to_parquet(dataFolder, name_function=lambda x: f'partition_{x}.parquet')
+    print(f'finish zone {dataFolder.stem}')
 
-#%%
-if __name__ == '__main__':
+@hydra.main(config_path="../config", config_name="s2_download", version_base="1.2")
+def main(cfg):
     from dask.distributed import Client, LocalCluster
     cluster = LocalCluster()
     client = Client(cluster, asynchronous=True)
-    # futures = client.submit(addTrackNumber, '56H')
-    addTrackNumberAndRepartition('20M', partition_size='4M')
-    # client.gather(futures)
+    if cfg.zone is not None:
+        addTrackNumberAndRepartition(Path.home() / f'GEDI{cfg.year}/{cfg.zone}', cfg.partition_size)
+    else:
+        zone_paths = [f for f in (Path.home() / f'GEDI{cfg.year}').iterdir() if f.is_dir()]
+        for zone in zone_paths:
+            addTrackNumberAndRepartition(zone, cfg.partition_size)
+
+#%%
+if __name__ == '__main__':
+    main()
