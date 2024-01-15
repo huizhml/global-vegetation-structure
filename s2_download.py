@@ -153,7 +153,7 @@ class S2Downloader:
             zoneFolder = self.gediFolder / zone
             (self.save_dir/zone).mkdir(exist_ok=True)
             flag = self.save_dir/ f'{zone}_{self.year}_done'
-            if flag.exists():
+            if flag.exists() and not update:
                 print(f'{zone} {self.year} has been processed.')
                 return
             
@@ -392,8 +392,8 @@ def main(cfg):
     client = Client(cluster)#timeout
 
     t0 = time.time()
-    s2downloader = S2Downloader(2019, n_parallel=cfg.n_parallel, save_dir='data/GEDI')
-    res = s2downloader.download_zone(cfg.zone)
+    s2downloader = S2Downloader(2019, n_parallel=cfg.n_parallel, save_dir=cfg.save_dir)
+    res = s2downloader.download_zone(cfg.zone, cfg.update)
     print('time: ', time.time() - t0)
 
 
