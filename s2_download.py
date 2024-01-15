@@ -77,8 +77,6 @@ def get_most_common_epsg(items):
 
 
 class S2Downloader:
-    test_file = 'GEDI02_A_2019111131802_O02014_01_T03046_02_003_01_V002.parquet'
-    test_zone = '01G'
 
     def __init__(self,
                  gediFolder='GEDI2019',
@@ -173,9 +171,6 @@ class S2Downloader:
         return 'done'
 
     def get_patch_for_partition(self, partition, zone, esa_wc_items, partition_info=None):
-        # if (self.save_folder / f'{zone}'/f'partition_{partition_info["number"]}.h5').exists():
-        #     print(f'{zone} partition_{partition_info["number"]} has been processed.')
-        #     return
         flag = self.save_folder / zone / f'partition_{partition_info["number"]}_done'
         if flag.exists():
             print(f'{zone} partition_{partition_info["number"]} has been processed.')
@@ -361,10 +356,8 @@ if __name__ == "__main__":
 
     t0 = time.time()
     s2downloader = S2Downloader("GEDI2019", n_parallel=100)
-    # download(s2downloader.get_s2_for_zone, '56H')
     res = s2downloader.get_s2_for_zone('56H')
     print('time: ', time.time() - t0)
-    # with ipdb.launch_ipdb_on_exception():
     # main()
 
 # %%
