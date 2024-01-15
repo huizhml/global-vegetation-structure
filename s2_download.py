@@ -140,7 +140,7 @@ class S2Downloader:
                 bounds[2] = bounds[0] + 6
             return bounds
     
-    def get_s2_for_zone(self, zone:str=None):
+    def download_zone(self, zone:str=None, update:bool=False):
             '''
             Filter S2 tiles for each GEDI zone.
 
@@ -393,7 +393,7 @@ def main(cfg):
 
     t0 = time.time()
     s2downloader = S2Downloader(2019, n_parallel=cfg.n_parallel, save_dir='data/GEDI')
-    res = s2downloader.get_s2_for_zone(cfg.zone)
+    res = s2downloader.download_zone(cfg.zone)
     print('time: ', time.time() - t0)
 
 
