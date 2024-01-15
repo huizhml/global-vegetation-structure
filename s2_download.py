@@ -3,6 +3,8 @@ import os
 import time
 import json
 from pathlib import Path
+from typing import Dict
+from collections import defaultdict
 
 import numpy as np
 import xarray as xr
@@ -137,7 +139,7 @@ class S2Downloader:
         # df = self.get_patch_for_partition(gediDf.get_partition(number).compute(), zone, esa_wc_items, partition_info={'number': number})
         res = gediDf.map_partitions(self.get_patch_for_partition, zone, esa_wc_items, meta=(None, 'string'))
         if gediDf.npartitions <= self.n_parallel:
-            res.compute()
+            res.compute() #? how to retry failed partitions in this way?
         else:
             client = get_client()
             futures = []
@@ -145,19 +147,28 @@ class S2Downloader:
                 future = client.compute(res.get_partition(i))
                 futures.append(future)
             
-            f_gen = as_completed(futures, with_results=False)
-            n_left = gediDf.npartitions - self.n_parallel 
-            while f_gen.count() > 0:
-                f = next(f_gen)
+            futures_monitor = as_completed(futures, with_results=False)
+            n_left = gediDf.npartitions - self.n_parallel
+            max_retries = 3
+            retry_counter: Dict[str, int] = defaultdict(lambda: 0)   
+            while futures_monitor.count() > 0:
+                f = next(futures_monitor)
                 if f.status == 'error':
-                    client.retry(f)  
-                    f_gen.add(f)
-                    continue
+                    if retry_counter.get(future, 0) < max_retries:
+                        try:
+                            f.retry()
+                            futures_monitor.add(f)
+                            retry_counter[future.key] += 1
+                        except Exception as e:
+                            print(e)
+                            f.retry() #TODO: key eror in self.futures[key] when first retry, why? related to distributed.scheduler - ERROR - Couldn't gather keys: {('sum-aggregate-ce2045d27a178c14f0a6884069ecef48', 0): 'processing'}?
+                            futures_monitor.add(f)
+                        continue
                 if n_left > 0:
                     future = client.compute(res.get_partition(gediDf.npartitions - n_left))
-                    f_gen.add(future)
+                    futures_monitor.add(future)
                     print(f'************ partition {gediDf.npartitions - n_left} submitted ****************')
-                    print(f'{f_gen.count()} in processing, {n_left} waiting')
+                    print(f'{futures_monitor.count()} in processing, {n_left} waiting')
                     n_left -= 1
         return 'done'
 
@@ -273,7 +284,8 @@ class S2Downloader:
         if patch.shape[0] == 0:
             return None
 
-        patch = patch.sel(band='SCL').isin(defective_SCL).sum(dim=['x', 'y']) / np.prod(patch.shape[-2:])
+        patch = patch.sel(band='SCL').compute() # simplify compute graph, not sure if this is necessary
+        patch = patch.isin(defective_SCL).sum(dim=['x', 'y']) / np.prod(patch.shape[-2:])
         patch.name = 'defective_cover'
         patch_df = pd.DataFrame({
             'id': patch.id.values,
@@ -337,6 +349,8 @@ def download(func, zone):
 #%%
 if __name__ == "__main__":
     from dask.distributed import Client, LocalCluster
+    from dask import config 
+    config.set({'interface': 'lo'}) # failed to fix the error: dask.distributed - ERROR - Failed to gather key
     cluster = LocalCluster()
     client = Client(cluster)
 
