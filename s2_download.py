@@ -21,6 +21,7 @@ from dask.distributed import Lock, as_completed
 from distributed import get_client
 import pandas as pd
 import geopandas as gpd
+import pyproj
 
 import ipdb
 import hydra
@@ -70,6 +71,12 @@ def get_most_common_epsg(items):
     epsgs = [item.properties['proj:epsg'] for item in items]
     return max(set(epsgs), key=epsgs.count)
 
+def reproject_bounds(raster_spec, crs_to='EPSG:4326'):
+    transformer = pyproj.Transformer.from_crs(f'EPSG:{raster_spec.epsg}', crs_to, always_xy=True)
+    # Transform the bounds
+    minx, miny = transformer.transform(raster_spec.bounds[0], raster_spec.bounds[1])
+    maxx, maxy = transformer.transform(raster_spec.bounds[2], raster_spec.bounds[3])
+    return (minx, miny, maxx, maxy)
 
 class S2Downloader:
 
@@ -163,11 +170,11 @@ class S2Downloader:
                 bbox=bounds,
                 datetime=f'{self.esa_wc_year}-01-01/{self.esa_wc_year}-12-31').item_collection()
             
-            gediDf = dd.read_parquet(zoneFolder / 'partition_*.parquet', dropna=True, usecols=list(dtypes.keys()))
+            gediDf = dd.read_parquet(zoneFolder / 'partition_*.parquet', dropna=True, usecols=list(dtypes.keys()), dtype=dtypes)
             print(f'Processing {gediDf.npartitions} partitions...')
             # number = 6
             # df = self.get_patch_for_partition(gediDf.get_partition(number).compute(), zone, esa_wc_items, partition_info={'number': number})
-            res = gediDf.map_partitions(self.get_patch_for_partition, zone, esa_wc_items, meta=(None, 'string'))
+            res = gediDf.map_partitions(self.get_patch_for_partition, zone, esa_wc_items, rewrite, meta=(None, 'string'))
             if gediDf.npartitions <= self.n_parallel:
                 res.compute() #? how to retry failed partitions in this way?
             else:
@@ -228,7 +235,7 @@ class S2Downloader:
             xrrs['time'].encoding['dtype'] = 'float32'
 
             with Lock('netcdf_lock'):
-                xrrs.to_netcdf(self.save_dir / f'{zone}.h5', group=f'partition_{partition_info["number"]}', format='NETCDF4', engine='h5netcdf', encoding=self.comp, mode='w')
+                xrrs.to_netcdf(self.save_dir / zone / f'partition_{partition_info["number"]}.h5', format='NETCDF4', engine='h5netcdf', encoding=self.comp, mode='w')
             print(f'finish {zone} partition {partition_info["number"]}')
             flag.touch()
 
@@ -259,18 +266,20 @@ class S2Downloader:
         epsg = get_most_common_epsg(items)
         bounds = geom.to_crs(epsg)[0].buffer(70).bounds
         s2_kwargs = dict(
-            assets=self.bands, resolution=10, bounds=bounds, band_coords=False, properties=s2_item_props, epsg=epsg, dtype="uint16", fill_value=0
+            assets=self.bands, resolution=10, bounds=bounds, band_coords=False, properties=s2_item_props, epsg=epsg, dtype="uint16", fill_value=0,
+            xy_coords=False
         )
         wc_kwargs = dict(
             assets=['map'],
             band_coords=False,
             resolution=10, 
-            bounds=bounds, epsg=epsg, properties=False, dtype="uint8", fill_value=0
+            bounds=bounds, epsg=epsg, properties=False, dtype="uint8", fill_value=0, xy_coords=False
         )
         rh_arr = np.array([[point[f'rh{x}'] for x in range(101)]])
-        gedi_attr = {k: ("time", [point[k]]) for k  in dtypes.keys()}
+        point = point.to_frame().T
+        gedi_attr = {k: ("time", point[k].astype(t)) for k, t in dtypes.items() if not k.startswith('rh')} #TODO: dtype upcasted when apply
 
-        best = self.calculate_defective_cover(items, bounds, point['date'], epsg)
+        best = self.calculate_defective_cover(items, bounds, point['date'].iloc[0], epsg)
         if best is None:
             return 
         best_item = [item for item in items if item.id == best.id][0]
@@ -295,12 +304,16 @@ class S2Downloader:
         else:
             xrr = xrr.max(dim='time', keep_attrs=True) #TODO: check if this is correct
             xrr = xrr.expand_dims(dim={'time': s2xrr['time'].data}, axis=0)
+        bounds_latlon = reproject_bounds(s2xrr.spec)
         del s2xrr.attrs['spec']
         xrr = xrr.assign_coords(band=['esa_wc'])
         xrr = xr.concat([s2xrr, xrr], dim='band', compat='override', coords='minimal')
         xrr.name = 'input'
         xrr = xrr.to_dataset()
         xrr = xrr.assign(rhs=(('time', 'rhs'), rh_arr))
+        xrr = xrr.assign(bounds=(('time', 'bounds'), np.array([bounds_latlon])))
+        best.delta_day = best.delta_day.astype('uint16')
+        best.defective_cover = best.defective_cover.astype('float32')
         new_coords = {k: ("time", [best[k]]) for k in ['delta_day','defective_cover']}
         new_coords.update(gedi_attr)
         xrr = xrr.assign_coords(new_coords)
@@ -320,11 +333,11 @@ class S2Downloader:
             pandas.Series: Series containing the best item
         '''
         try:
-            patch = stack(items, ['SCL'], resolution=10, bounds=bounds, epsg=epsg, fill_value=0, band_coords=False, properties=False, dtype='uint8')
+            patch = stack(items, ['SCL'], resolution=10, bounds=bounds, epsg=epsg, fill_value=0, band_coords=False, properties=False, dtype='uint8', xy_coords=False)
         except:
             # token might expire, sign again
             items = resign_items(items)
-            patch = stack(items, ['SCL'], resolution=10, bounds=bounds, epsg=epsg, fill_value=0, band_coords=False, properties=False, dtype='uint8')
+            patch = stack(items, ['SCL'], resolution=10, bounds=bounds, epsg=epsg, fill_value=0, band_coords=False, properties=False, dtype='uint8', xy_coords=False)
         
         if patch.shape[0] == 0 or patch.shape[-2:] != (self.patch_size, self.patch_size): # why there're cases that the output shape is (14,15)? fill_value doesn't work?
             return None
