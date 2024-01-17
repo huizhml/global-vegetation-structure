@@ -48,9 +48,9 @@ def addTrackNumber(zone=None):
 
 def addTrackNumberAndRepartition(dataFolder=None, partition_size='64K'):
     df = dd.read_csv(dataFolder / '*.csv', dtype=dtypes, usecols=list(dtypes.keys()))
-    df['x'] = df['.geo'].apply(lambda x: json.loads(x)['coordinates'][0],
+    df['lat'] = df['.geo'].apply(lambda x: json.loads(x)['coordinates'][0],
                                       meta=('geometry', 'float'))
-    df['y'] = df['.geo'].apply(lambda x: json.loads(x)['coordinates'][1],
+    df['lon'] = df['.geo'].apply(lambda x: json.loads(x)['coordinates'][1],
                                       meta=('geometry', 'float'))
     df = df.drop('.geo', axis=1)
     df['date'] = dd.to_timedelta(df['delta_time'], unit='S') + GEDI_START
