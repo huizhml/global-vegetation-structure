@@ -1,13 +1,10 @@
 #!/bin/bash
-#SBATCH --job-name=download_s2
+#SBATCH --account=project_465000894
+#SBATCH --partition=small
 #SBATCH --error=error.txt
-#SBATCH --cpus-per-task=32
-#SBATCH --mem=64G
-#SBATCH --time=7-00:00:00
+#SBATCH --time=1-00:00:00
 #SBATCH --output=./logs/slurm-%A-%a.out
 #SBATCH --error=./logs/slurm-%A-%a.err
 
-# python run.py keyFile=private-key.json init.dataFolder=GEDI2019
-source activate mpc
-python s2_download.py zone=01G partition_size=100
-
+singularity exec -B /project/project_465000894,/scratch/project_465000894,/flash/project_465000894 ~/project/pytorch_latest.sif\
+    python s2_download.py zone=$1 n_parallel=$2
