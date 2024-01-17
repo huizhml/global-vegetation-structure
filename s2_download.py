@@ -256,7 +256,7 @@ class S2Downloader:
         else:
             start = pd.Timestamp(point['date'], tz='UTC') - self.queryDaysRange
             end = pd.Timestamp(point['date'], tz='UTC') + self.queryDaysRange
-        geom = gpd.points_from_xy([point['x']], [point['y']], crs='epsg:4326')
+        geom = gpd.points_from_xy([point['lat']], [point['lon']], crs='epsg:4326')
         items = self.query_s2_for_p(start, end, geom) #? how to make it non-blocking, return a future
         
         if items is None:
@@ -278,6 +278,7 @@ class S2Downloader:
         rh_arr = np.array([[point[f'rh{x}'] for x in range(101)]])
         point = point.to_frame().T
         gedi_attr = {k: ("time", point[k].astype(t)) for k, t in dtypes.items() if not k.startswith('rh')} #TODO: dtype upcasted when apply
+        gedi_attr.update({'lat': ('time', point['lat']), 'lon': ('time', point['lon'])})
 
         best = self.calculate_defective_cover(items, bounds, point['date'].iloc[0], epsg)
         if best is None:
