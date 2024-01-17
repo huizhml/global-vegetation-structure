@@ -43,7 +43,7 @@ dtypes.update(rh_type)
 
 s2_item_props = ['datetime', 
     # 'platform', 
-    'proj:epsg', 
+    # 'proj:epsg', 
     # 'instruments', 
     's2:mgrs_tile', 
     # 'constellation', 
