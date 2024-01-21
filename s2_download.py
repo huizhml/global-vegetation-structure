@@ -239,9 +239,9 @@ class S2Downloader:
             partition_info (dict, optional): Information about the partition.
         """
         
-        flag = self.save_dir / zone / f'partition_{partition_info["number"]}_done'
+        flag = self.save_dir / zone / f'{self.year}_partition_{partition_info["number"]}_done'
         if flag.exists() and not rewrite:
-            print(f'{zone} partition_{partition_info["number"]} has been processed.')
+            print(f'{zone} {self.year}_partition_{partition_info["number"]} has been processed.')
             return
         xrrs = partition.apply(self.get_best_s2_for_point, axis=1, args=(esa_wc_items,)).dropna()
         if xrrs.empty:
