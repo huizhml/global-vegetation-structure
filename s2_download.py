@@ -124,128 +124,128 @@ class S2Downloader:
 
       
     def get_zone_bbox(self, zone:str=None):
-            """
-            Retrieves the bounding box coordinates for a given zone.
+        """
+        Retrieves the bounding box coordinates for a given zone.
 
-            Parameters:
-            - zone (str): The MGRS zone identifier.
+        Parameters:
+        - zone (str): The MGRS zone identifier.
 
-            Returns:
-            - bounds (list): The bounding box coordinates [min_lon, min_lat, max_lon, max_lat].
-            """
-            
-            key_file = 'keys/private-key.json'
-            key = json.load(open(key_file))
-            credentials = ee.ServiceAccountCredentials(key['client_email'], key_file)
-            ee.Initialize(credentials)
-            mgrs = ee.FeatureCollection('projects/gisproject-1/assets/gedi_count_mgrs_aggregated_landmass')
-            bounds = mgrs.filter(ee.Filter.eq('MGRS_UTM', zone)).first().geometry().bounds()
-            bounds = bounds.getInfo()['coordinates'][0]
-            bounds = [*bounds[0], *bounds[2]]
-            if bounds[2] > 180:
-                bounds[0] = -bounds[0]
-                bounds[2] = bounds[0] + 6
-            return bounds
+        Returns:
+        - bounds (list): The bounding box coordinates [min_lon, min_lat, max_lon, max_lat].
+        """
+        
+        key_file = 'keys/private-key.json'
+        key = json.load(open(key_file))
+        credentials = ee.ServiceAccountCredentials(key['client_email'], key_file)
+        ee.Initialize(credentials)
+        mgrs = ee.FeatureCollection('projects/gisproject-1/assets/gedi_count_mgrs_aggregated_landmass')
+        bounds = mgrs.filter(ee.Filter.eq('MGRS_UTM', zone)).first().geometry().bounds()
+        bounds = bounds.getInfo()['coordinates'][0]
+        bounds = [*bounds[0], *bounds[2]]
+        if bounds[2] > 180:
+            bounds[0] = -bounds[0]
+            bounds[2] = bounds[0] + 6
+        return bounds
     
     def download_zone(self, zone:str=None, rewrite:bool=False):
-            '''
-            Filter S2 tiles for each GEDI zone.
+        '''
+        Filter S2 tiles for each GEDI zone.
 
-            Args:
-                zone (str): The GEDI zone to filter S2 tiles for.
+        Args:
+            zone (str): The GEDI zone to filter S2 tiles for.
 
-            Returns:
-                str: A string indicating the status of the processing. Returns 'done' if the zone and year have already been processed.
-            '''
-            zoneFolder = self.gediFolder / zone
-            (self.save_dir/zone).mkdir(exist_ok=True)
-            flag = self.save_dir/ f'{zone}_{self.year}_done'
-            if flag.exists() and not rewrite:
-                print(f'{zone} {self.year} has been processed.')
-                return
-            
-            bounds = self.get_zone_bbox(zone)
-            esa_wc_items = api.search(
-                collections=['esa-worldcover'],
-                bbox=bounds,
-                datetime=f'{self.esa_wc_year}-01-01/{self.esa_wc_year}-12-31').item_collection()
-            
-            gediDf = dd.read_parquet(zoneFolder / 'partition_*.parquet', dropna=True, usecols=list(dtypes.keys()), dtype=dtypes)
-            print(f'Processing {gediDf.npartitions} partitions...')
-            # number = 61
-            # df = self.get_patch_for_partition(gediDf.get_partition(number).compute(), zone, esa_wc_items, rewrite=True, partition_info={'number': number})
-            # print('test done')
-            df = gediDf.map_partitions(self.get_patch_for_partition, zone, esa_wc_items, rewrite, meta=(None, 'string'))
-            self.n_parallel = min(self.n_parallel, gediDf.npartitions)
-            client = get_client()
-            futures = []
-            for i in range(self.n_parallel):
-                future = client.compute(df.get_partition(i))
-                futures.append(future)
-            
-            futures_monitor = as_completed(futures, with_results=False)
-            n_left = gediDf.npartitions - self.n_parallel
-            max_retries = 3
-            retry_counter: Dict[str, int] = defaultdict(lambda: 0)   
-            res = []
-            while futures_monitor.count() > 0:
-                f = next(futures_monitor)
-                if f.status == 'error':
-                    if retry_counter.get(future, 0) < max_retries:
-                        try:
-                            f.retry()
-                            futures_monitor.add(f)
-                            retry_counter[future.key] += 1
-                        except Exception as e:
-                            print(e)
-                            f.retry() #TODO: key eror in self.futures[key] when first retry, why? related to distributed.scheduler - ERROR - Couldn't gather keys: {('sum-aggregate-ce2045d27a178c14f0a6884069ecef48', 0): 'processing'}?
-                            futures_monitor.add(f)
-                        continue
-                if (result := f.result()) is not None:
-                    res.extend(*result)
-                f.release()
-                if n_left > 0:
-                    future = client.compute(df.get_partition(gediDf.npartitions - n_left))
-                    futures_monitor.add(future)
-                    print(f'************ partition {gediDf.npartitions - n_left} submitted ****************')
-                    print(f'{futures_monitor.count()} in processing, {n_left} waiting')
-                    n_left -= 1
-            xrrs = xr.concat(res, dim='time', compat='override', coords='minimal', join='override')
-            xrrs = xrrs.to_dataset('input')
-            xrrs['time'].encoding['dtype'] = 'float32'
-            xrrs.to_netcdf(self.save_dir / zone / f'year_{self.year}.h5', format='NETCDF4', engine='h5netcdf', encoding=self.comp, mode='w')
-            flag.touch()
-            return 'done'
+        Returns:
+            str: A string indicating the status of the processing. Returns 'done' if the zone and year have already been processed.
+        '''
+        zoneFolder = self.gediFolder / zone
+        (self.save_dir/zone).mkdir(exist_ok=True)
+        flag = self.save_dir/ f'{zone}_{self.year}_done'
+        if flag.exists() and not rewrite:
+            print(f'{zone} {self.year} has been processed.')
+            return
+        
+        bounds = self.get_zone_bbox(zone)
+        esa_wc_items = api.search(
+            collections=['esa-worldcover'],
+            bbox=bounds,
+            datetime=f'{self.esa_wc_year}-01-01/{self.esa_wc_year}-12-31').item_collection()
+        
+        gediDf = dd.read_parquet(zoneFolder / 'partition_*.parquet', dropna=True, usecols=list(dtypes.keys()), dtype=dtypes)
+        print(f'Processing {gediDf.npartitions} partitions...')
+        # number = 61
+        # df = self.get_patch_for_partition(gediDf.get_partition(number).compute(), zone, esa_wc_items, rewrite=True, partition_info={'number': number})
+        # print('test done')
+        df = gediDf.map_partitions(self.get_patch_for_partition, zone, esa_wc_items, rewrite, meta=(None, 'string'))
+        self.n_parallel = min(self.n_parallel, gediDf.npartitions)
+        client = get_client()
+        futures = []
+        for i in range(self.n_parallel):
+            future = client.compute(df.get_partition(i))
+            futures.append(future)
+        
+        futures_monitor = as_completed(futures, with_results=False)
+        n_left = gediDf.npartitions - self.n_parallel
+        max_retries = 3
+        retry_counter: Dict[str, int] = defaultdict(lambda: 0)   
+        res = []
+        while futures_monitor.count() > 0:
+            f = next(futures_monitor)
+            if f.status == 'error':
+                if retry_counter.get(future, 0) < max_retries:
+                    try:
+                        f.retry()
+                        futures_monitor.add(f)
+                        retry_counter[future.key] += 1
+                    except Exception as e:
+                        print(e)
+                        f.retry() #TODO: key eror in self.futures[key] when first retry, why? related to distributed.scheduler - ERROR - Couldn't gather keys: {('sum-aggregate-ce2045d27a178c14f0a6884069ecef48', 0): 'processing'}?
+                        futures_monitor.add(f)
+                    continue
+            if (result := f.result()) is not None:
+                res.extend(*result)
+            f.release()
+            if n_left > 0:
+                future = client.compute(df.get_partition(gediDf.npartitions - n_left))
+                futures_monitor.add(future)
+                print(f'************ partition {gediDf.npartitions - n_left} submitted ****************')
+                print(f'{futures_monitor.count()} in processing, {n_left} waiting')
+                n_left -= 1
+        xrrs = xr.concat(res, dim='time', compat='override', coords='minimal', join='override')
+        xrrs = xrrs.to_dataset('input')
+        xrrs['time'].encoding['dtype'] = 'float32'
+        xrrs.to_netcdf(self.save_dir / zone / f'year_{self.year}.h5', format='NETCDF4', engine='h5netcdf', encoding=self.comp, mode='w')
+        flag.touch()
+        return 'done'
 
     def get_patch_for_partition(self, partition, zone:str, esa_wc_items:pystac.ItemCollection, rewrite:bool=False, partition_info:dict=None):
-            """
-            Query, filter, and stack S2 and ESA world cover patches for each GEDI partition.
-            GEDI data is partitioned to cache a number of locations for the sake of memory efficiency.
+        """
+        Query, filter, and stack S2 and ESA world cover patches for each GEDI partition.
+        GEDI data is partitioned to cache a number of locations for the sake of memory efficiency.
 
-            Args:
-                partition (pandas.DataFrame): The partition containing the data.
-                zone (str): The zone identifier.
-                esa_wc_items (pystac.ItemCollection): The collection of ESA WC items.
-                partition_info (dict, optional): Information about the partition.
-            """
-            
-            flag = self.save_dir / zone / f'partition_{partition_info["number"]}_done'
-            if flag.exists() and not rewrite:
-                print(f'{zone} partition_{partition_info["number"]} has been processed.')
-                return
-            xrrs = partition.apply(self.get_best_s2_for_point, axis=1, args=(esa_wc_items,)).dropna()
-            if xrrs.empty:
-                return
-            return dask.compute(*xrrs)
-            # xrrs = dask.compute(*xrrs)
-            # xrrs = xr.concat(xrrs, dim='time', compat='override', coords='minimal', join='override')
-            # xrrs = xrrs.to_dataset('input')
-            # xrrs['time'].encoding['dtype'] = 'float32'
+        Args:
+            partition (pandas.DataFrame): The partition containing the data.
+            zone (str): The zone identifier.
+            esa_wc_items (pystac.ItemCollection): The collection of ESA WC items.
+            partition_info (dict, optional): Information about the partition.
+        """
+        
+        flag = self.save_dir / zone / f'partition_{partition_info["number"]}_done'
+        if flag.exists() and not rewrite:
+            print(f'{zone} partition_{partition_info["number"]} has been processed.')
+            return
+        xrrs = partition.apply(self.get_best_s2_for_point, axis=1, args=(esa_wc_items,)).dropna()
+        if xrrs.empty:
+            return
+        return dask.compute(*xrrs)
+        # xrrs = dask.compute(*xrrs)
+        # xrrs = xr.concat(xrrs, dim='time', compat='override', coords='minimal', join='override')
+        # xrrs = xrrs.to_dataset('input')
+        # xrrs['time'].encoding['dtype'] = 'float32'
 
-            # with Lock('netcdf_lock'):
-            #     xrrs.to_netcdf(self.save_dir / zone / f'partition_{partition_info["number"]}.h5', format='NETCDF4', engine='h5netcdf', encoding=self.comp, mode='w')
-            # print(f'finish {zone} partition {partition_info["number"]}')
-            # flag.touch()
+        # with Lock('netcdf_lock'):
+        #     xrrs.to_netcdf(self.save_dir / zone / f'partition_{partition_info["number"]}.h5', format='NETCDF4', engine='h5netcdf', encoding=self.comp, mode='w')
+        # print(f'finish {zone} partition {partition_info["number"]}')
+        # flag.touch()
 
     def get_best_s2_for_point(self, point, esa_wc_items):
         '''
