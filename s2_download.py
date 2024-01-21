@@ -28,7 +28,7 @@ import hydra
 from dotenv import load_dotenv
 
 from utils._stackstac import stack
-from const import dtypes, s2_item_props
+from const import dtypes, gedi_attr_dtype, rh_dtype, s2_item_props
 
 load_dotenv('.planetarycomputer/settings.env')
 os.environ["GDAL_HTTP_MAX_RETRY"] = "3"
@@ -38,6 +38,8 @@ stac_endpoint = 'https://planetarycomputer.microsoft.com/api/stac/v1'
 api = pystac_client.Client.open(stac_endpoint, modifier=planetary_computer.sign_inplace)
 
 dtypes.pop('.geo')
+gedi_attr_dtype.pop('.geo')
+gedi_attr_dtype.pop('shot_number')
 defective_SCL = [0, 1, 8, 9, 10, 11]  # keep cloud shadows, model should learn to be invariant to cloud shadows
 
 def resign_items(items):
@@ -119,7 +121,13 @@ class S2Downloader:
                 "complevel": comp_level,
                 "fletcher32": True,
                 "chunksizes": (1,101)
-            }
+            },
+            'gedi_attrs':{
+                "zlib": True,
+                "complevel": comp_level,
+                "fletcher32": True,
+                "chunksizes": (1,32)
+            },
         }
 
       
@@ -238,16 +246,15 @@ class S2Downloader:
         xrrs = partition.apply(self.get_best_s2_for_point, axis=1, args=(esa_wc_items,)).dropna()
         if xrrs.empty:
             return
-        return dask.compute(*xrrs)
-        # xrrs = dask.compute(*xrrs)
-        # xrrs = xr.concat(xrrs, dim='time', compat='override', coords='minimal', join='override')
-        # xrrs = xrrs.to_dataset('input')
-        # xrrs['time'].encoding['dtype'] = 'float32'
 
-        # with Lock('netcdf_lock'):
-        #     xrrs.to_netcdf(self.save_dir / zone / f'partition_{partition_info["number"]}.h5', format='NETCDF4', engine='h5netcdf', encoding=self.comp, mode='w')
-        # print(f'finish {zone} partition {partition_info["number"]}')
-        # flag.touch()
+        partition = partition.loc[xrrs.index].set_index('shot_number')
+        rh_da = partition[rh_dtype.keys()].to_xarray().to_dataarray('rh', 'rhs')
+        gedi_attr_da = partition[gedi_attr_dtype.keys()].to_xarray().to_dataarray('attr', 'gedi_attrs')
+        xrrs = dask.compute(*xrrs)
+        xrrs = xr.concat(xrrs, dim='time', compat='override', coords='minimal', join='override')
+        xrrs.name = 'input'
+        ds = xr.merge([xrrs, rh_da.transpose(), gedi_attr_da.transpose()])
+        return dask.compute(ds)
 
     def get_best_s2_for_point(self, point, esa_wc_items):
         '''
@@ -316,19 +323,12 @@ class S2Downloader:
             xrr = xrr.max(dim='time', keep_attrs=True) #TODO: check if this is correct
             xrr = xrr.expand_dims(dim={'time': s2xrr['time'].data}, axis=0)
         bounds_latlon = reproject_bounds(s2xrr.spec)
-
         xrr = xrr.assign_coords(band=['esa_wc'])
         xrr = xr.concat([s2xrr, xrr], dim='band', compat='override', coords='minimal', combine_attrs='drop')
-        xrr.name = 'input'
-        xrr = xrr.to_dataset()
-        xrr = xrr.assign(rhs=(('time', 'rhs'), rh_arr))
-        xrr = xrr.assign(bounds=(('time', 'bounds'), np.array([bounds_latlon])))
         best.delta_day = best.delta_day.astype('uint16')
         best.defective_cover = best.defective_cover.astype('float32')
         new_coords = {k: ("time", [best[k]]) for k in ['delta_day','defective_cover']}
-        new_coords.update(gedi_attr)
         xrr = xrr.assign_coords(new_coords)
-        xrr = xrr.to_dataarray('input')
         return xrr
 
     
