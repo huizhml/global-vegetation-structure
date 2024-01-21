@@ -201,7 +201,7 @@ class S2Downloader:
                         f.retry() #TODO: key eror in self.futures[key] when first retry, why? related to distributed.scheduler - ERROR - Couldn't gather keys: {('sum-aggregate-ce2045d27a178c14f0a6884069ecef48', 0): 'processing'}?
                         futures_monitor.add(f)
                     continue
-            if (result := f.result()) is not None:
+            if (result := f.result()) is not None and result.iloc[0] is not None:
                 res.extend(*result)
             f.release()
             if n_left > 0:
@@ -210,12 +210,14 @@ class S2Downloader:
                 print(f'************ partition {gediDf.npartitions - n_left} submitted ****************')
                 print(f'{futures_monitor.count()} in processing, {n_left} waiting')
                 n_left -= 1
-        xrrs = xr.concat(res, dim='time', compat='override', coords='minimal', join='override')
-        xrrs = xrrs.to_dataset('input')
-        xrrs['time'].encoding['dtype'] = 'float32'
-        xrrs.to_netcdf(self.save_dir / zone / f'year_{self.year}.h5', format='NETCDF4', engine='h5netcdf', encoding=self.comp, mode='w')
-        flag.touch()
-        return 'done'
+            
+        if len(res) > 0:
+            xrrs = xr.concat(res, dim='time', compat='override', coords='minimal', join='override')
+            xrrs = xrrs.to_dataset('input')
+            xrrs['time'].encoding['dtype'] = 'float32'
+            xrrs.to_netcdf(self.save_dir / 'GEDI.h5', group=f'zone{i}/{year}', format='NETCDF4', engine='h5netcdf', encoding=self.comp, mode='a')
+            flag.touch()
+        return
 
     def get_patch_for_partition(self, partition, zone:str, esa_wc_items:pystac.ItemCollection, rewrite:bool=False, partition_info:dict=None):
         """
