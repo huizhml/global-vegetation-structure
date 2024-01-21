@@ -255,7 +255,7 @@ class S2Downloader:
         xrrs.name = 'input'
         ds = xr.merge([xrrs, rh_da.transpose(), gedi_attr_da.transpose()])
         with Lock('netcdf_lock'):
-            ds.to_netcdf(self.save_dir / f'{zone}.h5', group=f'{partition_info["number"]}', format='NETCDF4', engine='h5netcdf', encoding=self.comp, mode='a')
+            ds.to_netcdf(self.save_dir / f'{zone}.h5', group=f'{self.year}/{partition_info["number"]}', format='NETCDF4', engine='h5netcdf', encoding=self.comp, mode='a')
 
     def get_best_s2_for_point(self, point, esa_wc_items):
         '''
