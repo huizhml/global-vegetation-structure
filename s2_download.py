@@ -76,9 +76,9 @@ def get_most_common_epsg(items):
 def reproject_bounds(raster_spec, crs_to='EPSG:4326'):
     transformer = pyproj.Transformer.from_crs(f'EPSG:{raster_spec.epsg}', crs_to, always_xy=True)
     # Transform the bounds
-    # minx, miny = transformer.transform(raster_spec.bounds[0], raster_spec.bounds[1])
-    # maxx, maxy = transformer.transform(raster_spec.bounds[2], raster_spec.bounds[3])
-    return transformer.transform_bounds(*raster_spec.bounds) # (minx, miny, maxx, maxy)
+    minx, miny = transformer.transform(raster_spec.bounds[0], raster_spec.bounds[1])
+    maxx, maxy = transformer.transform(raster_spec.bounds[2], raster_spec.bounds[3])
+    return [minx, miny, maxx, maxy]
 
 class S2Downloader:
 
@@ -329,6 +329,7 @@ class S2Downloader:
         best.delta_day = best.delta_day.astype('uint16')
         best.defective_cover = best.defective_cover.astype('float32')
         new_coords = {k: ("time", [best[k]]) for k in ['delta_day','defective_cover']}
+        new_coords.update({'minx': ("time", bounds_latlon[:1]), 'miny': ("time", bounds_latlon[1:2]), 'maxx': ("time", bounds_latlon[2:3]), 'maxy': ("time", bounds_latlon[3:])})
         xrr = xrr.assign_coords(new_coords)
         return xrr
 
