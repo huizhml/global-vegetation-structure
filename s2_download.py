@@ -316,9 +316,9 @@ class S2Downloader:
             xrr = xrr.max(dim='time', keep_attrs=True) #TODO: check if this is correct
             xrr = xrr.expand_dims(dim={'time': s2xrr['time'].data}, axis=0)
         bounds_latlon = reproject_bounds(s2xrr.spec)
-        del s2xrr.attrs['spec']
+
         xrr = xrr.assign_coords(band=['esa_wc'])
-        xrr = xr.concat([s2xrr, xrr], dim='band', compat='override', coords='minimal')
+        xrr = xr.concat([s2xrr, xrr], dim='band', compat='override', coords='minimal', combine_attrs='drop')
         xrr.name = 'input'
         xrr = xrr.to_dataset()
         xrr = xrr.assign(rhs=(('time', 'rhs'), rh_arr))
