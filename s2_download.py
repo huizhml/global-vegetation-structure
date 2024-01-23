@@ -201,9 +201,13 @@ class S2Downloader:
             str: A string indicating the status of the processing. Returns 'done' if the zone and year have already been processed.
         '''
         zoneFolder = self.gediFolder / zone
-        (self.save_dir/zone).mkdir(exist_ok=True)
+        (self.save_dir/zone).mkdir(exist_ok=True, parents=True)
         flag = self.save_dir/ f'{zone}_{self.year}_done'
-        if flag.exists() and not rewrite:
+        if rewrite:
+            os.remove(flag)
+            for f in (self.save_dir/zone).glob('*'):
+                os.remove(f)
+        if flag.exists():
             print(f'{zone} {self.year} has been processed.')
             return
         
