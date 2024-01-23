@@ -253,9 +253,10 @@ class S2Downloader:
         xrrs = dask.compute(*xrrs)
         xrrs = xr.concat(xrrs, dim='time', compat='override', coords='minimal', join='override')
         xrrs.name = 'input'
-        ds = xr.merge([xrrs, rh_da.transpose(), gedi_attr_da.transpose()])
+        xrrs = xr.merge([xrrs, rh_da.transpose(), gedi_attr_da.transpose()])
         with Lock('netcdf_lock'):
-            ds.to_netcdf(self.save_dir / f'{zone}.h5', group=f'{self.year}/{partition_info["number"]}', format='NETCDF4', engine='h5netcdf', encoding=self.comp, mode='a')
+            xrrs.to_netcdf(self.save_dir / f'{zone}.h5', group=f'{self.year}/{partition_info["number"]}', format='NETCDF4', engine='h5netcdf', encoding=self.comp, mode='a')
+        flag.touch()
 
     def get_best_s2_for_point(self, point, esa_wc_items):
         '''
@@ -294,11 +295,8 @@ class S2Downloader:
             bounds=bounds, epsg=epsg, properties=False, dtype="uint16", fill_value=0, xy_coords=False
         )
         rh_arr = np.array([[point[f'rh{x}'] for x in range(101)]])
-        point = point.to_frame().T
-        gedi_attr = {k: ("time", point[k].astype(t)) for k, t in dtypes.items() if not k.startswith('rh')} #TODO: dtype upcasted when apply
-        gedi_attr.update({'lat': ('time', point['lat']), 'lon': ('time', point['lon'])})
 
-        best = self.calculate_defective_cover(items, bounds, point['date'].iloc[0], epsg)
+        best = self.calculate_defective_cover(items, bounds, point['date'], epsg)
         if best is None:
             return 
         best_item = [item for item in items if item.id == best.id][0]
