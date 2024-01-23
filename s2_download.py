@@ -209,8 +209,8 @@ class S2Downloader:
                         f.retry() #TODO: key eror in self.futures[key] when first retry, why? related to distributed.scheduler - ERROR - Couldn't gather keys: {('sum-aggregate-ce2045d27a178c14f0a6884069ecef48', 0): 'processing'}?
                         futures_monitor.add(f)
                     continue
-            if (result := f.result()) is not None and result.iloc[0] is not None:
-                res.extend(*result)
+            # if (result := f.result()) is not None and result.iloc[0] is not None:
+            #     res.extend(*result)
             f.release()
             if n_left > 0:
                 future = client.compute(df.get_partition(gediDf.npartitions - n_left))
@@ -224,7 +224,7 @@ class S2Downloader:
             xrrs = xrrs.to_dataset('input')
             xrrs['time'].encoding['dtype'] = 'float32'
             xrrs.to_netcdf(self.save_dir / 'GEDI.h5', group=f'zone{i}/{year}', format='NETCDF4', engine='h5netcdf', encoding=self.comp, mode='a')
-            flag.touch()
+        flag.touch()
         return
 
     def get_patch_for_partition(self, partition, zone:str, esa_wc_items:pystac.ItemCollection, rewrite:bool=False, partition_info:dict=None):
@@ -291,7 +291,7 @@ class S2Downloader:
             assets=['map'],
             band_coords=False,
             resolution=10, 
-            bounds=bounds, epsg=epsg, properties=False, dtype="uint8", fill_value=0, xy_coords=False
+            bounds=bounds, epsg=epsg, properties=False, dtype="uint16", fill_value=0, xy_coords=False
         )
         rh_arr = np.array([[point[f'rh{x}'] for x in range(101)]])
         point = point.to_frame().T
@@ -315,14 +315,10 @@ class S2Downloader:
             items = resign_items(esa_wc_items)
             xrr = stack(items, **wc_kwargs)
 
-        xrr = xrr.dropna(dim='time', how='all') # drop nan time slices
-        if xrr.shape[0] == 1: # bbox cross two grid cells of esa wc
-            xrr['time'] = s2xrr['time'].data
-        elif xrr.shape[0] == 0:
+        if xrr.shape[0] == 0:
             return None
-        else:
-            xrr = xrr.max(dim='time', keep_attrs=True) #TODO: check if this is correct
-            xrr = xrr.expand_dims(dim={'time': s2xrr['time'].data}, axis=0)
+        xrr = xrr.max(dim='time', skipna=True)
+        xrr = xrr.expand_dims(dim={'time': s2xrr['time'].data}, axis=0)
         bounds_latlon = reproject_bounds(s2xrr.spec)
         xrr = xrr.assign_coords(band=['esa_wc'])
         xrr = xr.concat([s2xrr, xrr], dim='band', compat='override', coords='minimal', combine_attrs='drop')
@@ -355,12 +351,14 @@ class S2Downloader:
         if patch.shape[0] == 0 or patch.shape[-2:] != (self.patch_size, self.patch_size): # why there're cases that the output shape is (14,15)? fill_value doesn't work?
             return None
 
-        patch = patch.sel(band='SCL').compute() # simplify compute graph, not sure if this is necessary
-        patch = patch.isin(defective_SCL).sum(dim=['x', 'y']) / np.prod(patch.shape[-2:])
-        patch.name = 'defective_cover'
+        patch = patch.compute() # simplify compute graph, not sure if this is necessary, 
+        # patch = patch.isin(defective_SCL).sum(dim=['x', 'y']) / np.prod(patch.shape[-2:]) 
+        # even patch is computed, patch.isin().sum() will still be lazy
+        scl = patch.data
+        defective_cover = np.any([(scl == k) for k in defective_SCL], 0).sum() / np.prod(scl.shape[-2:])
         patch_df = pd.DataFrame({
             'id': patch.id.values,
-            'defective_cover': patch.data,
+            'defective_cover': defective_cover,
             'delta_day': [np.abs(t - pd.Timestamp(date)).days for t in patch.time.values],
         })
         if patch_df.empty or patch_df['defective_cover'].isna().all():
