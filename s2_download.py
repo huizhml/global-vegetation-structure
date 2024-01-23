@@ -136,6 +136,7 @@ class S2Downloader:
             'B09', 'B11', 'B12', 'SCL'
         ]
         self.patch_size = patch_size
+        self.buffer_size = patch_size // 2 * 10
         self.comp = {
             'input':{
                 "zlib": True,
@@ -320,8 +321,8 @@ class S2Downloader:
         # get patch and calculate defective cover
         epsg = get_most_common_epsg(items)
         geom = geom.to_crs(epsg)[0]
-        bounds = geom.buffer(70).bounds
-        bounds_slope = geom.buffer(80).bounds
+        bounds = geom.buffer(self.buffer_size).bounds
+        bounds_slope = geom.buffer(self.buffer_size+10).bounds
 
         best = self.calculate_defective_cover(items, bounds, point['date'], epsg)
         if best is None:
