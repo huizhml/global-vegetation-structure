@@ -2,6 +2,9 @@ zone: 32M
 year: 2019
 n_parallel: 100
 partition_size: 64K
+save_dir: data/GEDI
+rewrite: True
+patch_size: 15
 
 
 hydra:

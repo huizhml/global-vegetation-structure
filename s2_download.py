@@ -120,6 +120,7 @@ class S2Downloader:
                  extendDays: int = 30,
                  esa_wc_year: int = 2021,
                  comp_level: int = 7,
+                 **kwargs
                 ) -> None:
         self.gediFolder = Path.home() / f'GEDI{year}'
         self.save_dir = Path.home() / save_dir
@@ -433,7 +434,7 @@ def main(cfg):
     client = Client(cluster)#timeout
 
     t0 = time.time()
-    s2downloader = S2Downloader(2019, n_parallel=cfg.n_parallel, save_dir=cfg.save_dir)
+    s2downloader = S2Downloader(**cfg)
     res = s2downloader.download_zone(cfg.zone, cfg.rewrite)
     print('time: ', time.time() - t0)
 
