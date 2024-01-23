@@ -3,7 +3,7 @@ import os
 import time
 import json
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Union, List
 from collections import defaultdict
 
 import numpy as np
@@ -22,6 +22,7 @@ from distributed import get_client
 import pandas as pd
 import geopandas as gpd
 import pyproj
+from xrspatial import slope
 
 import ipdb
 import hydra
@@ -57,6 +58,32 @@ def resign_items(items):
         item = planetary_computer.sign(item)
         res.append(item)
     return res
+
+
+def get_patch(items,
+              assets: Union[str, List[str]] = None,
+              resolution: int = 10,
+              fill_value: Union[int, float] = 0,
+              band_coords: bool = False,
+              properties: bool = False,
+              dtype: str = 'uint16',
+              xy_coords: bool = False,
+              **kwargs):
+    default_args = dict(assets=assets,
+                        resolution=resolution,
+                        fill_value=fill_value,
+                        band_coords=band_coords,
+                        properties=properties,
+                        dtype=dtype,
+                        xy_coords=xy_coords)
+    try:
+        patch = stack(items, **default_args, **kwargs)
+    except:
+        # token might expire, sign again
+        items = resign_items(items)
+        patch = stack(items, **default_args, **kwargs)
+    return patch
+
 
 def get_tile_by_id(tile_id):
     """
@@ -128,6 +155,12 @@ class S2Downloader:
                 "fletcher32": True,
                 "chunksizes": (1,32)
             },
+            'slope':{
+                "zlib": True,
+                "complevel": comp_level,
+                "fletcher32": True,
+                "chunksizes": (1,15,15)
+            }
         }
 
       
@@ -177,13 +210,15 @@ class S2Downloader:
             collections=['esa-worldcover'],
             bbox=bounds,
             datetime=f'{self.esa_wc_year}-01-01/{self.esa_wc_year}-12-31').item_collection()
-        
+        glo30_itmes = api.search(collections=['cop-dem-glo-30'],
+                                 bbox=bounds).item_collection()
+
         gediDf = dd.read_parquet(zoneFolder / 'partition_*.parquet', dropna=True, usecols=list(dtypes.keys()), dtype=dtypes)
         print(f'Processing {gediDf.npartitions} partitions...')
-        # number = 61
-        # df = self.get_patch_for_partition(gediDf.get_partition(number).compute(), zone, esa_wc_items, rewrite=True, partition_info={'number': number})
+        # number = 4
+        # df = self.get_patch_for_partition(gediDf.get_partition(number).compute(), zone, esa_wc_items, glo30_itmes, rewrite=True, partition_info={'number': number})
         # print('test done')
-        df = gediDf.map_partitions(self.get_patch_for_partition, zone, esa_wc_items, rewrite, meta=(None, 'string'))
+        df = gediDf.map_partitions(self.get_patch_for_partition, zone, esa_wc_items, glo30_itmes, rewrite, meta=(None, 'string'))
         self.n_parallel = min(self.n_parallel, gediDf.npartitions)
         client = get_client()
         futures = []
@@ -223,11 +258,11 @@ class S2Downloader:
             xrrs = xr.concat(res, dim='time', compat='override', coords='minimal', join='override')
             xrrs = xrrs.to_dataset('input')
             xrrs['time'].encoding['dtype'] = 'float32'
-            xrrs.to_netcdf(self.save_dir / 'GEDI.h5', group=f'zone{i}/{year}', format='NETCDF4', engine='h5netcdf', encoding=self.comp, mode='a')
+            xrrs.to_netcdf(self.save_dir / 'GEDI.h5', group=f'zone{i}/{self.year}', format='NETCDF4', engine='h5netcdf', encoding=self.comp, mode='a')
         flag.touch()
         return
 
-    def get_patch_for_partition(self, partition, zone:str, esa_wc_items:pystac.ItemCollection, rewrite:bool=False, partition_info:dict=None):
+    def get_patch_for_partition(self, partition, zone:str, esa_wc_items:pystac.ItemCollection,glo30_itmes:pystac.ItemCollection, rewrite:bool=False, partition_info:dict=None):
         """
         Query, filter, and stack S2 and ESA world cover patches for each GEDI partition.
         GEDI data is partitioned to cache a number of locations for the sake of memory efficiency.
@@ -243,7 +278,7 @@ class S2Downloader:
         if flag.exists() and not rewrite:
             print(f'{zone} {self.year}_partition_{partition_info["number"]} has been processed.')
             return
-        xrrs = partition.apply(self.get_best_s2_for_point, axis=1, args=(esa_wc_items,)).dropna()
+        xrrs = partition.apply(self.get_best_s2_for_point, axis=1, args=(esa_wc_items, glo30_itmes)).dropna()
         if xrrs.empty:
             return
 
@@ -251,14 +286,15 @@ class S2Downloader:
         rh_da = partition[rh_dtype.keys()].to_xarray().to_dataarray('rh', 'rhs')
         gedi_attr_da = partition[gedi_attr_dtype.keys()].to_xarray().to_dataarray('attr', 'gedi_attrs')
         xrrs = dask.compute(*xrrs)
-        xrrs = xr.concat(xrrs, dim='time', compat='override', coords='minimal', join='override')
+        slope_da = xr.concat([s['slope'] for s in xrrs], dim='time', compat='override', coords='minimal', join='override')
+        xrrs = xr.concat([s['xrr'] for s in xrrs], dim='time', compat='override', coords='minimal', join='override')
         xrrs.name = 'input'
-        xrrs = xr.merge([xrrs, rh_da.transpose(), gedi_attr_da.transpose()])
+        xrrs = xr.merge([xrrs, slope_da, rh_da.transpose(), gedi_attr_da.transpose()])
         with Lock('netcdf_lock'):
             xrrs.to_netcdf(self.save_dir / f'{zone}.h5', group=f'{self.year}/{partition_info["number"]}', format='NETCDF4', engine='h5netcdf', encoding=self.comp, mode='a')
         flag.touch()
 
-    def get_best_s2_for_point(self, point, esa_wc_items):
+    def get_best_s2_for_point(self, point, esa_wc_items, glo30_itmes):
         '''
         Qeury and Filter S2 tiles for each GEDI point
         - Query by date, cloud cover, water percentage, and Filter by leaf on/off dates
@@ -283,49 +319,36 @@ class S2Downloader:
 
         # get patch and calculate defective cover
         epsg = get_most_common_epsg(items)
-        bounds = geom.to_crs(epsg)[0].buffer(70).bounds
-        s2_kwargs = dict(
-            assets=self.bands, resolution=10, bounds=bounds, band_coords=False, properties=s2_item_props, epsg=epsg, dtype="uint16", fill_value=0,
-            xy_coords=False
-        )
-        wc_kwargs = dict(
-            assets=['map'],
-            band_coords=False,
-            resolution=10, 
-            bounds=bounds, epsg=epsg, properties=False, dtype="uint16", fill_value=0, xy_coords=False
-        )
-        rh_arr = np.array([[point[f'rh{x}'] for x in range(101)]])
+        geom = geom.to_crs(epsg)[0]
+        bounds = geom.buffer(70).bounds
+        bounds_slope = geom.buffer(80).bounds
 
         best = self.calculate_defective_cover(items, bounds, point['date'], epsg)
         if best is None:
-            return 
+            return
         best_item = [item for item in items if item.id == best.id][0]
-        try:
-            s2xrr = stack(best_item, **s2_kwargs)
-        except:
-            # token might expire, sign again
-            items = resign_items(best_item)
-            s2xrr = stack(items, **s2_kwargs)
-        try:
-            xrr = stack(esa_wc_items, **wc_kwargs)
-        except:
-            # token might expire, sign again
-            items = resign_items(esa_wc_items)
-            xrr = stack(items, **wc_kwargs)
-
-        if xrr.shape[0] == 0:
+        s2xrr = get_patch(best_item, assets=self.bands, bounds=bounds, epsg=epsg)
+        wc_xrr = get_patch(esa_wc_items, assets=['map'], bounds=bounds, epsg=epsg)
+        glo_xrr = get_patch(glo30_itmes, assets=['data'], bounds=bounds_slope, epsg=epsg, fill_value=np.nan, dtype='float32')
+        if glo_xrr.shape[0] == 0 or wc_xrr.shape[0] == 0:
             return None
-        xrr = xrr.max(dim='time', skipna=True)
-        xrr = xrr.expand_dims(dim={'time': s2xrr['time'].data}, axis=0)
+        glo_xrr = glo_xrr.max(dim='time', skipna=True)
+        slope_xrr = slope(glo_xrr[0])
+        slope_xrr = slope_xrr[1:-1, 1:-1] #remove nan
+        slope_xrr = slope_xrr.expand_dims(dim={'time': s2xrr['time'].data}, axis=0)
+
+        wc_xrr = wc_xrr.max(dim='time', skipna=True)
+        wc_xrr = wc_xrr.expand_dims(dim={'time': s2xrr['time'].data}, axis=0)
+        wc_xrr = wc_xrr.assign_coords(band=['esa_wc'])
+
         bounds_latlon = reproject_bounds(s2xrr.spec)
-        xrr = xrr.assign_coords(band=['esa_wc'])
-        xrr = xr.concat([s2xrr, xrr], dim='band', compat='override', coords='minimal', combine_attrs='drop')
+        xrr = xr.concat([s2xrr, wc_xrr], dim='band', compat='override', coords='minimal', combine_attrs='drop')
         best.delta_day = best.delta_day.astype('uint16')
         best.defective_cover = best.defective_cover.astype('float32')
         new_coords = {k: ("time", [best[k]]) for k in ['delta_day','defective_cover']}
         new_coords.update({'minx': ("time", bounds_latlon[:1]), 'miny': ("time", bounds_latlon[1:2]), 'maxx': ("time", bounds_latlon[2:3]), 'maxy': ("time", bounds_latlon[3:])})
         xrr = xrr.assign_coords(new_coords)
-        return xrr
+        return {'xrr': xrr, 'slope': slope_xrr}
 
     
     def calculate_defective_cover(self, items, bounds, date, epsg):
@@ -339,12 +362,7 @@ class S2Downloader:
         Returns:
             pandas.Series: Series containing the best item
         '''
-        try:
-            patch = stack(items, ['SCL'], resolution=10, bounds=bounds, epsg=epsg, fill_value=0, band_coords=False, properties=False, dtype='uint8', xy_coords=False)
-        except:
-            # token might expire, sign again
-            items = resign_items(items)
-            patch = stack(items, ['SCL'], resolution=10, bounds=bounds, epsg=epsg, fill_value=0, band_coords=False, properties=False, dtype='uint8', xy_coords=False)
+        patch = get_patch(items, ['SCL'], resolution=10, bounds=bounds, epsg=epsg, dtype='uint8')
         
         if patch.shape[0] == 0 or patch.shape[-2:] != (self.patch_size, self.patch_size): # why there're cases that the output shape is (14,15)? fill_value doesn't work?
             return None
