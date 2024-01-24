@@ -378,10 +378,10 @@ class S2Downloader:
         # patch = patch.isin(defective_SCL).sum(dim=['x', 'y']) / np.prod(patch.shape[-2:]) 
         # even patch is computed, patch.isin().sum() will still be lazy
         scl = patch.data
-        defective_cover = np.any([(scl == k) for k in defective_SCL], 0).sum() / np.prod(scl.shape[-2:])
+        defective_cover = np.any([(scl == k) for k in defective_SCL], 0).sum((-2,-1)) / np.prod(scl.shape[-2:])
         patch_df = pd.DataFrame({
             'id': patch.id.values,
-            'defective_cover': defective_cover,
+            'defective_cover': defective_cover.squeeze(),
             'delta_day': [np.abs(t - pd.Timestamp(date)).days for t in patch.time.values],
         })
         if patch_df.empty or patch_df['defective_cover'].isna().all():
