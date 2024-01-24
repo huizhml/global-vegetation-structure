@@ -143,7 +143,7 @@ class S2Downloader:
                 "zlib": True,
                 "complevel": comp_level,
                 "fletcher32": True,
-                "chunksizes": (1,14,15,15)
+                "chunksizes": (1,14,self.patch_size,self.patch_size)
             },
             'rhs':{
                 "zlib": True,
@@ -161,7 +161,7 @@ class S2Downloader:
                 "zlib": True,
                 "complevel": comp_level,
                 "fletcher32": True,
-                "chunksizes": (1,15,15)
+                "chunksizes": (1,self.patch_size,self.patch_size)
             }
         }
 
