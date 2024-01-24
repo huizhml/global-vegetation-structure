@@ -1,14 +1,14 @@
 #%%
-rh_type = {f'rh{i}': 'float32' for i in range(101)}
-dtypes = {
-    'system:index': 'object',
+rh_dtype = {f'rh{i}': 'float32' for i in range(101)}
+gedi_attr_dtype = {
+    # 'system:index': 'object',
     'beam': 'uint16',
     'delta_time': 'float64',
     'digital_elevation_model': 'float32',
     'digital_elevation_model_srtm': 'float32',
     'elev_highestreturn': 'float32',
     'elev_lowestmode': 'float32',
-    'elevation_bias_flag': 'float32',
+    'elevation_bias_flag': 'uint8',
     'energy_total': 'float32',
     'landsat_treecover': 'float64',
     'landsat_water_persistence': 'uint8',
@@ -23,7 +23,6 @@ dtypes = {
     'modis_treecover': 'float64',
     'modis_treecover_sd': 'float64',
     'num_detectedmodes': 'uint8',
-    'orbit_number': 'int64',
     'pft_class': 'uint8',
     'region_class': 'uint8',
     'selected_algorithm': 'uint8',
@@ -38,7 +37,7 @@ dtypes = {
     'urban_proportion': 'uint8',
     '.geo': 'object'
 }
-dtypes.update(rh_type)
+dtypes = {**gedi_attr_dtype, **rh_dtype}
 # %%
 
 s2_item_props = ['datetime', 
@@ -89,3 +88,6 @@ wc_item_props = [
     'esa_worldcover:product_tile', 
     # 'esa_worldcover:product_version'
     ]
+# for test
+bounds = (454103.12321006873, 4824679.480536657, 454243.12321006873, 4824819.480536657)
+epsg = 32655
