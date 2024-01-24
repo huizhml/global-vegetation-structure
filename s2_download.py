@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from typing import Dict, Union, List
 from collections import defaultdict
+import pickle
 
 import numpy as np
 import xarray as xr
@@ -204,7 +205,7 @@ class S2Downloader:
         (self.save_dir/zone).mkdir(exist_ok=True, parents=True)
         flag = self.save_dir/ f'{zone}_{self.year}_done'
         if rewrite:
-            os.remove(flag)
+            if flag.exists(): os.remove(flag)
             for f in (self.save_dir/zone).glob('*'):
                 os.remove(f)
         if flag.exists():
@@ -347,12 +348,12 @@ class S2Downloader:
         wc_xrr = wc_xrr.expand_dims(dim={'time': s2xrr['time'].data}, axis=0)
         wc_xrr = wc_xrr.assign_coords(band=['esa_wc'])
 
-        bounds_latlon = reproject_bounds(s2xrr.spec)
+        s2xrr = s2xrr.assign_coords(spec=('time', [pickle.dumps(s2xrr.spec)]))
         xrr = xr.concat([s2xrr, wc_xrr], dim='band', compat='override', coords='minimal', combine_attrs='drop')
+        xrr = xrr.drop_vars('epsg')
         best.delta_day = best.delta_day.astype('uint16')
         best.defective_cover = best.defective_cover.astype('float32')
         new_coords = {k: ("time", [best[k]]) for k in ['delta_day','defective_cover']}
-        new_coords.update({'minx': ("time", bounds_latlon[:1]), 'miny': ("time", bounds_latlon[1:2]), 'maxx': ("time", bounds_latlon[2:3]), 'maxy': ("time", bounds_latlon[3:])})
         xrr = xrr.assign_coords(new_coords)
         return {'xrr': xrr, 'slope': slope_xrr}
 
