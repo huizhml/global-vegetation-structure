@@ -24,6 +24,7 @@ import pandas as pd
 import geopandas as gpd
 import pyproj
 from xrspatial import slope
+from rasterio.enums import Resampling
 
 import ipdb
 import hydra
@@ -121,6 +122,7 @@ class S2Downloader:
                  extendDays: int = 30,
                  esa_wc_year: int = 2021,
                  comp_level: int = 7,
+                 out_res: int =10,
                  **kwargs
                 ) -> None:
         self.gediFolder = Path.home() / f'GEDI{year}'
@@ -137,8 +139,9 @@ class S2Downloader:
             'B01', 'B04', 'B03', 'B02', 'B05', 'B06', 'B07', 'B08', 'B8A',
             'B09', 'B11', 'B12', 'SCL'
         ]
-        self.patch_size = patch_size
-        self.buffer_size = patch_size // 2 * 10
+        self.out_res = out_res
+        self.buffer_size = patch_size // 2 * out_res # in meters
+        self.patch_size = (self.buffer_size * 2 + out_res) / out_res
         self.comp = {
             'input':{
                 "zlib": True,
@@ -328,19 +331,19 @@ class S2Downloader:
         epsg = get_most_common_epsg(items)
         geom = geom.to_crs(epsg)[0]
         bounds = geom.buffer(self.buffer_size).bounds
-        bounds_slope = geom.buffer(self.buffer_size+10).bounds
+        bounds_slope = geom.buffer(self.buffer_size+self.out_res).bounds
 
         best = self.calculate_defective_cover(items, bounds, point['date'], epsg)
         if best is None:
             return
         best_item = [item for item in items if item.id == best.id][0]
-        s2xrr = get_patch(best_item, assets=self.bands, bounds=bounds, epsg=epsg)
-        wc_xrr = get_patch(esa_wc_items, assets=['map'], bounds=bounds, epsg=epsg)
-        glo_xrr = get_patch(glo30_itmes, assets=['data'], bounds=bounds_slope, epsg=epsg, fill_value=np.nan, dtype='float32')
+        s2xrr = get_patch(best_item, assets=self.bands, bounds=bounds, epsg=epsg, resolution=self.out_res)
+        wc_xrr = get_patch(esa_wc_items, assets=['map'], bounds=bounds, epsg=epsg, resolution=self.out_res)
+        glo_xrr = get_patch(glo30_itmes, assets=['data'], bounds=bounds_slope, epsg=epsg, fill_value=np.nan, dtype='float32', resolution=self.out_res, resampling=Resampling.bilinear)
         if glo_xrr.shape[0] == 0 or wc_xrr.shape[0] == 0:
             return None
         glo_xrr = glo_xrr.max(dim='time', skipna=True)
-        slope_xrr = slope(glo_xrr[0])
+        slope_xrr = slope(glo_xrr[0]) # (band, x, y)
         slope_xrr = slope_xrr[1:-1, 1:-1] #remove nan
         slope_xrr = slope_xrr.expand_dims(dim={'time': s2xrr['time'].data}, axis=0)
 
@@ -369,7 +372,7 @@ class S2Downloader:
         Returns:
             pandas.Series: Series containing the best item
         '''
-        patch = get_patch(items, ['SCL'], resolution=10, bounds=bounds, epsg=epsg, dtype='uint8')
+        patch = get_patch(items, ['SCL'], resolution=self.out_res, bounds=bounds, epsg=epsg, dtype='uint8')
         
         if patch.shape[0] == 0 or patch.shape[-2:] != (self.patch_size, self.patch_size): # why there're cases that the output shape is (14,15)? fill_value doesn't work?
             return None
