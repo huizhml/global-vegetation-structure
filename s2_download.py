@@ -3,8 +3,7 @@ import os
 import time
 import json
 from pathlib import Path
-from typing import Dict, Union, List
-from collections import defaultdict
+from typing import Union, List
 import pickle
 
 import numpy as np
@@ -18,8 +17,7 @@ import retry
 
 import dask
 import dask_geopandas as dgp
-from dask.distributed import Lock, as_completed
-from distributed import get_client
+from dask.distributed import Lock
 import pandas as pd
 import geopandas as gpd
 import pyproj
@@ -32,6 +30,7 @@ from dotenv import load_dotenv
 
 from utils._stackstac import stack
 from const import dtypes, gedi_attr_dtype, rh_dtype, s2_item_props
+from download.dask_downloader import DaskDownloader
 
 load_dotenv('.planetarycomputer/settings.env')
 os.environ["GDAL_HTTP_MAX_RETRY"] = "3"
@@ -107,7 +106,7 @@ def reproject_bounds(raster_spec, crs_to='EPSG:4326'):
     maxx, maxy = transformer.transform(raster_spec.bounds[2], raster_spec.bounds[3])
     return [minx, miny, maxx, maxy]
 
-class S2Downloader:
+class S2Downloader(DaskDownloader):
 
     def __init__(self,
                  year: int = 2019,
@@ -227,46 +226,7 @@ class S2Downloader:
         # df = self.get_patch_for_partition(gediDf.get_partition(number).compute(), zone, esa_wc_items, glo30_itmes, rewrite=True, partition_info={'number': number})
         # print('test done')
         df = gediDf.map_partitions(self.get_patch_for_partition, zone, esa_wc_items, glo30_itmes, rewrite, meta=(None, 'string'))
-        self.n_parallel = min(self.n_parallel, gediDf.npartitions)
-        client = get_client()
-        futures = []
-        for i in range(self.n_parallel):
-            future = client.compute(df.get_partition(i))
-            futures.append(future)
-        
-        futures_monitor = as_completed(futures, with_results=False)
-        n_left = gediDf.npartitions - self.n_parallel
-        max_retries = 3
-        retry_counter: Dict[str, int] = defaultdict(lambda: 0)   
-        res = []
-        while futures_monitor.count() > 0:
-            f = next(futures_monitor)
-            if f.status == 'error':
-                if retry_counter.get(f, 0) < max_retries:
-                    try:
-                        f.retry()
-                        futures_monitor.add(f)
-                        retry_counter[f.key] += 1
-                    except Exception as e:
-                        print(e)
-                        f.retry() #TODO: key eror in self.futures[key] when first retry, why? related to distributed.scheduler - ERROR - Couldn't gather keys: {('sum-aggregate-ce2045d27a178c14f0a6884069ecef48', 0): 'processing'}?
-                        futures_monitor.add(f)
-                    continue
-            # if (result := f.result()) is not None and result.iloc[0] is not None:
-            #     res.extend(*result)
-            f.release()
-            if n_left > 0:
-                future = client.compute(df.get_partition(gediDf.npartitions - n_left))
-                futures_monitor.add(future)
-                print(f'************ partition {gediDf.npartitions - n_left} submitted ****************')
-                print(f'{futures_monitor.count()} in processing, {n_left} waiting')
-                n_left -= 1
-            
-        if len(res) > 0:
-            xrrs = xr.concat(res, dim='time', compat='override', coords='minimal', join='override')
-            xrrs = xrrs.to_dataset('input')
-            xrrs['time'].encoding['dtype'] = 'float32'
-            xrrs.to_netcdf(self.save_dir / 'GEDI.h5', group=f'zone{i}/{self.year}', format='NETCDF4', engine='h5netcdf', encoding=self.comp, mode='a')
+        self.schedule_tasks(df)
         flag.touch()
         return
 

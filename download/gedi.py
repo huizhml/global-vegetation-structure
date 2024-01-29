@@ -1,16 +1,11 @@
 import os
 import ee
 import logging
-from typing import Dict
-from collections import defaultdict
 import pandas as pd
 import geopandas as gpd
-from shapely.geometry import shape
 from pathlib import Path
 import dask.dataframe as dd
 import dask.array as da
-from dask.distributed import Lock, as_completed
-from distributed import get_client
 import matplotlib.pyplot as plt
 import hydra
 from const import dtypes
@@ -20,12 +15,14 @@ authenticate()
 from dotenv import load_dotenv
 load_dotenv()
 
+from download.dask_downloader import DaskDownloader
+
 logger = logging.getLogger(__name__)
 
 def is_non_zero_file(fpath):  
     return os.path.isfile(fpath) and os.path.getsize(fpath) > 0
 
-class GEDI:
+class GEDI(DaskDownloader):
     """
     A class for filtering, sampling(stratified, per orbit & per cell) and downloading GEDI data from Google Earth Engine.
 
@@ -122,40 +119,7 @@ class GEDI:
         mgrs_df = gpd.read_parquet(self.mgrs_file)
         mgrs_df = dd.from_pandas(mgrs_df, npartitions=self.npartitions)
         df = mgrs_df.apply(self.download_zone, axis=1, meta=(None, 'object'))#.compute()
-        self.n_parallel = min(self.n_parallel, df.npartitions)
-        client = get_client()
-        futures = []
-        for i in range(self.n_parallel):
-            future = client.compute(df.get_partition(i))
-            futures.append(future)
-        
-        futures_monitor = as_completed(futures, with_results=False)
-        n_left = mgrs_df.npartitions - self.n_parallel
-        max_retries = 3
-        retry_counter: Dict[str, int] = defaultdict(lambda: 0)   
-        res = []
-        while futures_monitor.count() > 0:
-            f = next(futures_monitor)
-            if f.status == 'error':
-                if retry_counter.get(future, 0) < max_retries:
-                    try:
-                        f.retry()
-                        futures_monitor.add(f)
-                        retry_counter[future.key] += 1
-                    except Exception as e:
-                        print(e)
-                        f.retry() #TODO: key eror in self.futures[key] when first retry, why? related to distributed.scheduler - ERROR - Couldn't gather keys: {('sum-aggregate-ce2045d27a178c14f0a6884069ecef48', 0): 'processing'}?
-                        futures_monitor.add(f)
-                    continue
-            # if (result := f.result()) is not None and result.iloc[0] is not None:
-            #     res.extend(*result)
-            f.release()
-            if n_left > 0:
-                future = client.compute(df.get_partition(mgrs_df.npartitions - n_left))
-                futures_monitor.add(future)
-                print(f'************ partition {mgrs_df.npartitions - n_left} submitted ****************')
-                print(f'{futures_monitor.count()} in processing, {n_left} waiting')
-                n_left -= 1
+        self.schedule_tasks(df)
 
 
     def plotHistogram(self): #TODO:needs update
