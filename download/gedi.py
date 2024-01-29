@@ -1,3 +1,5 @@
+from download.dask_downloader import DaskDownloader
+from dotenv import load_dotenv
 import os
 import ee
 import logging
@@ -12,15 +14,15 @@ from const import dtypes
 from download.mgrs import authenticate
 authenticate()
 
-from dotenv import load_dotenv
 load_dotenv()
 
-from download.dask_downloader import DaskDownloader
 
 logger = logging.getLogger(__name__)
 
-def is_non_zero_file(fpath):  
+
+def is_non_zero_file(fpath):
     return os.path.isfile(fpath) and os.path.getsize(fpath) > 0
+
 
 class GEDI(DaskDownloader):
     """
@@ -55,10 +57,11 @@ class GEDI(DaskDownloader):
             Returns the number of GEDI points to sample for the specified MGRS grid cell.
     """
 
-    nSampledPerKm2 = 0.66793882312 # this is obtained from the total number of points we want to sample per year(75M) and the total landmass in the world
+    # this is obtained from the total number of points we want to sample per year(75M) and the total landmass in the world
+    nSampledPerKm2 = 0.66793882312
     GEDI_START = pd.Timestamp('2019-01-01')
 
-    def __init__(self, year=2019, data_dir='GEDI/2019', mgrs_file='GEDI/mgrs_with_tracks.parquet', npartitions=100, n_parallel=40, row_group_size=100, save_raw=False, **kwargs):
+    def __init__(self, year=2019, data_dir='GEDI/2019', mgrs_file='GEDI/mgrs_with_tracks.parquet', npartitions=100, n_parallel=40, row_group_size=100, save_raw: bool = False, rewrite: bool = False, **kwargs):
         """
         Initializes a GEDI object.
 
@@ -76,7 +79,7 @@ class GEDI(DaskDownloader):
         self.year = year
         self.filter = 'quality_flag=1 AND degrade_flag=0 AND region_class>0 AND (leaf_off_flag=0 OR leaf_off_flag=255)'
         self.save_raw = save_raw
-        
+
         if not self.mgrs_file.exists():
             print(f'mgrs file {self.mgrs_file} not found, download from GEE...')
             from download.mgrs import MGRS
@@ -84,10 +87,10 @@ class GEDI(DaskDownloader):
             mgrs.get_mgrs()
 
     def download_zone(self, zone):
-        file = self.data_dir/ f'{zone["MGRS_UTM"]}.parquet'
-        # if file.exists():
-        #     print(f"{file} exists")
-        #     return None
+        file = self.data_dir / f'{zone["MGRS_UTM"]}.parquet'
+        if file.exists() and not self.rewrite:
+            print(f"{file} exists")
+            return None
         geom = ee.Geometry.BBox(*zone['geometry'].bounds).toGeoJSON()
         last_coords = geom['coordinates'][0][0].copy()
         geom['coordinates'][0].append(last_coords)
@@ -100,7 +103,7 @@ class GEDI(DaskDownloader):
                 continue
             track_gdf = track_gdf.astype(dtypes)
             if self.save_raw:
-                track_gdf.to_parquet(Path.home()/ zone["MGRS_UTM"] / f'{track_id}.parquet')
+                track_gdf.to_parquet(Path.home() / zone["MGRS_UTM"] / f'{track_id}.parquet')
             else:
                 gdf.append(track_gdf)
         if len(gdf) > 0:
@@ -129,26 +132,24 @@ class GEDI(DaskDownloader):
         plt.savefig('rh98.png')
         print('plot saved')
 
-    def getSampleTable(self, plot=False): #TODO:needs update
+    def getSampleTable(self, plot=False):  # TODO:needs update
         pass
 
-    
     def visualize(self):
         """
         Visualizes the GEDI data.
         """
         pass
 
-    
 
 @hydra.main(config_path="config", config_name="gedi_download")
 def main(cfg):
     if cfg.task == 'download':
         from dask.distributed import Client, LocalCluster
         from dask import config
-        config.set({'interface': 'lo'}) 
+        config.set({'interface': 'lo'})
         cluster = LocalCluster()
-        client = Client(cluster)#timeout
+        client = Client(cluster)  # timeout
         gedi = GEDI(**cfg.init)
         gedi.download()
 
@@ -160,4 +161,3 @@ def main(cfg):
 
 if __name__ == '__main__':
     main()
-
