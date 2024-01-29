@@ -15,5 +15,5 @@ hydra:
   job:
     chdir: False
   run:
-    dir: ./logs/${init.dataFolder}_${now:%Y-%m-%d_%H-%M-%S}
+    dir: ./logs/${init.data_dir}_${now:%Y-%m-%d_%H-%M-%S}
 
