@@ -142,7 +142,7 @@ class GEDI(DaskDownloader):
         pass
 
 
-@hydra.main(config_path="config", config_name="gedi_download")
+@hydra.main(config_path="../config", config_name="gedi_download", version_base="1.2")
 def main(cfg):
     if cfg.task == 'download':
         from dask.distributed import Client, LocalCluster
