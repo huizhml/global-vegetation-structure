@@ -17,7 +17,7 @@ import planetary_computer
 import retry
 
 import dask
-import dask.dataframe as dd
+import dask_geopandas as dgp
 from dask.distributed import Lock, as_completed
 from distributed import get_client
 import pandas as pd
@@ -40,8 +40,6 @@ os.environ["GDAL_HTTP_MAX_RETRY"] = "3"
 stac_endpoint = 'https://planetarycomputer.microsoft.com/api/stac/v1'
 api = pystac_client.Client.open(stac_endpoint, modifier=planetary_computer.sign_inplace)
 
-dtypes.pop('.geo')
-gedi_attr_dtype.pop('.geo')
 gedi_attr_dtype.pop('shot_number')
 defective_SCL = [0, 1, 8, 9, 10, 11]  # keep cloud shadows, model should learn to be invariant to cloud shadows
 
@@ -125,7 +123,7 @@ class S2Downloader:
                  out_res: int =10,
                  **kwargs
                 ) -> None:
-        self.gediFolder = Path.home() / f'GEDI{year}'
+        self.gediFolder = Path.home() / f'GEDI/{year}'
         self.save_dir = Path.home() / save_dir
         self.year = year 
         self.esa_wc_year = esa_wc_year
@@ -223,7 +221,7 @@ class S2Downloader:
         glo30_itmes = api.search(collections=['cop-dem-glo-30'],
                                  bbox=bounds).item_collection()
 
-        gediDf = dd.read_parquet(zoneFolder / 'partition_*.parquet', dropna=True, usecols=list(dtypes.keys()), dtype=dtypes)
+        gediDf = dgp.read_parquet(self.gediFolder / f'{zone}.parquet', dropna=True, usecols=list(dtypes.keys()), dtype=dtypes, blocksize='32K')
         print(f'Processing {gediDf.npartitions} partitions...')
         # number = 4
         # df = self.get_patch_for_partition(gediDf.get_partition(number).compute(), zone, esa_wc_items, glo30_itmes, rewrite=True, partition_info={'number': number})
@@ -244,11 +242,11 @@ class S2Downloader:
         while futures_monitor.count() > 0:
             f = next(futures_monitor)
             if f.status == 'error':
-                if retry_counter.get(future, 0) < max_retries:
+                if retry_counter.get(f, 0) < max_retries:
                     try:
                         f.retry()
                         futures_monitor.add(f)
-                        retry_counter[future.key] += 1
+                        retry_counter[f.key] += 1
                     except Exception as e:
                         print(e)
                         f.retry() #TODO: key eror in self.futures[key] when first retry, why? related to distributed.scheduler - ERROR - Couldn't gather keys: {('sum-aggregate-ce2045d27a178c14f0a6884069ecef48', 0): 'processing'}?
@@ -321,7 +319,7 @@ class S2Downloader:
         else:
             start = pd.Timestamp(point['date'], tz='UTC') - self.queryDaysRange
             end = pd.Timestamp(point['date'], tz='UTC') + self.queryDaysRange
-        geom = gpd.points_from_xy([point['lat']], [point['lon']], crs='epsg:4326')
+        geom = point['geometry']
         items = self.query_s2_for_p(start, end, geom) #? how to make it non-blocking, return a future
         
         if items is None:
@@ -329,7 +327,7 @@ class S2Downloader:
 
         # get patch and calculate defective cover
         epsg = get_most_common_epsg(items)
-        geom = geom.to_crs(epsg)[0]
+        geom = gpd.GeoSeries(geom, crs='EPSG:4326').to_crs(epsg)[0]
         bounds = geom.buffer(self.buffer_size).bounds
         bounds_slope = geom.buffer(self.buffer_size+self.out_res).bounds
 
@@ -418,7 +416,7 @@ class S2Downloader:
                                     'lt': self.maxWaterPercentage
                                 }
                             },
-                            bbox=geom.total_bounds,
+                            intersects=geom,
                             datetime=f'{str(start)[:10]}/{str(end)[:10]}')
         items = search.item_collection()
         if len(items) > 0:
