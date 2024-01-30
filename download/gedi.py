@@ -61,7 +61,7 @@ class GEDI(DaskDownloader):
     nSampledPerKm2 = 0.66793882312
     GEDI_START = pd.Timestamp('2019-01-01')
 
-    def __init__(self, year=2019, data_dir='GEDI/2019', mgrs_file='GEDI/mgrs_with_tracks.parquet', npartitions=100, n_parallel=40, row_group_size=100, save_raw: bool = False, rewrite: bool = False, **kwargs):
+    def __init__(self, year=2019, data_dir='GEDI/2019', mgrs_file='GEDI/mgrs_with_tracks.parquet', npartitions=100, n_parallel=40, row_group_size=100, random_state:int=42, save_raw: bool = False, rewrite: bool = False, **kwargs):
         """
         Initializes a GEDI object.
 
@@ -78,6 +78,7 @@ class GEDI(DaskDownloader):
         self.row_group_size = row_group_size
         self.year = year
         self.filter = 'quality_flag=1 AND degrade_flag=0 AND region_class>0 AND (leaf_off_flag=0 OR leaf_off_flag=255)'
+        self.random_state = random_state
         self.save_raw = save_raw
         self.rewrite = rewrite
 
@@ -111,7 +112,7 @@ class GEDI(DaskDownloader):
         if len(gdf) > 0:
             gdf = pd.concat(gdf)
             n_sample = min(len(gdf), int(zone['landmass'] * self.nSampledPerKm2))
-            gdf = gdf.sample(n_sample)
+            gdf = gdf.sample(n_sample, random_state=self.random_state)
             gdf['date'] = pd.to_timedelta(gdf['delta_time'], unit='S') + self.GEDI_START
             gdf['date'] = gdf['date'].dt.strftime('%Y-%m-%d')
             gdf.to_parquet(file, row_group_size=self.row_group_size, engine="pyarrow")
