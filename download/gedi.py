@@ -1,19 +1,19 @@
-from download.dask_downloader import DaskDownloader
-from dotenv import load_dotenv
 import os
 import ee
 import logging
-import pandas as pd
-import geopandas as gpd
 from pathlib import Path
+import dask
 import dask.dataframe as dd
 import dask.array as da
+import pandas as pd
+import geopandas as gpd
 import matplotlib.pyplot as plt
 import hydra
 from const import dtypes
 from download.mgrs import authenticate
 authenticate()
-
+from download.dask_downloader import DaskDownloader
+from dotenv import load_dotenv
 load_dotenv()
 
 
@@ -79,6 +79,7 @@ class GEDI(DaskDownloader):
         self.year = year
         self.filter = 'quality_flag=1 AND degrade_flag=0 AND region_class>0 AND (leaf_off_flag=0 OR leaf_off_flag=255)'
         self.save_raw = save_raw
+        self.rewrite = rewrite
 
         if not self.mgrs_file.exists():
             print(f'mgrs file {self.mgrs_file} not found, download from GEE...')
@@ -86,6 +87,7 @@ class GEDI(DaskDownloader):
             mgrs = MGRS(self.mgrs_file, self.data_dir / 'missing.csv')
             mgrs.get_mgrs()
 
+    @dask.delayed
     def download_zone(self, zone):
         file = self.data_dir / f'{zone["MGRS_UTM"]}.parquet'
         if file.exists() and not self.rewrite:
@@ -109,10 +111,11 @@ class GEDI(DaskDownloader):
         if len(gdf) > 0:
             gdf = pd.concat(gdf)
             n_sample = min(len(gdf), int(zone['landmass'] * self.nSampledPerKm2))
-            sampled = gdf.sample(n_sample)
-            sampled['date'] = pd.to_timedelta(sampled['delta_time'], unit='S') + self.GEDI_START
-            sampled['date'] = sampled['date'].dt.strftime('%Y-%m-%d')
-            sampled.to_parquet(file, row_group_size=self.row_group_size, engine="pyarrow")
+            gdf = gdf.sample(n_sample)
+            gdf['date'] = pd.to_timedelta(gdf['delta_time'], unit='S') + self.GEDI_START
+            gdf['date'] = gdf['date'].dt.strftime('%Y-%m-%d')
+            gdf.to_parquet(file, row_group_size=self.row_group_size, engine="pyarrow")
+            del gdf
         print('finish zone', zone['MGRS_UTM'])
 
     def download(self):
@@ -120,9 +123,7 @@ class GEDI(DaskDownloader):
         Downloads GEDI data for all valid MGRS grid cells in the specified year.
         """
         mgrs_df = gpd.read_parquet(self.mgrs_file)
-        mgrs_df = dd.from_pandas(mgrs_df, npartitions=self.npartitions)
-        df = mgrs_df.apply(self.download_zone, axis=1, meta=(None, 'object'))#.compute()
-        self.schedule_tasks(df)
+        self.schedule_tasks(mgrs_df, self.download_zone)
 
 
     def plotHistogram(self): #TODO:needs update
