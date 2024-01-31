@@ -1,5 +1,3 @@
-keyFile: 'keys/private-key.json'
-
 task: download # download, visualize
 
 init:
@@ -8,7 +6,8 @@ init:
   npartitions: 100
   n_parallel: 40
   row_group_size: 100 # defines the #partitions when downloading s2
-
+  rewrite: False
+  key_file: keys/nrt-key.json
 
 
 hydra:
