@@ -11,7 +11,6 @@ import matplotlib.pyplot as plt
 import hydra
 from const import dtypes
 from download.mgrs import authenticate
-authenticate()
 from download.dask_downloader import DaskDownloader
 from dotenv import load_dotenv
 load_dotenv()
@@ -59,9 +58,9 @@ class GEDI(DaskDownloader):
 
     # this is obtained from the total number of points we want to sample per year(75M) and the total landmass in the world
     nSampledPerKm2 = 0.66793882312
-    GEDI_START = pd.Timestamp('2019-01-01')
+    GEDI_START = pd.Timestamp('2018-01-01')
 
-    def __init__(self, year=2019, data_dir='GEDI/2019', mgrs_file='GEDI/mgrs_with_tracks.parquet', npartitions=100, n_parallel=40, row_group_size=100, random_state:int=42, save_raw: bool = False, rewrite: bool = False, **kwargs):
+    def __init__(self, year=2019, data_dir='GEDI/2019', mgrs_file='GEDI/mgrs_with_tracks.parquet', key_file:str=None, npartitions=100, n_parallel=40, row_group_size=100, random_state:int=42, save_raw: bool = False, rewrite: bool = False, **kwargs):
         """
         Initializes a GEDI object.
 
@@ -70,6 +69,7 @@ class GEDI(DaskDownloader):
             dataFolder (str, optional): The local folder to save the downloaded GEDI data. Defaults to 'gedi'.
             keepLeafOff255 (bool, optional): Whether to keep GEDI points with leaf off flag of 255. Defaults to False.
         """
+        super().__init__(n_parallel=n_parallel, max_retries=3, **kwargs)
         self.data_dir = Path.home() / data_dir
         self.data_dir.mkdir(exist_ok=True, parents=True)
         self.mgrs_file = Path.home() / mgrs_file
@@ -81,6 +81,7 @@ class GEDI(DaskDownloader):
         self.random_state = random_state
         self.save_raw = save_raw
         self.rewrite = rewrite
+        self.key_file = key_file
 
         if not self.mgrs_file.exists():
             print(f'mgrs file {self.mgrs_file} not found, download from GEE...')
@@ -104,6 +105,7 @@ class GEDI(DaskDownloader):
             track_gdf = ee.data.listFeatures({'assetId': track_id, 'filter': self.filter, 'region': geom,'fileFormat':'GEOPANDAS_GEODATAFRAME'})
             if track_gdf.empty:
                 continue
+            track_gdf = track_gdf[dtypes.keys()]
             track_gdf = track_gdf.astype(dtypes)
             if self.save_raw:
                 track_gdf.to_parquet(Path.home() / zone["MGRS_UTM"] / f'{track_id}.parquet')
@@ -123,6 +125,7 @@ class GEDI(DaskDownloader):
         """
         Downloads GEDI data for all valid MGRS grid cells in the specified year.
         """
+        authenticate(self.key_file)
         mgrs_df = gpd.read_parquet(self.mgrs_file)
         self.schedule_tasks(mgrs_df, self.download_zone)
 
