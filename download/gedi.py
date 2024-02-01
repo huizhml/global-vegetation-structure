@@ -61,7 +61,7 @@ class GEDI(DaskDownloader):
     nSampledPerKm2 = 0.66793882312
     GEDI_START = pd.Timestamp('2018-01-01')
 
-    def __init__(self, year=2019, data_dir='GEDI/2019', mgrs_file='GEDI/mgrs_with_tracks.parquet', key_file:str=None, npartitions=100, n_parallel=40, row_group_size=100, random_state:int=42, save_raw: bool = False, rewrite: bool = False, **kwargs):
+    def __init__(self, year=2019, data_dir='GEDI/2019', mgrs_file='GEDI/mgrs_with_tracks.parquet', key_file:str=None, npartitions=100, n_parallel=40, row_group_size=100, random_state:int=42, rewrite: bool = False, **kwargs):
         """
         Initializes a GEDI object.
 
@@ -80,7 +80,6 @@ class GEDI(DaskDownloader):
         self.year = year
         self.filter = 'quality_flag=1 AND degrade_flag=0 AND region_class>0 AND (leaf_off_flag=0 OR leaf_off_flag=255)'
         self.random_state = random_state
-        self.save_raw = save_raw
         self.rewrite = rewrite
         self.key_file = key_file
 
@@ -92,35 +91,36 @@ class GEDI(DaskDownloader):
 
     @dask.delayed
     def download_zone(self, zone):
-        file = self.data_dir / f'{zone["MGRS_UTM"]}.parquet'
-        if file.exists() and not self.rewrite:
-            print(f"{file} exists")
+        if zone[f'count_{self.year}'] == 0:
+            print(f"no GEDI points in {zone['MGRS_UTM']}")
             return None
+        flag = self.data_dir / f'{zone["MGRS_UTM"]}_done'
+        if flag.exists() and not self.rewrite:
+            print(f"{flag} exists")
+            return None
+        zone_dir = self.data_dir / zone["MGRS_UTM"]
+        zone_dir.mkdir(exist_ok=True, parents=True)
         geom = ee.Geometry.BBox(*zone['geometry'].bounds).toGeoJSON()
         last_coords = geom['coordinates'][0][0].copy()
         geom['coordinates'][0].append(last_coords)
-        gdf = []
+        sample_ratio = zone['landmass'] * self.nSampledPerKm2/zone[f'count_{self.year}']
         for track_id in zone['tracks']:
             if str(self.year) not in track_id:
+                continue
+            if (zone_dir / f'{track_id}.parquet').exists() and not self.rewrite:
                 continue
             track_gdf = ee.data.listFeatures({'assetId': track_id, 'filter': self.filter, 'region': geom,'fileFormat':'GEOPANDAS_GEODATAFRAME'})
             if track_gdf.empty:
                 continue
             track_gdf = track_gdf[['geometry', *dtypes.keys()]]
             track_gdf = track_gdf.astype(dtypes)
-            if self.save_raw:
-                track_gdf.to_parquet(Path.home() / zone["MGRS_UTM"] / f'{track_id}.parquet')
-            else:
-                gdf.append(track_gdf)
-        if len(gdf) > 0:
-            gdf = pd.concat(gdf)
-            n_sample = min(len(gdf), int(zone['landmass'] * self.nSampledPerKm2))
-            gdf = gdf.sample(n_sample, random_state=self.random_state)
-            gdf['date'] = pd.to_timedelta(gdf['delta_time'], unit='S') + self.GEDI_START
-            gdf['date'] = gdf['date'].dt.strftime('%Y-%m-%d')
-            gdf.to_parquet(file, row_group_size=self.row_group_size, engine="pyarrow")
-            del gdf
+            n_sample = min(len(track_gdf), int(sample_ratio * len(track_gdf)))
+            filename = track_id.split('/')[-1]
+            track_gdf.sample(n=n_sample, random_state=self.random_state).to_parquet(zone_dir / f'{filename}.parquet')
+            del track_gdf
+
         print('finish zone', zone['MGRS_UTM'])
+        flag.touch()
 
     def download(self):
         """
