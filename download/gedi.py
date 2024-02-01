@@ -15,6 +15,7 @@ from download.dask_downloader import DaskDownloader
 from dotenv import load_dotenv
 load_dotenv()
 
+authenticate()
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +106,7 @@ class GEDI(DaskDownloader):
             track_gdf = ee.data.listFeatures({'assetId': track_id, 'filter': self.filter, 'region': geom,'fileFormat':'GEOPANDAS_GEODATAFRAME'})
             if track_gdf.empty:
                 continue
-            track_gdf = track_gdf[dtypes.keys()]
+            track_gdf = track_gdf[['geometry', *dtypes.keys()]]
             track_gdf = track_gdf.astype(dtypes)
             if self.save_raw:
                 track_gdf.to_parquet(Path.home() / zone["MGRS_UTM"] / f'{track_id}.parquet')
@@ -125,7 +126,6 @@ class GEDI(DaskDownloader):
         """
         Downloads GEDI data for all valid MGRS grid cells in the specified year.
         """
-        authenticate(self.key_file)
         mgrs_df = gpd.read_parquet(self.mgrs_file)
         self.schedule_tasks(mgrs_df, self.download_zone)
 

@@ -1,4 +1,5 @@
 import time
+import os
 import ee
 import json
 from typing import Any, Dict
@@ -8,7 +9,8 @@ import pandas as pd
 import dask.dataframe as dd
 import geopandas as gpd
 
-def authenticate(key_file='keys/nrt-key.json'):
+def authenticate():
+    key_file = os.environ['KEY_FILE']
     key = json.load(open(key_file))
     credentials = ee.ServiceAccountCredentials(key['client_email'], key_file)
     ee.Initialize(credentials, url='https://earthengine-highvolume.googleapis.com')
@@ -137,7 +139,7 @@ class MGRS:
         mgrs_df.to_parquet(self.mgrs_file)
 
 
-authenticate()
+# authenticate()
 
 if __name__ == '__main__':
     data_dir = 'GEDI'
