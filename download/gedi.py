@@ -1,5 +1,6 @@
 import os
 import ee
+import json
 import logging
 from pathlib import Path
 import dask
@@ -8,6 +9,10 @@ import dask.array as da
 import pandas as pd
 import geopandas as gpd
 import matplotlib.pyplot as plt
+from shapely.geometry import shape
+import requests
+from retry import retry
+from io import StringIO
 import hydra
 from const import dtypes
 from download.mgrs import authenticate
@@ -18,7 +23,7 @@ load_dotenv()
 authenticate()
 
 logger = logging.getLogger(__name__)
-
+GEDI_START = pd.Timestamp('2018-01-01')
 
 def is_non_zero_file(fpath):
     return os.path.isfile(fpath) and os.path.getsize(fpath) > 0
@@ -78,7 +83,7 @@ class GEDI(DaskDownloader):
         self.n_parallel = n_parallel
         self.row_group_size = row_group_size
         self.year = year
-        self.filter = 'quality_flag=1 AND degrade_flag=0 AND region_class>0 AND (leaf_off_flag=0 OR leaf_off_flag=255)'
+        self.filter = 'quality_flag==1 && degrade_flag==0 && region_class>0 && leaf_off_flag!=1'
         self.random_state = random_state
         self.rewrite = rewrite
         self.key_file = key_file
@@ -103,24 +108,38 @@ class GEDI(DaskDownloader):
         geom = ee.Geometry.BBox(*zone['geometry'].bounds).toGeoJSON()
         last_coords = geom['coordinates'][0][0].copy()
         geom['coordinates'][0].append(last_coords)
-        sample_ratio = zone['landmass'] * self.nSampledPerKm2/zone[f'count_{self.year}']
+        sample_ratio = zone['landmass'] * self.nSampledPerKm2/zone[f'count_{self.year}'] + 0.001
         for track_id in zone['tracks']:
             if str(self.year) not in track_id:
                 continue
-            if (zone_dir / f'{track_id}.parquet').exists() and not self.rewrite:
-                continue
-            track_gdf = ee.data.listFeatures({'assetId': track_id, 'filter': self.filter, 'region': geom,'fileFormat':'GEOPANDAS_GEODATAFRAME'})
-            if track_gdf.empty:
-                continue
-            track_gdf = track_gdf[['geometry', *dtypes.keys()]]
-            track_gdf = track_gdf.astype(dtypes)
-            n_sample = min(len(track_gdf), int(sample_ratio * len(track_gdf)))
             filename = track_id.split('/')[-1]
-            track_gdf.sample(n=n_sample, random_state=self.random_state).to_parquet(zone_dir / f'{filename}.parquet')
-            del track_gdf
+            if (zone_dir / f'{filename}.parquet').exists() and not self.rewrite:
+                continue
+            fc = ee.FeatureCollection(track_id).filterBounds(geom).filter(self.filter)
+            self.download_orbit(fc, sample_ratio, zone_dir, filename)
 
         print('finish zone', zone['MGRS_UTM'])
         flag.touch()
+    
+    @retry(tries=10, delay=1)
+    def download_orbit(self, fc, sample_ratio, zone_dir, filename):
+        if sample_ratio < 1:
+            fc = fc.randomColumn('random', seed=self.random_state).filter(ee.Filter.lte('random', sample_ratio))
+        sampled = fc.size().getInfo()
+        if sampled > 0:
+            download_id = ee.data.getTableDownloadId({'table': fc, 'fileFormat': 'csv'})
+            res = requests.get(ee.data.makeTableDownloadUrl(download_id))
+            if res.status_code == 200:
+                data = StringIO(res.content.decode('utf-8'))
+                df = pd.read_csv(data)
+                df['.geo'] = df['.geo'].apply(lambda x: shape(json.loads(x)))
+                df = df.rename(columns={'.geo': 'geometry'})
+                df = gpd.GeoDataFrame(df, geometry='geometry')
+                df = df[['geometry', *dtypes.keys()]]
+                df = df.astype(dtypes)
+                df['date'] = pd.to_timedelta(df['delta_time'], unit='S') + GEDI_START
+                df['date'] = df['date'].dt.strftime('%Y-%m-%d')
+                df.to_parquet(zone_dir / f'{filename}.parquet', row_group_size=self.row_group_size, engine='pyarrow')
 
     def download(self):
         """
