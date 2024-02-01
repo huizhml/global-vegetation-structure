@@ -25,7 +25,7 @@ def get_group_paths(node, zone=None):
             sizes.extend(paths)
     else:
         size = node['input'].nrows
-        return [[f'{zone}{node._v_pathname}', i] for i in range(size)]
+        return [[zone, *node._v_pathname.split('/')[1:], i] for i in range(size)]
     return sizes
 
 data_dir = Path.home() / 'data/GEDI'
@@ -38,7 +38,9 @@ with tables.open_file(h5_file, 'r') as file:
         zone = f_link._v_name
         paths = get_group_paths(node, zone)
         table.extend(paths)
-df = pd.DataFrame(np.array(table), columns=['path', 'in_partition_id'], dtype={'path': 'str', 'in_partition_id': 'uint16'})
-
+table = np.array(table)
+df = pd.DataFrame(table, columns=['zone', 'year', 'partition', 'in_partition_id'])
+df = df.astype({'zone': 'str', 'year':'uint16', 'partition':'uint16', 'in_partition_id': 'uint16'})
+df.to_csv(data_dir / 'index_table.csv')
 print()
 

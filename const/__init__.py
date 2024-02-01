@@ -35,7 +35,6 @@ gedi_attr_dtype = {
     'surface_flag': 'uint8',
     'urban_focal_window_size': 'uint8',
     'urban_proportion': 'uint8',
-    # '.geo': 'object'
 }
 dtypes = {**gedi_attr_dtype, **rh_dtype}
 # %%
