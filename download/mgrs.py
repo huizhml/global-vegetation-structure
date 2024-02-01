@@ -88,7 +88,7 @@ class MGRS:
             use_dask (bool, optional): Flag indicating whether to use Dask for reading the file. Defaults to False.
             npartitions (int, optional): The number of partitions to use when using Dask. Defaults to 60.
         """
-        self.gee_asset = 'projects/gisproject-1/assets/mgrs_with_landmass_and_gedi_asset_ids'
+        self.gee_asset = 'projects/gisproject-1/assets/mgrs_with_landmass_and_gedi_counts'
         self.mgrs_file = mgrs_file
         self.use_dask = use_dask
         self.npartitions = npartitions
