@@ -19,11 +19,11 @@ class DaskDownloader:
         """
         Schedule Dask tasks manually to control the level of parallelism and enable retry for failed tasks.
         """
-        assert isinstance(ddf, pd.DataFrame) and callable(delayed_tasks) or isinstance(ddf, dd.DataFrame), \
+        assert isinstance(ddf, pd.DataFrame) and callable(delayed_tasks) or isinstance(ddf, (dd.DataFrame, dd.Series)), \
                 'when delayed_tasks is not none, ddf must be pd.DataFrame'
         client = get_client()
         futures = []
-        if isinstance(ddf, dd.DataFrame):
+        if isinstance(ddf, (dd.DataFrame, dd.Series)):
             n_parallel = min(self.n_parallel, ddf.npartitions)
             total_tasks = ddf.npartitions
         elif isinstance(ddf, pd.DataFrame):
