@@ -138,6 +138,17 @@ class MGRS:
         mgrs_df = mgrs_df[['geometry', 'MGRS_UTM', 'landmass', 'tracks']].apply(add_missing_fc, axis=1, args=(missing_df,), meta=meta).compute()
         mgrs_df.to_parquet(self.mgrs_file)
 
+    def remove_empty_tracks(self, mgrs_df):
+        """
+        Remove empty tracks from the MGRS data.
+
+        Parameters:
+            mgrs_df: The MGRS data as a GeoDataFrame.
+        """
+        invalid_id = 'LARSE/GEDI/GEDI02_A_002/GEDI02_A_2022362115234_O22900_01_T06690_02_003_02_V002'
+        mgrs_df['tracks'] = mgrs_df['tracks'].apply(lambda x: x[x!=invalid_id])
+        mgrs_df.to_parquet(self.mgrs_file)
+
 
 # authenticate()
 
@@ -147,4 +158,5 @@ if __name__ == '__main__':
     missing_df = Path.home() /data_dir/ 'missing.csv'
     mgrs = MGRS(mgrs_file, missing_df)
     mgrs_df = mgrs.get_mgrs()
+    mgrs.remove_empty_tracks(mgrs_df)
     print(mgrs_df.head())
