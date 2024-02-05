@@ -13,7 +13,7 @@ import geopandas as gpd
 import dask_geopandas as dgd
 
 def authenticate():
-    key_file = os.environ['KEY_FILE']
+    key_file = os.environ.get('KEY_FILE')
     key_file = key_file or 'keys/private-key.json'
     key = json.load(open(key_file))
     credentials = ee.ServiceAccountCredentials(key['client_email'], key_file)
