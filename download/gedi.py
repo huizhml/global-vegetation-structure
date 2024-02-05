@@ -109,9 +109,7 @@ class GEDI(DaskDownloader):
         last_coords = geom['coordinates'][0][0].copy()
         geom['coordinates'][0].append(last_coords)
         sample_ratio = zone['landmass'] * self.nSampledPerKm2/zone[f'count_{self.year}'] + 0.001
-        for track_id in zone['tracks']:
-            if str(self.year) not in track_id:
-                continue
+        for track_id in zone[f'tracks_{self.year}']:
             filename = track_id.split('/')[-1]
             if (zone_dir / f'{filename}.parquet').exists() and not self.rewrite:
                 continue
@@ -119,10 +117,15 @@ class GEDI(DaskDownloader):
             self.download_orbit(fc, sample_ratio, zone_dir, filename)
 
         print('finish zone', zone['MGRS_UTM'])
-        flag.touch()
+        if len(os.listdir(zone_dir)) > 0:
+            flag.touch()
+        else:
+            os.rmdir(zone_dir)
     
     @retry(tries=10, delay=1)
     def download_orbit(self, fc, sample_ratio, zone_dir, filename):
+        if (zone_dir / f'{filename}.parquet').exists() and not self.rewrite:
+            return
         if sample_ratio < 1:
             fc = fc.randomColumn('random', seed=self.random_state).filter(ee.Filter.lte('random', sample_ratio))
         sampled = fc.size().getInfo()
@@ -146,6 +149,8 @@ class GEDI(DaskDownloader):
         Downloads GEDI data for all valid MGRS grid cells in the specified year.
         """
         mgrs_df = gpd.read_parquet(self.mgrs_file)
+        # row = mgrs_df[mgrs_df['MGRS_UTM']=='04L'].iloc[0]
+        # self.download_zone(row).compute()
         self.schedule_tasks(mgrs_df, self.download_zone)
 
 
