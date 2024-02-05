@@ -1,16 +1,20 @@
 import time
 import os
 import ee
+import re
 import json
 from typing import Any, Dict
 from pathlib import Path
+from collections import Counter, defaultdict
 import json
 import pandas as pd
 import dask.dataframe as dd
 import geopandas as gpd
+import dask_geopandas as dgd
 
 def authenticate():
     key_file = os.environ['KEY_FILE']
+    key_file = key_file or 'keys/private-key.json'
     key = json.load(open(key_file))
     credentials = ee.ServiceAccountCredentials(key['client_email'], key_file)
     ee.Initialize(credentials, url='https://earthengine-highvolume.googleapis.com')
@@ -145,18 +149,61 @@ class MGRS:
         Parameters:
             mgrs_df: The MGRS data as a GeoDataFrame.
         """
-        invalid_id = 'LARSE/GEDI/GEDI02_A_002/GEDI02_A_2022362115234_O22900_01_T06690_02_003_02_V002'
-        mgrs_df['tracks'] = mgrs_df['tracks'].apply(lambda x: x[x!=invalid_id])
+        invalid_ids = ['LARSE/GEDI/GEDI02_A_002/GEDI02_A_2022362115234_O22900_01_T06690_02_003_02_V002',
+                        'LARSE/GEDI/GEDI02_A_002/GEDI02_A_2023028120854_O23381_04_T08274_02_003_02_V002']
+        def remove(x):
+            for i in invalid_ids:
+                x = x[x!=i]
+            return x
+        mgrs_df['tracks'] = mgrs_df['tracks'].apply(remove)
         mgrs_df.to_parquet(self.mgrs_file)
+        return mgrs_df
 
+    def add_gedi_count(self, row):
+        print(f'processing {row["MGRS_UTM"]}...')
+        geom = ee.Geometry.BBox(*row['geometry'].bounds).toGeoJSON()
+        last_coords = geom['coordinates'][0][0].copy()
+        geom['coordinates'][0].append(last_coords)
+        sizes = Counter()
+        new_tracks = defaultdict(list)
+        for asset_id in row['tracks']:
+            year = asset_id[33:37]
+            fc_size = ee.FeatureCollection(asset_id).filterBounds(geom) \
+                            .filter("quality_flag==1 && degrade_flag==0 && region_class > 0 && leaf_off_flag != 1") \
+                            .size().getInfo()
+            
+            if fc_size > 0:
+                new_tracks[year].append(asset_id)
+            sizes[year] += fc_size
+        
+        for year in ['2019', '2020', '2021', '2022']:
+            row[f'count_{year}'] = sizes[year]
+            row[f'tracks_{year}'] = new_tracks[year]
+        # del row['tracks']
+        print(f'zone: {row["MGRS_UTM"]}: ', sizes)
+        row.to_csv(Path.home() / f'{row["MGRS_UTM"]}.csv', header=False)
+        return row
+        
 
-# authenticate()
+authenticate()
 
 if __name__ == '__main__':
+    from dask.distributed import Client, LocalCluster
+    from dask import config
+    config.set({'interface': 'lo'})
+    cluster = LocalCluster()
+    client = Client(cluster)  # timeout
     data_dir = 'GEDI'
     mgrs_file = Path.home() /data_dir/ 'mgrs_with_tracks.parquet'
     missing_df = Path.home() /data_dir/ 'missing.csv'
     mgrs = MGRS(mgrs_file, missing_df)
     mgrs_df = mgrs.get_mgrs()
     mgrs.remove_empty_tracks(mgrs_df)
-    print(mgrs_df.head())
+    mgrs_df = dgd.read_parquet(mgrs_file)
+    mgrs_df = mgrs_df.repartition(npartitions=100)
+    meta={'geometry': 'geometry', 'MGRS_UTM': 'object', 'landmass': 'float64', 'tracks': 'object', 'count_2019': 'int64', 'count_2020': 'int64', 'count_2021': 'int64', 'count_2022': 'int64', 'tracks_2019': 'object', 'tracks_2020': 'object', 'tracks_2021': 'object', 'tracks_2022': 'object'}
+    new_df = mgrs_df.apply(mgrs.add_gedi_count, axis=1, meta=meta).compute()
+    new_df.to_csv(Path.home() /data_dir/ 'mgrs_with_tracks_and_count.csv')
+    new_df.to_parquet(Path.home() /data_dir/ 'mgrs_with_tracks_and_count.parquet')
+    # mgrs.remove_empty_tracks(mgrs_df)
+    # print(mgrs_df.head())
