@@ -3,6 +3,7 @@ import os
 import ee
 import re
 import json
+import logging
 from typing import Any, Dict
 from pathlib import Path
 from collections import Counter, defaultdict
@@ -12,13 +13,9 @@ import dask.dataframe as dd
 import geopandas as gpd
 import dask_geopandas as dgd
 
-def authenticate():
-    key_file = os.environ.get('KEY_FILE')
-    key_file = key_file or 'keys/private-key.json'
-    key = json.load(open(key_file))
-    credentials = ee.ServiceAccountCredentials(key['client_email'], key_file)
-    ee.Initialize(credentials, url='https://earthengine-highvolume.googleapis.com')
-    print('Authenticated Earth Engine successfully') 
+from download.utils import authenticate
+
+logger = logging.getLogger(__name__)
 
 def get_missing_fc(missing_table:Path=None):
     '''
@@ -82,7 +79,7 @@ class MGRS:
             Update the MGRS data to include all GEDI assets.
     """
 
-    def __init__(self, mgrs_file:Path, missing_file:Path, use_dask:bool=False, npartitions=60):
+    def __init__(self, mgrs_file:Path, missing_file:Path=None, use_dask:bool=False, npartitions=60):
         """
         Initialize the MGRS object.
 
@@ -110,7 +107,7 @@ class MGRS:
         """
         
         if not self.mgrs_file.exists():
-            print('Downloading MGRS data from Earth Engine...')
+            logger.info('Downloading MGRS data from Earth Engine...')
             mgrs = ee.FeatureCollection(self.gee_asset)
             mgrs_df = ee.data.computeFeatures({'expression': mgrs, 'fileFormat': 'GEOPANDAS_GEODATAFRAME'})
             mgrs_df = self.update_mgrs(mgrs_df, self.missing_file)
@@ -135,7 +132,7 @@ class MGRS:
         cluster = LocalCluster()
         client = Client(cluster)#timeout
 
-        print(f'Updating MGRS data to include all GEDI assets...')
+        logger.info(f'Updating MGRS data to include all GEDI assets...')
         mgrs_df = dd.from_pandas(mgrs_df, npartitions=self.npartitions)
         missing_df = get_missing_fc(mssing_file)
         meta = {'geometry': 'object', 'MGRS_UTM': 'str', 'landmass': 'uint16', 'tracks': 'object'}
@@ -160,7 +157,7 @@ class MGRS:
         return mgrs_df
 
     def add_gedi_count(self, row):
-        print(f'processing {row["MGRS_UTM"]}...')
+        logger.info(f'processing {row["MGRS_UTM"]}...')
         geom = ee.Geometry.BBox(*row['geometry'].bounds).toGeoJSON()
         last_coords = geom['coordinates'][0][0].copy()
         geom['coordinates'][0].append(last_coords)
@@ -171,7 +168,7 @@ class MGRS:
             fc_size = ee.FeatureCollection(asset_id).filterBounds(geom) \
                             .filter("quality_flag==1 && degrade_flag==0 && region_class > 0 && leaf_off_flag != 1") \
                             .size().getInfo()
-            
+            ee.data.listFeatures
             if fc_size > 0:
                 new_tracks[year].append(asset_id)
             sizes[year] += fc_size
@@ -180,7 +177,7 @@ class MGRS:
             row[f'count_{year}'] = sizes[year]
             row[f'tracks_{year}'] = new_tracks[year]
         # del row['tracks']
-        print(f'zone: {row["MGRS_UTM"]}: ', sizes)
+        logger.info(f'zone: {row["MGRS_UTM"]}: ', sizes)
         row.to_csv(Path.home() / f'{row["MGRS_UTM"]}.csv', header=False)
         return row
         
@@ -206,4 +203,4 @@ if __name__ == '__main__':
     new_df.to_csv(Path.home() /data_dir/ 'mgrs_with_tracks_and_count.csv')
     new_df.to_parquet(Path.home() /data_dir/ 'mgrs_with_tracks_and_count.parquet')
     # mgrs.remove_empty_tracks(mgrs_df)
-    # print(mgrs_df.head())
+    # logger.info(mgrs_df.head())

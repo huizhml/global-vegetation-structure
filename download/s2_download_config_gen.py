@@ -1,5 +1,6 @@
 import os
 import math
+import logging
 from pathlib import Path
 import pandas as pd
 import pyarrow.parquet as pq
@@ -7,6 +8,7 @@ import geopandas as gpd
 import dask_geopandas as dgp
 import hydra
 import dask
+logger = logging.getLogger(__name__)
 
 def repartition(year_folder, zone, partition_size='128K'):
     ddf = dgp.read_parquet(year_folder / zone / 'GEDI*.parquet')
@@ -28,7 +30,7 @@ def aggregate_zones(group):
     if group.index[0] <= 16:
         zones = ','.join(group['zone'])
         res = group.iloc[0, :]
-        # print(res)
+        # logger.info(res)
         res['zone'] = zones
         return res.to_frame().T
     else:
@@ -45,7 +47,7 @@ def gen_s2_download_config(data_folder, save_dir, year):
         try:
             num_row_groups = pq.read_metadata(file).num_row_groups
         except:
-            print(file)
+            logger.info(file)
         if num_row_groups >=2000:
             n_cores = 64
         else:
@@ -76,14 +78,14 @@ def main(cfg):
         for zone in os.listdir(data_folder):
             if not os.path.isdir(data_folder / zone) or (data_folder/f'{zone}.parquet').exists():
                 continue
-            print(f'repartition {zone}...')
+            logger.info(f'repartition {zone}...')
             repartition(data_folder, zone)
-            print(f'merge {zone}...')
+            logger.info(f'merge {zone}...')
             future = client.compute(merge_orbits(data_folder, zone))
             futures.append(future)
 
         #res = client.gather(futures)
-        print(f'generate download config for {year}...') 
+        logger.info(f'generate download config for {year}...') 
         gen_s2_download_config(data_folder, cfg.save_dir, year)
     client.close()
 

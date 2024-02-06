@@ -4,6 +4,7 @@ import os
 import time
 import json
 import datetime
+import logging
 from pathlib import Path
 from typing import Union, List
 import pickle
@@ -31,9 +32,10 @@ import hydra
 from dotenv import load_dotenv
 
 from utils._stackstac import stack
-from const import dtypes, gedi_attr_dtype, rh_dtype, s2_item_props
+from const import dtypes, gedi_attr_dtype, rh_dtype, latlon_dtype
 from download.dask_downloader import DaskDownloader
 
+logger = logging.getLogger(__name__)
 cfg = {
     "sentinel-2-l2a": {
         "assets": {
@@ -205,7 +207,7 @@ class S2Downloader(DaskDownloader):
         self.buffer_size = patch_size // 2 * out_res # in meters
         self.patch_size = (self.buffer_size * 2 + out_res) / out_res
         self.comp = {
-            'input':{
+            'image':{
                 "zlib": True,
                 "complevel": comp_level,
                 "fletcher32": True,
@@ -274,7 +276,7 @@ class S2Downloader(DaskDownloader):
             for f in (self.save_dir/zone).glob('*'):
                 os.remove(f)
         if flag.exists():
-            print(f'{zone} {self.year} has been processed.')
+            logger.info(f'{zone} {self.year} has been processed.')
             return
         
         bounds = self.get_zone_bbox(zone)
@@ -286,10 +288,10 @@ class S2Downloader(DaskDownloader):
                                  bbox=bounds).item_collection()
 
         gediDf = dgp.read_parquet(self.gediFolder / f'{zone}.parquet', dropna=True, usecols=list(dtypes.keys()), dtype=dtypes, blocksize='32K')
-        print(f'Processing {gediDf.npartitions} partitions...')
+        logger.info(f'Processing {gediDf.npartitions} partitions...')
         # number = 4
         # df = self.get_patch_for_partition(gediDf.get_partition(number).compute(), zone, esa_wc_items, glo30_itmes, rewrite=True, partition_info={'number': number})
-        # print('test done')
+        # logger.info('test done')
         df = gediDf.map_partitions(self.get_patch_for_partition, zone, esa_wc_items, glo30_itmes, rewrite, meta=(None, 'string'))
         self.schedule_tasks(df)
         flag.touch()
@@ -309,7 +311,7 @@ class S2Downloader(DaskDownloader):
         
         flag = self.save_dir / zone / f'{self.year}_partition_{partition_info["number"]}_done'
         if flag.exists() and not rewrite:
-            print(f'{zone} {self.year}_partition_{partition_info["number"]} has been processed.')
+            logger.info(f'{zone} {self.year}_partition_{partition_info["number"]} has been processed.')
             return
         xrrs = partition.apply(self.get_best_s2_for_point, axis=1, args=(esa_wc_items, glo30_itmes)).dropna()
         if xrrs.empty:
@@ -318,11 +320,12 @@ class S2Downloader(DaskDownloader):
         partition = partition.loc[xrrs.index].set_index('shot_number')
         rh_da = partition[rh_dtype.keys()].to_xarray().to_dataarray('rh', 'rhs')
         gedi_attr_da = partition[gedi_attr_dtype.keys()].to_xarray().to_dataarray('attr', 'gedi_attrs')
+        latlon_da = partition[latlon_dtype.keys()].to_xarray().to_dataarray('xy', 'latlon')
         xrrs = dask.compute(*xrrs)
         slope_da = xr.concat([s['slope'] for s in xrrs], dim='time', compat='override', coords='minimal', join='override')
         xrrs = xr.concat([s['xrr'] for s in xrrs], dim='time', compat='override', coords='minimal', join='override')
-        xrrs.name = 'input'
-        xrrs = xr.merge([xrrs, slope_da, rh_da.transpose(), gedi_attr_da.transpose()])
+        xrrs.name = 'image'
+        xrrs = xr.merge([xrrs, slope_da, rh_da.transpose(), gedi_attr_da.transpose(), latlon_da.transpose()])
         xrrs = xrrs.assign_attrs(partition_bounds=partition.total_bounds)
         with Lock('netcdf_lock'):
             xrrs.to_netcdf(self.save_dir / f'{zone}.h5', group=f'{self.year}/{partition_info["number"]}', format='NETCDF4', engine='h5netcdf', encoding=self.comp, mode='a')
@@ -449,7 +452,7 @@ class S2Downloader(DaskDownloader):
         if len(items) > 0:
             return items
         if len(items) == 0 and (end - start).days < 365:
-            print(f'No S2 tile found between {start} - {end}, extend the range by {self.extendDays.days*2} days')
+            logger.info(f'No S2 tile found between {start} - {end}, extend the range by {self.extendDays.days*2} days')
             items = self.query_s2_for_p(start - self.extendDays,
                                            end + self.extendDays, geom)
             return items
@@ -468,17 +471,19 @@ def main(cfg):
 
     t0 = time.time()
     s2downloader = S2Downloader(**cfg)
-    res = s2downloader.download_zone(cfg.zone, cfg.rewrite)
-    print('time: ', time.time() - t0)
+    zones = cfg.zone.split(',')
+    for zone in zones:
+        res = s2downloader.download_zone(zone, cfg.rewrite)
+    logger.info('time: ', time.time() - t0)
 
 
 def download(func, zone):
     try:
         func(zone)
     except Exception as e:
-        print(e)
+        logger.info(e)
         time.sleep(60*10)
-        print("restarting")
+        logger.info("restarting")
         download(func, zone)
 
 #%%

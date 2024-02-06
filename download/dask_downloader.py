@@ -1,3 +1,4 @@
+import logging
 from typing import Dict, Callable, Tuple
 from pathlib import Path
 from collections import defaultdict
@@ -5,7 +6,7 @@ from dask.distributed import get_client, as_completed
 import dask.dataframe as dd
 import pandas as pd
 
-
+logger = logging.getLogger(__name__)
 class DaskDownloader:
     """
     A class for downloading data using Dask.
@@ -57,7 +58,7 @@ class DaskDownloader:
                         retry_counter[f.key] += 1
                     continue
                 else:
-                    print(
+                    logger.info(
                         f'Failed to download {f.key} after {self.max_retries} retries.')
                     # TODO: save the failed tasks to a file and retry later
             f.release()
@@ -69,7 +70,7 @@ class DaskDownloader:
                     future = client.compute(
                         ddf.get_partition(total_tasks - n_left))
                 futures_monitor.add(future)
-                print(f'************ partition {total_tasks - n_left} submitted ****************')
-                print(f'{futures_monitor.count()} in processing, {n_left} waiting')
+                logger.info(f'************ partition {total_tasks - n_left} submitted ****************')
+                logger.info(f'{futures_monitor.count()} in processing, {n_left} waiting')
                 n_left -= 1
             

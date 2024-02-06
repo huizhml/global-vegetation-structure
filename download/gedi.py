@@ -90,7 +90,7 @@ class GEDI(DaskDownloader):
         self.key_file = key_file
 
         if not self.mgrs_file.exists():
-            print(f'mgrs file {self.mgrs_file} not found, download from GEE...')
+            logger.info(f'mgrs file {self.mgrs_file} not found, download from GEE...')
             from download.mgrs import MGRS
             mgrs = MGRS(self.mgrs_file, self.data_dir / 'missing.csv')
             mgrs.get_mgrs()
@@ -98,11 +98,11 @@ class GEDI(DaskDownloader):
     @dask.delayed
     def download_zone(self, zone):
         if zone[f'count_{self.year}'] == 0:
-            print(f"no GEDI points in {zone['MGRS_UTM']}")
+            logger.info(f"no GEDI points in {zone['MGRS_UTM']}")
             return None
         flag = self.data_dir / f'{zone["MGRS_UTM"]}_done'
         if flag.exists() and not self.rewrite:
-            print(f"{flag} exists")
+            logger.info(f"{flag} exists")
             return None
         zone_dir = self.data_dir / zone["MGRS_UTM"]
         zone_dir.mkdir(exist_ok=True, parents=True)
@@ -125,8 +125,8 @@ class GEDI(DaskDownloader):
                 sampled += self.download_orbit(fc, sample_ratio, zone_dir, filename)
                 new_tracks[self.year].append(track_id)
 
-        print(f'{zone["MGRS_UTM"]}, Total: {total}, sampled: {sampled}, #want: {total * sample_ratio}')
-        print(zone["MGRS_UTM"], new_tracks)
+        logger.info(f'{zone["MGRS_UTM"]}, Total: {total}, sampled: {sampled}, #want: {total * sample_ratio}')
+        logger.info(zone["MGRS_UTM"], new_tracks)
         if len(os.listdir(zone_dir)) > 0:
             flag.touch()
         else:
@@ -168,7 +168,7 @@ class GEDI(DaskDownloader):
         h, bins = da.histogram(ddf['rh98'], bins=100).compute()
         plt.stairs(h, bins)
         plt.savefig('rh98.png')
-        print('plot saved')
+        logger.info('plot saved')
 
     def getSampleTable(self, plot=False):  # TODO:needs update
         pass
