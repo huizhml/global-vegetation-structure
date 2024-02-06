@@ -3,6 +3,7 @@ import ee
 import json
 import logging
 from pathlib import Path
+from collections import Counter, defaultdict
 import dask
 import dask.dataframe as dd
 import dask.array as da
@@ -15,7 +16,7 @@ from retry import retry
 from io import StringIO
 import hydra
 from const import dtypes
-from download.mgrs import authenticate
+from download.utils import authenticate
 from download.dask_downloader import DaskDownloader
 from dotenv import load_dotenv
 load_dotenv()
@@ -63,10 +64,10 @@ class GEDI(DaskDownloader):
     """
 
     # this is obtained from the total number of points we want to sample per year(75M) and the total landmass in the world
-    nSampledPerKm2 = 0.66793882312
+    nSampledPerKm2 = 0.7033933006651656
     GEDI_START = pd.Timestamp('2018-01-01')
 
-    def __init__(self, year=2019, data_dir='GEDI/2019', mgrs_file='GEDI/mgrs_with_tracks.parquet', key_file:str=None, npartitions=100, n_parallel=40, row_group_size=100, random_state:int=42, rewrite: bool = False, **kwargs):
+    def __init__(self, year=2019, data_dir='GEDI/2019', mgrs_file='GEDI/mgrs_with_tracks_and_count.parquet', key_file:str=None, npartitions=100, n_parallel=40, row_group_size=100, random_state:int=42, rewrite: bool = False, **kwargs):
         """
         Initializes a GEDI object.
 
@@ -109,14 +110,23 @@ class GEDI(DaskDownloader):
         last_coords = geom['coordinates'][0][0].copy()
         geom['coordinates'][0].append(last_coords)
         sample_ratio = zone['landmass'] * self.nSampledPerKm2/zone[f'count_{self.year}'] + 0.001
-        for track_id in zone[f'tracks_{self.year}']:
-            filename = track_id.split('/')[-1]
+        total = sampled = 0
+        new_tracks = defaultdict(list)
+        for track_id in zone[f'tracks']:
+            if track_id[33:37] != str(self.year):
+                continue
+            filename = track_id.split('/')[-1]  
             if (zone_dir / f'{filename}.parquet').exists() and not self.rewrite:
                 continue
             fc = ee.FeatureCollection(track_id).filterBounds(geom).filter(self.filter)
-            self.download_orbit(fc, sample_ratio, zone_dir, filename)
+            orbit_size = fc.size().getInfo()
+            if orbit_size > 0:
+                total += orbit_size
+                sampled += self.download_orbit(fc, sample_ratio, zone_dir, filename)
+                new_tracks[self.year].append(track_id)
 
-        print('finish zone', zone['MGRS_UTM'])
+        print(f'{zone["MGRS_UTM"]}, Total: {total}, sampled: {sampled}, #want: {total * sample_ratio}')
+        print(zone["MGRS_UTM"], new_tracks)
         if len(os.listdir(zone_dir)) > 0:
             flag.touch()
         else:
@@ -124,8 +134,6 @@ class GEDI(DaskDownloader):
     
     @retry(tries=10, delay=1)
     def download_orbit(self, fc, sample_ratio, zone_dir, filename):
-        if (zone_dir / f'{filename}.parquet').exists() and not self.rewrite:
-            return
         if sample_ratio < 1:
             fc = fc.randomColumn('random', seed=self.random_state).filter(ee.Filter.lte('random', sample_ratio))
         sampled = fc.size().getInfo()
@@ -143,6 +151,7 @@ class GEDI(DaskDownloader):
                 df['date'] = pd.to_timedelta(df['delta_time'], unit='S') + GEDI_START
                 df['date'] = df['date'].dt.strftime('%Y-%m-%d')
                 df.to_parquet(zone_dir / f'{filename}.parquet', row_group_size=self.row_group_size, engine='pyarrow')
+        return sampled
 
     def download(self):
         """
