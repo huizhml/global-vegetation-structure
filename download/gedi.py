@@ -67,7 +67,7 @@ class GEDI(DaskDownloader):
     nSampledPerKm2 = 0.7033933006651656
     GEDI_START = pd.Timestamp('2018-01-01')
 
-    def __init__(self, year=2019, data_dir='GEDI/2019', mgrs_file='GEDI/mgrs_with_tracks_and_count.parquet', key_file:str=None, npartitions=100, n_parallel=40, row_group_size=100, random_state:int=42, rewrite: bool = False, **kwargs):
+    def __init__(self, year=2019, data_dir='GEDI/2019', mgrs_file='GEDI/mgrs_with_count_and_orbits.parquet', key_file:str=None, npartitions=100, n_parallel=40, row_group_size=100, random_state:int=42, rewrite: bool = False, **kwargs):
         """
         Initializes a GEDI object.
 
@@ -112,9 +112,7 @@ class GEDI(DaskDownloader):
         sample_ratio = zone['landmass'] * self.nSampledPerKm2/zone[f'count_{self.year}'] + 0.001
         total = sampled = 0
         new_tracks = defaultdict(list)
-        for track_id in zone[f'tracks']:
-            if track_id[33:37] != str(self.year):
-                continue
+        for track_id in zone[f'tracks_{self.year}']:
             filename = track_id.split('/')[-1]  
             if (zone_dir / f'{filename}.parquet').exists() and not self.rewrite:
                 continue
@@ -151,6 +149,7 @@ class GEDI(DaskDownloader):
                 df['date'] = pd.to_timedelta(df['delta_time'], unit='S') + GEDI_START
                 df['date'] = df['date'].dt.strftime('%Y-%m-%d')
                 df.to_parquet(zone_dir / f'{filename}.parquet', row_group_size=self.row_group_size, engine='pyarrow')
+                print(f'{filename} saved')
         return sampled
 
     def download(self):
