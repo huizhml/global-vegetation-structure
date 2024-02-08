@@ -130,7 +130,7 @@ class GEDI(DaskDownloader):
         else:
             os.rmdir(zone_dir)
     
-    @retry(tries=10, delay=1)
+    @retry(requests.HTTPError, tries=10, delay=1)
     def download_orbit(self, fc, sample_ratio, zone_dir, filename):
         if sample_ratio < 1:
             fc = fc.randomColumn('random', seed=self.random_state).filter(ee.Filter.lte('random', sample_ratio))
@@ -150,6 +150,8 @@ class GEDI(DaskDownloader):
                 df['date'] = df['date'].dt.strftime('%Y-%m-%d')
                 df.to_parquet(zone_dir / f'{filename}.parquet', row_group_size=self.row_group_size, engine='pyarrow')
                 print(f'{filename} saved')
+            else:
+                raise requests.HTTPError(f'Failed to download {filename}')
         return sampled
 
     def download(self):
