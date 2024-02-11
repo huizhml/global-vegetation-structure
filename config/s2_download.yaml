@@ -1,9 +1,10 @@
 zone: 32M
 year: 2019
 n_parallel: 100
-partition_size: 64K
+partition_size: 512k
+data_dir: GEDI
 save_dir: data/GEDI
-rewrite: True
+rewrite: False
 patch_size: 15
 
 
@@ -11,4 +12,4 @@ hydra:
   job:
     chdir: False
   run:
-    dir: ./logs/${zone}_${n_parallel}_${now:%Y-%m-%d_%H-%M-%S}
+    dir: ./logs/s2_${year}_${n_parallel}_${now:%Y-%m-%d_%H-%M-%S}
