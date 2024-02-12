@@ -49,3 +49,6 @@ keys/
 output*
 .env
 .planetarycomputer
+*.csv
+*/*.html
+*.parquet

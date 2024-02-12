@@ -3,7 +3,7 @@ task: download # download, visualize
 init:
   year: 2019
   data_dir: GEDI/${init.year}
-  n_parallel: 40
+  n_parallel: 100
   row_group_size: 100 # defines the #partitions when downloading s2
   rewrite: False
   key_file: keys/nrt-key.json
