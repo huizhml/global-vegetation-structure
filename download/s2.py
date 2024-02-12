@@ -12,20 +12,22 @@ import pickle
 import numpy as np
 import xarray as xr
 
-import ee
 import pystac
 import pystac_client
 import planetary_computer
-import retry
+from urllib3 import Retry
+from pystac_client.stac_api_io import StacApiIO
 
 import dask
 import dask_geopandas as dgp
 from dask.distributed import Lock
 import pandas as pd
 import geopandas as gpd
+import dask.dataframe as dd
 import pyproj
 from xrspatial import slope
 from rasterio.enums import Resampling
+import shapely
 
 import ipdb
 import hydra
@@ -34,6 +36,21 @@ from dotenv import load_dotenv
 from utils._stackstac import stack
 from const import dtypes, gedi_attr_dtype, rh_dtype, latlon_dtype
 from download.dask_downloader import DaskDownloader
+#%%
+load_dotenv('.planetarycomputer/settings.env')
+
+os.environ["GDAL_HTTP_MAX_RETRY"] = "3"
+
+retry = Retry(
+    total=10, backoff_factor=1, status_forcelist=[502, 503, 504], allowed_methods=None
+)
+stac_api_io = StacApiIO(max_retries=retry)
+# stac_api_io.session.verify = "/path/to/certfile" #? is it a fix to pystac_client APIError (request is blocked)?
+stac_endpoint = 'https://planetarycomputer.microsoft.com/api/stac/v1'
+api = pystac_client.Client.open(stac_endpoint, modifier=planetary_computer.sign_inplace, stac_io=stac_api_io)
+
+gedi_attr_dtype.pop('shot_number')
+defective_SCL = [0, 1, 8, 9, 10, 11]  # keep cloud shadows, model should learn to be invariant to cloud shadows
 
 logger = logging.getLogger(__name__)
 cfg = {
@@ -96,17 +113,6 @@ def harmonize_to_old(data):
 
     new = xr.concat([new, new_harmonized], "band").sel(band=data.band.data.tolist())
     return xr.concat([old, new], dim="time")
-
-
-load_dotenv('.planetarycomputer/settings.env')
-os.environ["GDAL_HTTP_MAX_RETRY"] = "3"
-
-#%%
-stac_endpoint = 'https://planetarycomputer.microsoft.com/api/stac/v1'
-api = pystac_client.Client.open(stac_endpoint, modifier=planetary_computer.sign_inplace)
-
-gedi_attr_dtype.pop('shot_number')
-defective_SCL = [0, 1, 8, 9, 10, 11]  # keep cloud shadows, model should learn to be invariant to cloud shadows
 
 def resign_items(items):
     """
@@ -177,6 +183,7 @@ class S2Downloader(DaskDownloader):
     def __init__(self,
                  year: int = 2019,
                  n_parallel: int = 100,
+                 data_dir = 'GEDI',
                  save_dir: str = 'data/GEDI',
                  patch_size: int = 15,
                  maxCloudCover: int = 50,
@@ -186,10 +193,12 @@ class S2Downloader(DaskDownloader):
                  esa_wc_year: int = 2021,
                  comp_level: int = 7,
                  out_res: int =10,
+                 mgrs_file: str = 'mgrs_with_tracks_and_count.parquet',
                  **kwargs
                 ) -> None:
         super().__init__(n_parallel=n_parallel, max_retries=3, **kwargs)
-        self.gediFolder = Path.home() / f'GEDI/{year}'
+        self.mgrs_df = gpd.read_parquet(Path.home() / f'GEDI/{mgrs_file}')
+        self.gediFolder = Path.home() / f'{data_dir}/{year}'
         self.save_dir = Path.home() / save_dir
         self.year = year 
         self.esa_wc_year = esa_wc_year
@@ -223,7 +232,7 @@ class S2Downloader(DaskDownloader):
                 "zlib": True,
                 "complevel": comp_level,
                 "fletcher32": True,
-                "chunksizes": (1,32)
+                "chunksizes": (1,30)
             },
             'slope':{
                 "zlib": True,
@@ -244,18 +253,13 @@ class S2Downloader(DaskDownloader):
         Returns:
         - bounds (list): The bounding box coordinates [min_lon, min_lat, max_lon, max_lat].
         """
-        
-        key_file = 'keys/private-key.json'
-        key = json.load(open(key_file))
-        credentials = ee.ServiceAccountCredentials(key['client_email'], key_file)
-        ee.Initialize(credentials)
-        mgrs = ee.FeatureCollection('projects/gisproject-1/assets/gedi_count_mgrs_aggregated_landmass')
-        bounds = mgrs.filter(ee.Filter.eq('MGRS_UTM', zone)).first().geometry().bounds()
-        bounds = bounds.getInfo()['coordinates'][0]
-        bounds = [*bounds[0], *bounds[2]]
-        if bounds[2] > 180:
-            bounds[0] = -bounds[0]
-            bounds[2] = bounds[0] + 6
+        # check code https://code.earthengine.google.com/4dcc2d69fa3cab567be1a8b3f43d64e7
+        bounds = self.mgrs_df[self.mgrs_df['MGRS_UTM'] == zone]['geometry'].bounds.values[0]
+        if bounds[2] > 180 and bounds[2] < 185:
+            bounds[2] = 180
+        elif bounds[2] > 185:
+            bounds[2] = -bounds[0] + 6
+            bounds[0] = -180
         return bounds
     
     def download_zone(self, zone:str=None, rewrite:bool=False):
@@ -286,8 +290,8 @@ class S2Downloader(DaskDownloader):
             datetime=f'{self.esa_wc_year}-01-01/{self.esa_wc_year}-12-31').item_collection()
         glo30_itmes = api.search(collections=['cop-dem-glo-30'],
                                  bbox=bounds).item_collection()
-
-        gediDf = dgp.read_parquet(self.gediFolder / f'{zone}.parquet', dropna=True, usecols=list(dtypes.keys()), dtype=dtypes, blocksize='32K')
+        
+        gediDf = dgp.read_parquet(self.gediFolder / f'{zone}/partition*.parquet', dropna=True) #, split_row_groups=True
         logger.info(f'Processing {gediDf.npartitions} partitions...')
         # number = 4
         # df = self.get_patch_for_partition(gediDf.get_partition(number).compute(), zone, esa_wc_items, glo30_itmes, rewrite=True, partition_info={'number': number})
@@ -349,6 +353,7 @@ class S2Downloader(DaskDownloader):
             start = pd.Timestamp(point['date'], tz='UTC') - self.queryDaysRange
             end = pd.Timestamp(point['date'], tz='UTC') + self.queryDaysRange
         geom = point['geometry']
+        # geom = shapely.from_wkb(point['geometry'])
         items = self.query_s2_for_p(start, end, geom) #? how to make it non-blocking, return a future
         
         if items is None:
@@ -423,7 +428,6 @@ class S2Downloader(DaskDownloader):
 
         return best
 
-    @retry.retry(tries=10, delay=1)
     def query_s2_for_p(self, start, end, geom):
         """
         Query Sentinel-2 data for a given time range and geometry. 
@@ -469,12 +473,17 @@ def main(cfg):
     cluster = LocalCluster()
     client = Client(cluster)#timeout
 
-    t0 = time.time()
+    
     s2downloader = S2Downloader(**cfg)
-    zones = cfg.zone.split(',')
+    if isinstance(cfg.zone, str):
+        zones = [cfg.zone]
+    else:
+        zones = cfg.zone
     for zone in zones:
+        t0 = time.time()
+        logger.info(f'processing zone: {zone}')
         res = s2downloader.download_zone(zone, cfg.rewrite)
-    logger.info('time: ', time.time() - t0)
+        logger.info(f'time taken for {zone}: {time.time() - t0}')
 
 
 def download(func, zone):
