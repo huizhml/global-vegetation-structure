@@ -317,6 +317,7 @@ class S2Downloader(DaskDownloader):
         if flag.exists() and not rewrite:
             logger.info(f'{zone} {self.year}_partition_{partition_info["number"]} has been processed.')
             return
+        partition = partition.reset_index(drop=True) # original index is not unique, shot_number is slow when partition.loc[xrrs.index]
         xrrs = partition.apply(self.get_best_s2_for_point, axis=1, args=(esa_wc_items, glo30_itmes)).dropna()
         if xrrs.empty:
             return
@@ -370,7 +371,7 @@ class S2Downloader(DaskDownloader):
             return
         best_item = [item for item in items if item.id == best.id][0]
         s2xrr = get_patch(best_item, assets=self.bands, bounds=bounds, epsg=epsg, resolution=self.out_res)
-        test = harmonize_to_old(s2xrr)
+        s2xrr = harmonize_to_old(s2xrr)
         wc_xrr = get_patch(esa_wc_items, assets=['map'], bounds=bounds, epsg=epsg, resolution=self.out_res)
         glo_xrr = get_patch(glo30_itmes, assets=['data'], bounds=bounds_slope, epsg=epsg, fill_value=np.nan, dtype='float32', resolution=self.out_res, resampling=Resampling.bilinear)
         if glo_xrr.shape[0] == 0 or wc_xrr.shape[0] == 0:
