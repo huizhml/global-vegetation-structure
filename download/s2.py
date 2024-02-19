@@ -306,7 +306,9 @@ class S2Downloader(DaskDownloader):
         # logger.info('test done')
         df = gediDf.map_partitions(self.get_patch_for_partition, zone, esa_wc_items, glo30_itmes, rewrite, meta=(None, 'string'))
         self.schedule_tasks(df)
-        flag.touch()
+        if len(os.listdir(self.save_dir / zone)) == df.npartitions: # all partitions are done
+            flag.touch()
+        
         return
 
     def get_patch_for_partition(self, partition, zone:str, esa_wc_items:pystac.ItemCollection,glo30_itmes:pystac.ItemCollection, rewrite:bool=False, partition_info:dict=None):
