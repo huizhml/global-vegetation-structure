@@ -3,6 +3,7 @@
 import os
 import time
 import json
+import random
 import datetime
 import logging
 from pathlib import Path
@@ -441,7 +442,7 @@ class S2Downloader(DaskDownloader):
     
     @on_exception(expo, pystac_client.exceptions.APIError, max_tries=3, on_backoff=backoff_hdlr, factor=60)
     @on_exception(expo, RateLimitException, max_tries=30, on_backoff=backoff_hdlr)
-    @RateLimitDecorator(calls=10, period=1) #
+    @RateLimitDecorator(calls=10, period=1) # # concurrent requests for zones with less s2 coverage might be high
     def query_s2_for_p(self, start, end, geom):
         """
         Query Sentinel-2 data for a given time range and geometry. 
@@ -471,6 +472,7 @@ class S2Downloader(DaskDownloader):
             return items
         if len(items) == 0 and (end - start).days < 365:
             logger.info(f'No S2 tile found between {start} - {end}, extend the range by {self.extendDays.days*2} days')
+            time.sleep(random.random())
             items = self.query_s2_for_p(start - self.extendDays,
                                            end + self.extendDays, geom)
             return items
