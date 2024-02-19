@@ -17,6 +17,9 @@ import pystac_client
 import planetary_computer
 from urllib3 import Retry
 from pystac_client.stac_api_io import StacApiIO
+from ratelimit.exception import RateLimitException
+from ratelimit import sleep_and_retry
+from backoff import on_exception, expo
 
 import dask
 import dask_geopandas as dgp
@@ -36,6 +39,7 @@ from dotenv import load_dotenv
 from utils._stackstac import stack
 from const import dtypes, gedi_attr_dtype, rh_dtype, latlon_dtype
 from download.dask_downloader import DaskDownloader
+from download.utils import RateLimitDecorator
 #%%
 load_dotenv('.planetarycomputer/settings.env')
 
@@ -45,7 +49,6 @@ retry = Retry(
     total=10, backoff_factor=1, status_forcelist=[502, 503, 504], allowed_methods=None
 )
 stac_api_io = StacApiIO(max_retries=retry)
-# stac_api_io.session.verify = "/path/to/certfile" #? is it a fix to pystac_client APIError (request is blocked)?
 stac_endpoint = 'https://planetarycomputer.microsoft.com/api/stac/v1'
 api = pystac_client.Client.open(stac_endpoint, modifier=planetary_computer.sign_inplace, stac_io=stac_api_io)
 
@@ -113,6 +116,11 @@ def harmonize_to_old(data):
 
     new = xr.concat([new, new_harmonized], "band").sel(band=data.band.data.tolist())
     return xr.concat([old, new], dim="time")
+
+def backoff_hdlr(details):
+    print ("Backing off {wait:0.1f} seconds after {tries} tries "
+           "calling function {target} with args {args} and kwargs "
+           "{kwargs}".format(**details))
 
 def resign_items(items):
     """
@@ -428,7 +436,10 @@ class S2Downloader(DaskDownloader):
         best = patch_df.iloc[0]
 
         return best
-
+    
+    @on_exception(expo, pystac_client.exceptions.APIError, max_tries=3, on_backoff=backoff_hdlr, factor=60)
+    @on_exception(expo, RateLimitException, max_tries=30, on_backoff=backoff_hdlr)
+    @RateLimitDecorator(calls=10, period=1) #
     def query_s2_for_p(self, start, end, geom):
         """
         Query Sentinel-2 data for a given time range and geometry. 
