@@ -329,7 +329,8 @@ class S2Downloader(DaskDownloader):
             logger.info(f'{zone} {self.year}_partition_{partition_info["number"]} has been processed.')
             return
         partition = partition.reset_index(drop=True) # original index is not unique, shot_number is slow when partition.loc[xrrs.index]
-        xrrs = partition.apply(self.get_best_s2_for_point, axis=1, args=(esa_wc_items, glo30_itmes)).dropna()
+        cols = ['shot_number', 'date', 'leaf_on_doy', 'leaf_off_doy', 'leaf_off_flag', 'geometry']
+        xrrs = partition[cols].apply(self.get_best_s2_for_point, axis=1, args=(esa_wc_items, glo30_itmes)).dropna()
         if xrrs.empty:
             return
 
@@ -338,8 +339,8 @@ class S2Downloader(DaskDownloader):
         gedi_attr_da = partition[gedi_attr_dtype.keys()].to_xarray().to_dataarray('attr', 'gedi_attrs')
         latlon_da = partition[latlon_dtype.keys()].to_xarray().to_dataarray('xy', 'latlon')
         xrrs = dask.compute(*xrrs)
-        slope_da = xr.concat([s['slope'] for s in xrrs], dim='time', compat='override', coords='minimal', join='override')
-        xrrs = xr.concat([s['xrr'] for s in xrrs], dim='time', compat='override', coords='minimal', join='override')
+        slope_da = xr.concat([s['slope'] for s in xrrs], dim='shot_number', compat='override', coords='minimal', join='override')
+        xrrs = xr.concat([s['xrr'] for s in xrrs], dim='shot_number', compat='override', coords='minimal', join='override')
         xrrs.name = 'image'
         xrrs = xr.merge([xrrs, slope_da, rh_da.transpose(), gedi_attr_da.transpose(), latlon_da.transpose()])
         xrrs = xrrs.assign_attrs(partition_bounds=partition.total_bounds)
@@ -383,6 +384,8 @@ class S2Downloader(DaskDownloader):
         best_item = [item for item in items if item.id == best.id][0]
         s2xrr = get_patch(best_item, assets=self.bands, bounds=bounds, epsg=epsg, resolution=self.out_res)
         s2xrr = harmonize_to_old(s2xrr)
+        s2xrr = s2xrr.squeeze()
+
         wc_xrr = get_patch(esa_wc_items, assets=['map'], bounds=bounds, epsg=epsg, resolution=self.out_res)
         glo_xrr = get_patch(glo30_itmes, assets=['data'], bounds=bounds_slope, epsg=epsg, fill_value=np.nan, dtype='float32', resolution=self.out_res, resampling=Resampling.bilinear)
         if glo_xrr.shape[0] == 0 or wc_xrr.shape[0] == 0:
@@ -390,20 +393,22 @@ class S2Downloader(DaskDownloader):
         glo_xrr = glo_xrr.max(dim='time', skipna=True)
         slope_xrr = slope(glo_xrr[0]) # (band, x, y)
         slope_xrr = slope_xrr[1:-1, 1:-1] #remove nan
-        slope_xrr = slope_xrr.expand_dims(dim={'time': s2xrr['time'].data}, axis=0)
 
         wc_xrr = wc_xrr.max(dim='time', skipna=True)
-        wc_xrr = wc_xrr.expand_dims(dim={'time': s2xrr['time'].data}, axis=0)
         wc_xrr = wc_xrr.assign_coords(band=['esa_wc'])
 
-        s2xrr = s2xrr.assign_coords(spec=('time', [pickle.dumps(s2xrr.spec)]))
         xrr = xr.concat([s2xrr, wc_xrr], dim='band', compat='override', coords='minimal', combine_attrs='drop')
-        xrr = xrr.drop_vars('epsg')
+        xrr = xrr.expand_dims(dim={'shot_number': [point['shot_number']]}, axis=0) # return a view, not a copy
+
         best.delta_day = best.delta_day.astype('uint16')
         best.defective_cover = best.defective_cover.astype('float32')
-        new_coords = {k: ("time", [best[k]]) for k in ['delta_day','defective_cover']}
+        new_coords = {k: ("shot_number", [best[k]]) for k in ['delta_day','defective_cover']}
+        for coord in ['time', 'id']: # time, id, epsg
+            new_coords.update({coord: ("shot_number", [xrr[coord].data])})
+        new_coords.update({'epsg': ("shot_number", [xrr.epsg.data.astype('uint16')])})
+        new_coords.update({'spec': ("shot_number", [pickle.dumps(s2xrr.spec)])})
         xrr = xrr.assign_coords(new_coords)
-        return {'xrr': xrr, 'slope': slope_xrr}
+        return {'xrr': xrr, 'slope': slope_xrr.drop_vars('epsg')}
 
     
     def calculate_defective_cover(self, items, bounds, date, epsg):
