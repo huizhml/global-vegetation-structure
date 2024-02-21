@@ -25,6 +25,7 @@ from backoff import on_exception, expo
 import dask
 import dask_geopandas as dgp
 from dask.distributed import Lock
+from dask.utils import natural_sort_key
 import pandas as pd
 import geopandas as gpd
 import dask.dataframe as dd
@@ -281,38 +282,61 @@ class S2Downloader(DaskDownloader):
         Returns:
             str: A string indicating the status of the processing. Returns 'done' if the zone and year have already been processed.
         '''
-        zoneFolder = self.gediFolder / zone
-        (self.save_dir/zone).mkdir(exist_ok=True, parents=True)
-        flag = self.save_dir/ f'{zone}_{self.year}_done'
-        if rewrite:
-            if flag.exists(): os.remove(flag)
-            for f in (self.save_dir/zone).glob('*'):
-                os.remove(f)
-        if flag.exists():
-            logger.info(f'{zone} {self.year} has been processed.')
-            return
+        if isinstance(zone, str):
+            (self.save_dir/zone).mkdir(exist_ok=True, parents=True)
+            flag = self.save_dir/ f'{zone}_{self.year}_done'
+            if rewrite:
+                if flag.exists(): os.remove(flag)
+                for f in (self.save_dir/zone).glob('*'):
+                    os.remove(f)
+            if flag.exists():
+                logger.info(f'{zone} {self.year} has been processed.')
+                return
+            
+            gediDf = dgp.read_parquet(self.gediFolder / f'{zone}/partition*.parquet', dropna=True) #, split_row_groups=True
+        else:
+            paths = []
+            for z in zone:
+                (self.save_dir/z).mkdir(exist_ok=True, parents=True)
+                flag = self.save_dir/ f'{z}_{self.year}_done'
+                if rewrite:
+                    if flag.exists(): os.remove(flag)
+                    for f in (self.save_dir/z).glob('*'):
+                        os.remove(f)
+                if flag.exists():
+                    logger.info(f'{z} {self.year} has been processed.')
+                    continue
+                paths.extend(list(self.gediFolder.glob(f'{z}/partition*.parquet')))
+            if len(paths) == 0:
+                logger.info(f'All zones: {zone} in {self.year} have been processed.')
+                return
+            paths = [str(p) for p in paths]
+            paths = sorted(paths, key=natural_sort_key)
+            divisions = tuple(paths + [paths[-1]])
+            gediDf = dgp.read_parquet(paths, dropna=True)
+            gediDf.divisions = divisions
         
-        bounds = self.get_zone_bbox(zone)
-        esa_wc_items = api.search(
-            collections=['esa-worldcover'],
-            bbox=bounds,
-            datetime=f'{self.esa_wc_year}-01-01/{self.esa_wc_year}-12-31').item_collection()
-        glo30_itmes = api.search(collections=['cop-dem-glo-30'],
-                                 bbox=bounds).item_collection()
-        
-        gediDf = dgp.read_parquet(self.gediFolder / f'{zone}/partition*.parquet', dropna=True) #, split_row_groups=True
         logger.info(f'Processing {gediDf.npartitions} partitions...')
+
         # number = 4
-        # df = self.get_patch_for_partition(gediDf.get_partition(number).compute(), zone, esa_wc_items, glo30_itmes, rewrite=True, partition_info={'number': number})
+        # df = self.get_patch_for_partition(gediDf.get_partition(number).compute(), zone, rewrite=True, partition_info={'number': number})
         # logger.info('test done')
-        df = gediDf.map_partitions(self.get_patch_for_partition, zone, esa_wc_items, glo30_itmes, rewrite, meta=(None, 'string'))
+        df = gediDf.map_partitions(self.get_patch_for_partition, zone, rewrite, meta=(None, 'string'))
         self.schedule_tasks(df)
-        if len(os.listdir(self.save_dir / zone)) == df.npartitions: # all partitions are done
-            flag.touch()
         
+        # Create flags
+        if isinstance(zone, str):
+            if len(os.listdir(self.save_dir / zone)) == df.npartitions: # all partitions are done
+                flag.touch()
+        else:
+            for p in paths:
+                zone = Path(p).parent.name
+                # check if if #partition parquet files == #zone/year_partition_done files
+                if len(os.listdir(self.save_dir / zone)) == len(list((self.gediFolder/zone).glob('partition*.parquet'))):
+                    (self.save_dir/ f'{zone}_{self.year}_done').touch()
         return
 
-    def get_patch_for_partition(self, partition, zone:str, esa_wc_items:pystac.ItemCollection,glo30_itmes:pystac.ItemCollection, rewrite:bool=False, partition_info:dict=None):
+    def get_patch_for_partition(self, partition, zone:str, rewrite:bool=False, partition_info:dict=None):
         """
         Query, filter, and stack S2 and ESA world cover patches for each GEDI partition.
         GEDI data is partitioned to cache a number of locations for the sake of memory efficiency.
@@ -323,11 +347,23 @@ class S2Downloader(DaskDownloader):
             esa_wc_items (pystac.ItemCollection): The collection of ESA WC items.
             partition_info (dict, optional): Information about the partition.
         """
-        
-        flag = self.save_dir / zone / f'{self.year}_partition_{partition_info["number"]}_done'
+        if partition_info["division"] is not None:
+            zone = partition_info["division"].split('/')[-2]
+            partition_number = int(partition_info["division"].split('_')[1].split('.')[0])
+        else:
+            partition_number = partition_info['number']
+
+        flag = self.save_dir / zone / f'{self.year}_partition_{partition_number}_done'
         if flag.exists() and not rewrite:
-            logger.info(f'{zone} {self.year}_partition_{partition_info["number"]} has been processed.')
+            logger.info(f'{zone} {self.year}_partition_{partition_number} has been processed.')
             return
+
+        esa_wc_items = api.search(
+            collections=['esa-worldcover'],
+            bbox=partition.total_bounds,
+            datetime=f'{self.esa_wc_year}-01-01/{self.esa_wc_year}-12-31').item_collection()
+        glo30_itmes = api.search(collections=['cop-dem-glo-30'],
+                                 bbox=partition.total_bounds).item_collection()
         partition = partition.reset_index(drop=True) # original index is not unique, shot_number is slow when partition.loc[xrrs.index]
         cols = ['shot_number', 'date', 'leaf_on_doy', 'leaf_off_doy', 'leaf_off_flag', 'geometry']
         xrrs = partition[cols].apply(self.get_best_s2_for_point, axis=1, args=(esa_wc_items, glo30_itmes)).dropna()
@@ -345,10 +381,10 @@ class S2Downloader(DaskDownloader):
         xrrs = xr.merge([xrrs, slope_da, rh_da.transpose(), gedi_attr_da.transpose(), latlon_da.transpose()])
         xrrs = xrrs.assign_attrs(partition_bounds=partition.total_bounds)
         with Lock('netcdf_lock'):
-            xrrs.to_netcdf(self.save_dir / f'{zone}.h5', group=f'{self.year}/{partition_info["number"]}', format='NETCDF4', engine='h5netcdf', encoding=self.comp, mode='a')
+            xrrs.to_netcdf(self.save_dir / f'{zone}.h5', group=f'{self.year}/{partition_number}', format='NETCDF4', engine='h5netcdf', encoding=self.comp, mode='a')
         flag.touch()
 
-    def get_best_s2_for_point(self, point, esa_wc_items, glo30_itmes):
+    def get_best_s2_for_point(self, point, esa_wc_items:pystac.ItemCollection,glo30_itmes:pystac.ItemCollection,):
         '''
         Qeury and Filter S2 tiles for each GEDI point
         - Query by date, cloud cover, water percentage, and Filter by leaf on/off dates
@@ -445,9 +481,9 @@ class S2Downloader(DaskDownloader):
 
         return best
     
-    @on_exception(expo, pystac_client.exceptions.APIError, max_tries=3, on_backoff=backoff_hdlr, factor=60)
-    @on_exception(expo, RateLimitException, max_tries=30, on_backoff=backoff_hdlr)
-    @RateLimitDecorator(calls=10, period=1) # # concurrent requests for zones with less s2 coverage might be high
+    # @on_exception(expo, pystac_client.exceptions.APIError, max_tries=3, on_backoff=backoff_hdlr, factor=60)
+    # @on_exception(expo, RateLimitException, max_tries=30, on_backoff=backoff_hdlr)
+    # @RateLimitDecorator(calls=10, period=1) # # concurrent requests for zones with less s2 coverage might be high
     def query_s2_for_p(self, start, end, geom):
         """
         Query Sentinel-2 data for a given time range and geometry. 
@@ -496,25 +532,12 @@ def main(cfg):
 
     
     s2downloader = S2Downloader(**cfg)
-    if isinstance(cfg.zone, str):
-        zones = [cfg.zone]
-    else:
-        zones = cfg.zone
-    for zone in zones:
-        t0 = time.time()
-        logger.info(f'processing zone: {zone}')
-        res = s2downloader.download_zone(zone, cfg.rewrite)
-        logger.info(f'time taken for {zone}: {time.time() - t0}')
+    t0 = time.time()
+    logger.info(f'processing zone: {cfg.zone}')
+    res = s2downloader.download_zone(cfg.zone, cfg.rewrite)
+    logger.info(f'time taken for {cfg.zone}: {time.time() - t0}')
 
 
-def download(func, zone):
-    try:
-        func(zone)
-    except Exception as e:
-        logger.info(e)
-        time.sleep(60*10)
-        logger.info("restarting")
-        download(func, zone)
 
 #%%
 if __name__ == "__main__":
