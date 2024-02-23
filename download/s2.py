@@ -1,6 +1,7 @@
 
 #%%
 import os
+import gc
 import time
 import json
 import random
@@ -18,13 +19,11 @@ import pystac_client
 import planetary_computer
 from urllib3 import Retry
 from pystac_client.stac_api_io import StacApiIO
-from ratelimit.exception import RateLimitException
-from ratelimit import sleep_and_retry
-from backoff import on_exception, expo
+
 
 import dask
 import dask_geopandas as dgp
-from dask.distributed import Lock
+from dask.distributed import Lock, Semaphore
 from dask.utils import natural_sort_key
 import pandas as pd
 import geopandas as gpd
@@ -32,6 +31,7 @@ import dask.dataframe as dd
 import pyproj
 from xrspatial import slope
 from rasterio.enums import Resampling
+from rasterio.errors import RasterioIOError
 import shapely
 
 import ipdb
@@ -41,11 +41,11 @@ from dotenv import load_dotenv
 from utils._stackstac import stack
 from const import dtypes, gedi_attr_dtype, rh_dtype, latlon_dtype
 from download.dask_downloader import DaskDownloader
-from download.utils import RateLimitDecorator
 #%%
 load_dotenv('.planetarycomputer/settings.env')
-
 os.environ["GDAL_HTTP_MAX_RETRY"] = "3"
+g0, g1, g2 = gc.get_count()
+gc.set_threshold(g0*5, g1*5, g2 * 5)
 
 retry = Retry(
     total=10, backoff_factor=1, status_forcelist=[502, 503, 504], allowed_methods=None
@@ -193,6 +193,7 @@ class S2Downloader(DaskDownloader):
     def __init__(self,
                  year: int = 2019,
                  n_parallel: int = 100,
+                 sem_max_release: int = 60,
                  data_dir = 'GEDI',
                  save_dir: str = 'data/GEDI',
                  patch_size: int = 15,
@@ -207,7 +208,7 @@ class S2Downloader(DaskDownloader):
                  **kwargs
                 ) -> None:
         super().__init__(n_parallel=n_parallel, max_retries=3, **kwargs)
-        self.mgrs_df = gpd.read_parquet(Path.home() / f'GEDI/{mgrs_file}')
+        # self.mgrs_df = gpd.read_parquet(Path.home() / f'GEDI/{mgrs_file}')
         self.gediFolder = Path.home() / f'{data_dir}/{year}'
         self.save_dir = Path.home() / save_dir
         self.year = year 
@@ -218,6 +219,7 @@ class S2Downloader(DaskDownloader):
         self.maxCloudCover = maxCloudCover
         self.maxWaterPercentage = maxWaterPercentage
         self.n_parallel = n_parallel
+        self.sem = Semaphore(sem_max_release, name='max_queries', register=True)
         self.bands = [
             'B01', 'B04', 'B03', 'B02', 'B05', 'B06', 'B07', 'B08', 'B8A',
             'B09', 'B11', 'B12', 'SCL'
@@ -317,9 +319,22 @@ class S2Downloader(DaskDownloader):
             gediDf.divisions = divisions
         
         logger.info(f'Processing {gediDf.npartitions} partitions...')
+        with_growing_season = (gediDf['leaf_on_doy'] < 366) & (gediDf['leaf_off_flag'] == 0)
+        # leaf off date is in the next year
+        reverse = gediDf['leaf_on_doy'] > gediDf['leaf_off_doy']
+        gediDf['leaf_off_doy'] = gediDf['leaf_off_doy'].mask(reverse, gediDf['leaf_off_doy'] + 365)
 
-        # number = 4
-        # df = self.get_patch_for_partition(gediDf.get_partition(number).compute(), zone, rewrite=True, partition_info={'number': number})
+        leaf_on_doy = dd.to_timedelta(gediDf['leaf_on_doy'], unit='D')
+        leaf_off_doy = dd.to_timedelta(gediDf['leaf_off_doy'], unit='D')
+
+        gediDf['start'] = dd.to_datetime(gediDf['date']) - self.queryDaysRange
+        gediDf['end'] = dd.to_datetime(gediDf['date']) + self.queryDaysRange
+        gediDf['start'] = gediDf['start'].mask(with_growing_season, self.yearStart + leaf_on_doy)
+        gediDf['end'] = gediDf['end'].mask(with_growing_season, self.yearStart + leaf_off_doy)
+
+
+        # number = 0
+        # df = self.get_patch_for_partition(gediDf.get_partition(number).compute(), zone, rewrite=True, partition_info={'number': number, 'division': None})
         # logger.info('test done')
         df = gediDf.map_partitions(self.get_patch_for_partition, zone, rewrite, meta=(None, 'string'))
         self.schedule_tasks(df)
@@ -365,12 +380,19 @@ class S2Downloader(DaskDownloader):
         glo30_itmes = api.search(collections=['cop-dem-glo-30'],
                                  bbox=partition.total_bounds).item_collection()
         partition = partition.reset_index(drop=True) # original index is not unique, shot_number is slow when partition.loc[xrrs.index]
-        cols = ['shot_number', 'date', 'leaf_on_doy', 'leaf_off_doy', 'leaf_off_flag', 'geometry']
-        xrrs = partition[cols].apply(self.get_best_s2_for_point, axis=1, args=(esa_wc_items, glo30_itmes)).dropna()
-        if xrrs.empty:
+        xrrs = []
+        keep = []
+        cols = ['shot_number', 'date', 'start', 'end', 'geometry']
+        for row in partition[cols].itertuples():
+            best = self.get_best_s2_for_point(row, esa_wc_items, glo30_itmes)
+            if best is not None:
+                xrrs.append(best)
+                keep.append(row.Index)
+        if len(xrrs) == 0:
+            (self.save_dir / zone / f'{self.year}_partition_{partition_number}_0_found').touch()
             return
 
-        partition = partition.loc[xrrs.index].set_index('shot_number')
+        partition = partition.loc[keep].set_index('shot_number')
         rh_da = partition[rh_dtype.keys()].to_xarray().to_dataarray('rh', 'rhs')
         gedi_attr_da = partition[gedi_attr_dtype.keys()].to_xarray().to_dataarray('attr', 'gedi_attrs')
         latlon_da = partition[latlon_dtype.keys()].to_xarray().to_dataarray('xy', 'latlon')
@@ -390,20 +412,8 @@ class S2Downloader(DaskDownloader):
         - Query by date, cloud cover, water percentage, and Filter by leaf on/off dates
         - Filter by defective cover (patch level)
         '''
-        # get the time range
-        if point['leaf_on_doy'] < 366 and point['leaf_off_flag'] == 0: # point captured in growing season
-            leaf_on_doy = pd.to_timedelta(int(point['leaf_on_doy']), unit='D')
-            leaf_off_doy = pd.to_timedelta(int(point['leaf_off_doy']), unit='D')
-            if leaf_on_doy > leaf_off_doy:
-                leaf_off_doy += pd.to_timedelta(365, unit='D')
-            start = self.yearStart + leaf_on_doy
-            end = self.yearStart + leaf_off_doy
-        else:
-            start = pd.Timestamp(point['date'], tz='UTC') - self.queryDaysRange
-            end = pd.Timestamp(point['date'], tz='UTC') + self.queryDaysRange
-        geom = point['geometry']
-        # geom = shapely.from_wkb(point['geometry'])
-        items = self.query_s2_for_p(start, end, geom) #? how to make it non-blocking, return a future
+        geom = point.geometry 
+        items = self.query_s2_for_p(point.start, point.end, geom)
         
         if items is None:
             return None
@@ -414,7 +424,7 @@ class S2Downloader(DaskDownloader):
         bounds = geom.buffer(self.buffer_size).bounds
         bounds_slope = geom.buffer(self.buffer_size+self.out_res).bounds
 
-        best = self.calculate_defective_cover(items, bounds, point['date'], epsg)
+        best = self.calculate_defective_cover(items, bounds, point.date, epsg)
         if best is None:
             return
         best_item = [item for item in items if item.id == best.id][0]
@@ -434,7 +444,7 @@ class S2Downloader(DaskDownloader):
         wc_xrr = wc_xrr.assign_coords(band=['esa_wc'])
 
         xrr = xr.concat([s2xrr, wc_xrr], dim='band', compat='override', coords='minimal', combine_attrs='drop')
-        xrr = xrr.expand_dims(dim={'shot_number': [point['shot_number']]}, axis=0) # return a view, not a copy
+        xrr = xrr.expand_dims(dim={'shot_number': [point.shot_number]}, axis=0) # return a view, not a copy
 
         best.delta_day = best.delta_day.astype('uint16')
         best.defective_cover = best.defective_cover.astype('float32')
@@ -481,9 +491,6 @@ class S2Downloader(DaskDownloader):
 
         return best
     
-    # @on_exception(expo, pystac_client.exceptions.APIError, max_tries=3, on_backoff=backoff_hdlr, factor=60)
-    # @on_exception(expo, RateLimitException, max_tries=30, on_backoff=backoff_hdlr)
-    # @RateLimitDecorator(calls=10, period=1) # # concurrent requests for zones with less s2 coverage might be high
     def query_s2_for_p(self, start, end, geom):
         """
         Query Sentinel-2 data for a given time range and geometry. 
@@ -497,36 +504,35 @@ class S2Downloader(DaskDownloader):
         Returns:
             list: List of Sentinel-2 items matching the query criteria, or None if no items found.
         """
-        search = api.search(collections=['sentinel-2-l2a'],
-                            query={
-                                "eo:cloud_cover": {
-                                    "lt": self.maxCloudCover
+        with self.sem: #? what will happen if sem times out, will we get items?
+            search = api.search(collections=['sentinel-2-l2a'],
+                                query={
+                                    "eo:cloud_cover": {
+                                        "lt": self.maxCloudCover
+                                    },
+                                    's2:water_percentage': {
+                                        'lt': self.maxWaterPercentage
+                                    }
                                 },
-                                's2:water_percentage': {
-                                    'lt': self.maxWaterPercentage
-                                }
-                            },
-                            intersects=geom,
-                            datetime=f'{str(start)[:10]}/{str(end)[:10]}')
-        items = search.item_collection()
+                                intersects=geom,
+                                datetime=f'{str(start)[:10]}/{str(end)[:10]}')
+            items = search.item_collection()
         if len(items) > 0:
             return items
         if len(items) == 0 and (end - start).days < 365:
             logger.info(f'No S2 tile found between {start} - {end}, extend the range by {self.extendDays.days*2} days')
-            time.sleep(random.random())
             items = self.query_s2_for_p(start - self.extendDays,
                                            end + self.extendDays, geom)
             return items
         else:
             return None
 
-
 #%%
 @hydra.main(config_path="../config", config_name="s2_download", version_base="1.2")
 def main(cfg):
     from dask.distributed import Client, LocalCluster
     from dask import config 
-    config.set({'interface': 'lo'}) # failed to fix the error: dask.distributed - ERROR - Failed to gather key
+    config.set({'distributed.scheduler.locks.lease-timeout': 60}) 
     cluster = LocalCluster()
     client = Client(cluster)#timeout
 
