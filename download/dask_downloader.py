@@ -73,4 +73,7 @@ class DaskDownloader:
                 logger.info(f'************ partition {total_tasks - n_left} submitted ****************')
                 logger.info(f'{futures_monitor.count()} in processing, {n_left} waiting')
                 n_left -= 1
+            else:
+                logger.info(f'************ all partitions submitted ****************')
+                logger.info(f'{futures_monitor.count()} in processing, 0 waiting')
             
