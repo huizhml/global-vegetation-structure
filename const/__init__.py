@@ -12,8 +12,6 @@ gedi_attr_dtype = {
     'energy_total': 'float32',
     'landsat_treecover': 'float64',
     'landsat_water_persistence': 'uint8',
-    'lat_highestreturn': 'float64',
-    'lon_highestreturn': 'float64',
     'leaf_off_doy': 'int16',
     'leaf_off_flag': 'uint8',
     'leaf_on_doy': 'int16',
@@ -36,7 +34,11 @@ gedi_attr_dtype = {
     'urban_focal_window_size': 'uint8',
     'urban_proportion': 'uint8',
 }
-dtypes = {**gedi_attr_dtype, **rh_dtype}
+latlon_dtype = {
+    'lat_highestreturn': 'float64',
+    'lon_highestreturn': 'float64',
+}
+dtypes = {**gedi_attr_dtype, **latlon_dtype, **rh_dtype}
 # %%
 
 s2_item_props = ['datetime', 
