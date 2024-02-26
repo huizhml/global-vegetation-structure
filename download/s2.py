@@ -427,7 +427,7 @@ class S2Downloader(DaskDownloader):
         best = self.calculate_defective_cover(items, bounds, point.date, epsg)
         if best is None:
             return
-        best_item = [item for item in items if item.id == best.id][0]
+        best_item = [item for item in items if item.id == best.id.iloc[0]][0]
         s2xrr = get_patch(best_item, assets=self.bands, bounds=bounds, epsg=epsg, resolution=self.out_res)
         s2xrr = harmonize_to_old(s2xrr)
         s2xrr = s2xrr.squeeze()
@@ -446,9 +446,7 @@ class S2Downloader(DaskDownloader):
         xrr = xr.concat([s2xrr, wc_xrr], dim='band', compat='override', coords='minimal', combine_attrs='drop')
         xrr = xrr.expand_dims(dim={'shot_number': [point.shot_number]}, axis=0) # return a view, not a copy
 
-        best.delta_day = best.delta_day.astype('uint16')
-        best.defective_cover = best.defective_cover.astype('float32')
-        new_coords = {k: ("shot_number", [best[k]]) for k in ['delta_day','defective_cover']}
+        new_coords = {k: ("shot_number", best[k]) for k in ['delta_day','defective_cover']}
         for coord in ['time', 'id']: # time, id, epsg
             new_coords.update({coord: ("shot_number", [xrr[coord].data])})
         new_coords.update({'epsg': ("shot_number", [xrr.epsg.data.astype('uint16')])})
@@ -487,8 +485,11 @@ class S2Downloader(DaskDownloader):
         })
         
         patch_df = patch_df.sort_values(['defective_cover', 'delta_day'])
-        best = patch_df.iloc[0]
-
+        best = patch_df.iloc[:1]
+        best = best.astype({
+            'defective_cover': 'float32',
+            'delta_day': 'uint16'
+        })
         return best
     
     def query_s2_for_p(self, start, end, geom):
@@ -535,10 +536,11 @@ def main(cfg):
     config.set({'distributed.scheduler.locks.lease-timeout': 60}) 
     cluster = LocalCluster()
     client = Client(cluster)#timeout
+    print(client)
 
-    
     s2downloader = S2Downloader(**cfg)
     t0 = time.time()
+
     logger.info(f'processing zone: {cfg.zone}')
     res = s2downloader.download_zone(cfg.zone, cfg.rewrite)
     logger.info(f'time taken for {cfg.zone}: {time.time() - t0}')
