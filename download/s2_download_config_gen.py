@@ -42,7 +42,7 @@ def gen_config_for_zone(zone_folder, year):
 
 @hydra.main(config_path='../config', config_name='s2_download', version_base='1.2')
 def main(cfg):
-    from dask.distributed import LocalCluster, Client, wait
+    from dask.distributed import LocalCluster, Client
     cluster = LocalCluster()
     client = Client(cluster)
     if isinstance(cfg.year, int):
@@ -57,6 +57,9 @@ def main(cfg):
             s2_data_dir = Path.home() / cfg.save_dir
             if not os.path.isdir(data_folder / zone):
                 continue
+            if cfg.rewrite:
+                logger.info(f'remove partitions in {zone}...')
+                os.system(f'rm -rf {data_folder / zone}/partition*')
             if not (data_folder / zone / 'partition_0.parquet').exists():
                 logger.info(f'repartition {zone}...')
                 repartition(data_folder, zone, cfg.partition_size)
