@@ -48,7 +48,7 @@ g0, g1, g2 = gc.get_count()
 gc.set_threshold(g0*5, g1*5, g2 * 5)
 
 retry = Retry(
-    total=10, backoff_factor=1, status_forcelist=[502, 503, 504], allowed_methods=None
+    total=5, backoff_factor=1, status_forcelist=[502, 503, 504], allowed_methods=None # too many retries cause worker sleep too long when backoff_factor is 1
 )
 stac_api_io = StacApiIO(max_retries=retry)
 stac_endpoint = 'https://planetarycomputer.microsoft.com/api/stac/v1'
@@ -160,6 +160,8 @@ def get_patch(items,
     try:
         patch = stack(items, **default_args, **kwargs)
     except:
+        #TODO: rasterioerror still occurs sometimes, the url indeed didn't work, why?
+        # TODO: this will fail the whole partition, how to catch such error and retry?
         # token might expire, sign again
         items = resign_items(items)
         patch = stack(items, **default_args, **kwargs)
@@ -534,6 +536,9 @@ def main(cfg):
     from dask.distributed import Client, LocalCluster
     from dask import config 
     config.set({'distributed.scheduler.locks.lease-timeout': 60}) 
+    # might fix the communication error caused by I/O. ref: https://github.com/dask/distributed/issues/3129#issuecomment-1684858307
+    dask.config.set({"distributed.comm.retry.count": 10})
+    dask.config.set({"distributed.comm.timeouts.connect": 30}) 
     cluster = LocalCluster()
     client = Client(cluster)#timeout
     print(client)
