@@ -196,6 +196,7 @@ class S2Downloader(DaskDownloader):
                  year: int = 2019,
                  n_parallel: int = 100,
                  sem_max_release: int = 60,
+                 root_dir: str = None,
                  data_dir = 'GEDI',
                  save_dir: str = 'data/GEDI',
                  patch_size: int = 15,
@@ -211,8 +212,9 @@ class S2Downloader(DaskDownloader):
                 ) -> None:
         super().__init__(n_parallel=n_parallel, max_retries=3, **kwargs)
         # self.mgrs_df = gpd.read_parquet(Path.home() / f'GEDI/{mgrs_file}')
-        self.gediFolder = Path.home() / f'{data_dir}/{year}'
-        self.save_dir = Path.home() / save_dir
+        root_dir = Path(root_dir) if root_dir else Path.home()
+        self.gediFolder = root_dir / f'{data_dir}/{year}'
+        self.save_dir = root_dir / save_dir
         self.year = year 
         self.esa_wc_year = esa_wc_year
         self.yearStart = pd.Timestamp(f'{self.year}-01-01', tz='UTC')
@@ -549,7 +551,7 @@ def main(cfg):
     logger.info(f'processing zone: {cfg.zone}')
     res = s2downloader.download_zone(cfg.zone, cfg.rewrite)
     logger.info(f'time taken for {cfg.zone}: {time.time() - t0}')
-
+    client.close()
 
 
 #%%

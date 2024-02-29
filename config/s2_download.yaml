@@ -2,6 +2,7 @@ zone: 32M
 year: 2019
 n_parallel: 60
 partition_size: 256K
+root_dir:
 data_dir: GEDI
 save_dir: data/GEDI
 rewrite: False
