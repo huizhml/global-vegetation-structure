@@ -440,8 +440,9 @@ class S2Downloader(DaskDownloader):
         glo_xrr = get_patch(glo30_itmes, assets=['data'], bounds=bounds_slope, epsg=epsg, fill_value=np.nan, dtype='float32', resolution=self.out_res, resampling=Resampling.bilinear)
         if glo_xrr.shape[0] == 0 or wc_xrr.shape[0] == 0:
             return None
-        glo_xrr = glo_xrr.max(dim='time', skipna=True)
-        slope_xrr = slope(glo_xrr[0]) # (band, x, y)
+        glo_xrr = glo_xrr.max(dim='time', skipna=True)[0]
+        glo_xrr.attrs['res'] = self.out_res
+        slope_xrr = slope(glo_xrr) # (band, x, y)
         slope_xrr = slope_xrr[1:-1, 1:-1] #remove nan
 
         wc_xrr = wc_xrr.max(dim='time', skipna=True)
