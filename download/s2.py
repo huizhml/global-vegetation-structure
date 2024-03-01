@@ -19,7 +19,9 @@ import pystac_client
 import planetary_computer
 from urllib3 import Retry
 from pystac_client.stac_api_io import StacApiIO
-
+# disable cuda before importing numba (CudaAPIError(3, 'Call to cuCtxGetCurrent results in CUDA_ERROR_NOT_INITIALIZED'))
+# numba is used to calcluate slope
+os.environ['NUMBA_DISABLE_CUDA'] = '1'
 
 import dask
 import dask_geopandas as dgp
@@ -345,13 +347,15 @@ class S2Downloader(DaskDownloader):
         
         # Create flags
         if isinstance(zone, str):
-            if len(os.listdir(self.save_dir / zone)) == df.npartitions: # all partitions are done
+            flags = list(self.save_dir.glob(f'{zone}/{self.year}*'))
+            if len(flags) == df.npartitions: # all partitions are done
                 flag.touch()
         else:
             for p in paths:
                 zone = Path(p).parent.name
                 # check if if #partition parquet files == #zone/year_partition_done files
-                if len(os.listdir(self.save_dir / zone)) == len(list((self.gediFolder/zone).glob('partition*.parquet'))):
+                flags = list(self.save_dir.glob(f'{zone}/{self.year}*'))
+                if len(flags) == len(list((self.gediFolder/zone).glob('partition*.parquet'))):
                     (self.save_dir/ f'{zone}_{self.year}_done').touch()
         return
 
