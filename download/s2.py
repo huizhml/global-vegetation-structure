@@ -230,8 +230,12 @@ class S2Downloader(DaskDownloader):
             'B01', 'B04', 'B03', 'B02', 'B05', 'B06', 'B07', 'B08', 'B8A',
             'B09', 'B11', 'B12', 'SCL'
         ]
+        self.patch_size_in_meters = patch_size * out_res
         self.out_res = out_res
         self.buffer_size = patch_size // 2 * out_res # in meters
+        self.dem_res = 30
+        dem_buffer_size_in_pixel = self.patch_size_in_meters // self.dem_res // 2 + 2 # 2 pixels buffer for slope and upsampling
+        self.dem_buffer_size = dem_buffer_size_in_pixel * self.dem_res
         self.patch_size = (self.buffer_size * 2 + out_res) / out_res
         self.comp = {
             'image':{
@@ -256,7 +260,7 @@ class S2Downloader(DaskDownloader):
                 "zlib": True,
                 "complevel": comp_level,
                 "fletcher32": True,
-                "chunksizes": (1,self.patch_size,self.patch_size)
+                "chunksizes": (1,5,5)
             }
         }
 
@@ -430,7 +434,7 @@ class S2Downloader(DaskDownloader):
         epsg = get_most_common_epsg(items)
         geom = gpd.GeoSeries(geom, crs='EPSG:4326').to_crs(epsg)[0]
         bounds = geom.buffer(self.buffer_size).bounds
-        bounds_slope = geom.buffer(self.buffer_size+self.out_res).bounds
+        bounds_slope = geom.buffer(self.dem_buffer_size).bounds # self.buffer_size+self.out_res
 
         best = self.calculate_defective_cover(items, bounds, point.date, epsg)
         if best is None:
@@ -441,13 +445,19 @@ class S2Downloader(DaskDownloader):
         s2xrr = s2xrr.squeeze()
 
         wc_xrr = get_patch(esa_wc_items, assets=['map'], bounds=bounds, epsg=epsg, resolution=self.out_res)
-        glo_xrr = get_patch(glo30_itmes, assets=['data'], bounds=bounds_slope, epsg=epsg, fill_value=np.nan, dtype='float32', resolution=self.out_res, resampling=Resampling.bilinear)
+        # glo_xrr = get_patch(glo30_itmes, assets=['data'], bounds=bounds_slope, epsg=epsg, fill_value=np.nan, dtype='float32', resolution=self.out_res, resampling=Resampling.bilinear)
+        glo_xrr = get_patch(glo30_itmes, assets=['data'], bounds=bounds_slope, epsg=epsg, fill_value=np.nan, dtype='float32', resolution=self.dem_res)
+        
         if glo_xrr.shape[0] == 0 or wc_xrr.shape[0] == 0:
             return None
         glo_xrr = glo_xrr.max(dim='time', skipna=True)[0]
-        glo_xrr.attrs['res'] = self.out_res
+        glo_xrr.attrs['res'] = self.dem_res #self.out_res
         slope_xrr = slope(glo_xrr) # (band, x, y)
-        slope_xrr = slope_xrr[1:-1, 1:-1] #remove nan
+        w, h = slope_xrr.shape
+        slope_xrr = slope_xrr.assign_coords(x=range(1,3*w, 3), y=range(1,3*h, 3)) # set xy coords to the center of the pixel (to match s2 xrr coords)
+        slope_xrr = slope_xrr.interp(x=range(3*w), y=range(3*h))
+        slope_xrr = slope_xrr[6:-6, 6:-6] #remove nan
+        slope_xrr = slope_xrr.assign_coords(x=wc_xrr.x, y=wc_xrr.y) # set xy coords back to 0-14
 
         wc_xrr = wc_xrr.max(dim='time', skipna=True)
         wc_xrr = wc_xrr.assign_coords(band=['esa_wc'])
