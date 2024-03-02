@@ -31,7 +31,8 @@ import pandas as pd
 import geopandas as gpd
 import dask.dataframe as dd
 import pyproj
-from xrspatial import slope
+# from xrspatial import slope
+from download._slope import slope
 from rasterio.enums import Resampling
 from rasterio.errors import RasterioIOError
 import shapely
@@ -260,7 +261,7 @@ class S2Downloader(DaskDownloader):
                 "zlib": True,
                 "complevel": comp_level,
                 "fletcher32": True,
-                "chunksizes": (1,5,5)
+                "chunksizes": (1,self.patch_size,self.patch_size)
             }
         }
 
@@ -344,7 +345,7 @@ class S2Downloader(DaskDownloader):
 
 
         # number = 0
-        # df = self.get_patch_for_partition(gediDf.get_partition(number).compute(), zone, rewrite=True, partition_info={'number': number, 'division': None})
+        # df = self.get_patch_for_partition(gediDf.get_partition(number).compute()[:5], zone, rewrite=True, partition_info={'number': number, 'division': None})
         # logger.info('test done')
         df = gediDf.map_partitions(self.get_patch_for_partition, zone, rewrite, meta=(None, 'string'))
         self.schedule_tasks(df)
@@ -411,6 +412,16 @@ class S2Downloader(DaskDownloader):
         xrrs = dask.compute(*xrrs)
         slope_da = xr.concat([s['slope'] for s in xrrs], dim='shot_number', compat='override', coords='minimal', join='override')
         xrrs = xr.concat([s['xrr'] for s in xrrs], dim='shot_number', compat='override', coords='minimal', join='override')
+
+        slope_da.attrs['res'] = self.dem_res #self.out_res
+        slope_da = slope(slope_da) # (band, x, y)
+        w, h = slope_da.shape[-2:]
+        slope_da = slope_da.assign_coords(x=range(1,3*w, 3), y=range(1,3*h, 3)) # set xy coords to the center of the pixel (to match s2 xrr coords)
+        slope_da = slope_da.interp(x=range(3*w), y=range(3*h))
+        slope_da = slope_da.isel(x=slice(6,-6), y=slice(6,-6)) #remove nan
+        slope_da = slope_da.assign_coords(x=xrrs.x, y=xrrs.y) # set xy coords back to 0-14
+        slope_da = slope_da.drop_vars(['x', 'y'])
+
         xrrs.name = 'image'
         xrrs = xr.merge([xrrs, slope_da, rh_da.transpose(), gedi_attr_da.transpose(), latlon_da.transpose()])
         xrrs = xrrs.assign_attrs(partition_bounds=partition.total_bounds)
@@ -451,13 +462,6 @@ class S2Downloader(DaskDownloader):
         if glo_xrr.shape[0] == 0 or wc_xrr.shape[0] == 0:
             return None
         glo_xrr = glo_xrr.max(dim='time', skipna=True)[0]
-        glo_xrr.attrs['res'] = self.dem_res #self.out_res
-        slope_xrr = slope(glo_xrr) # (band, x, y)
-        w, h = slope_xrr.shape
-        slope_xrr = slope_xrr.assign_coords(x=range(1,3*w, 3), y=range(1,3*h, 3)) # set xy coords to the center of the pixel (to match s2 xrr coords)
-        slope_xrr = slope_xrr.interp(x=range(3*w), y=range(3*h))
-        slope_xrr = slope_xrr[6:-6, 6:-6] #remove nan
-        slope_xrr = slope_xrr.assign_coords(x=wc_xrr.x, y=wc_xrr.y) # set xy coords back to 0-14
 
         wc_xrr = wc_xrr.max(dim='time', skipna=True)
         wc_xrr = wc_xrr.assign_coords(band=['esa_wc'])
@@ -471,7 +475,7 @@ class S2Downloader(DaskDownloader):
         new_coords.update({'epsg': ("shot_number", [xrr.epsg.data.astype('uint16')])})
         new_coords.update({'spec': ("shot_number", [pickle.dumps(s2xrr.spec)])})
         xrr = xrr.assign_coords(new_coords)
-        return {'xrr': xrr, 'slope': slope_xrr.drop_vars('epsg')}
+        return {'xrr': xrr, 'slope': glo_xrr.drop_vars(['epsg'])}
 
     
     def calculate_defective_cover(self, items, bounds, date, epsg):
