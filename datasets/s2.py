@@ -1,19 +1,17 @@
-import os
-import time
-from typing import Union, List
+
+from typing import Union
 from pathlib import Path
-import torch
 from torch.utils.data import Dataset
 from torchvision.transforms import ToTensor
-import numpy as np
 import pandas as pd
 import tables
-import h5py
-from datatree.io import _iter_nc_groups
-from h5netcdf.legacyapi import Dataset as h5Dataset
 
+import warnings
+from tables import DataTypeWarning
+warnings.filterwarnings('ignore', category=DataTypeWarning)
 
 class S2Dataset(Dataset):
+
 
     def __init__(self, h5_file: Union[str, Path], index_table:Path, transform=None):
             """
@@ -25,7 +23,7 @@ class S2Dataset(Dataset):
                 cache_dir (str, optional): The directory to store the cached index table. Defaults to None.
                 transform (callable, optional): A function/transform that takes in an image and returns a transformed version. Defaults to None.
             """
-            self.transform = transform or ToTensor()
+            self.transform = transform
             self.h5_file = tables.open_file(h5_file)
             self.index_table = pd.read_csv(index_table)
 
@@ -35,22 +33,30 @@ class S2Dataset(Dataset):
 
     def __getitem__(self, idx):
         row = self.index_table.iloc[idx]
-        image = self.h5_file.root[f'{row.zone}/{row.year}/{row.partition_idx}/image'][row.in_partition_idx]
-        label = self.h5_file.root[f'{row.zone}/{row.year}/{row.partition_idx}/rhs'][row.in_partition_idx]
+        image = self.h5_file.root[f'{row.zone}/{row.year}/{row.partition_idx}/image'][row.in_partition_idx][:12]
+        label = self.h5_file.root[f'{row.zone}/{row.year}/{row.partition_idx}/rhs'][row.in_partition_idx][99]
 
         image = image.astype('float')
         if self.transform:
             image = self.transform(image)
         return image, label
+    
+    def __del__(self):
+        if hasattr(self, 'h5_file'):
+            self.h5_file.close()
+
 
 
 if __name__ == '__main__':
-    h5_files = 'data/GEDI/merged_file_test.h5'
-    dataset = S2Dataset(h5_files, cache_dir='data/GEDI')
-    dataset.h5_file.close()
-    # for i in range(len(dataset)):
-    #     img, label = dataset[i]
+    h5_files = Path.home() / 'data/GEDI/merged_file_test.h5'
+    index_table = 'cache/train_index_table.csv'
+    dataset = S2Dataset(h5_files, index_table)
     
+    for i in range(len(dataset)):
+        img, label = dataset[i]
+        print(img.shape)
+        break
+    dataset.h5_file.close()
 
 
 # %%

@@ -18,61 +18,17 @@ data:
     shuffle: True
     drop_last: False
 
-
-model:
-  class_path: trainers._base_segmentation.SegmentationTrainer
-  init_args:
-    n_classes: 1 # to get predict func (binary or multiclass)
-    lr: 0.0001
-    lr_scheduler:
-    loss_function: #bce
-      class_path: torch.nn.BCEWithLogitsLoss
-    loss2_function: #gce #! hyperparameter
-      class_path: torch.nn.BCELoss
-    loss2_weight: 0 #! hyperparameter
-    nnmodel:
-      class_path: models.map_prediction.UNet
-      init_args:
-        in_channels: 3
-        backbone: standard
-        norm_type_up: bn
-        norm_type_down: bn
-        activation: elu
-        final_skip: false
-        initial_stride: 1
-        upsampling: nearest
-    aug_transform: #check norm func & rotate
-      class_path: augmentations.base_augmentation.SegAugmentation   
-      # norm_func is lambda x: x/255 if norm_func is None
 trainer:
-  accelerator: gpu
-  default_root_dir: runs
+  accelerator: cpu
+  default_root_dir: /tmp/runs
   devices: 1
   max_epochs: 500
   num_sanity_val_steps: 0
-  accumulate_grad_batches: 14 # Accumulates gradients over k batches before stepping the optimizer
-  callbacks:
-    - class_path: callbacks.segmentation_logger.BaseSegLogger
-      init_args:
-        log_every: 10
-        log_ith_batch: 0
-    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
-      init_args:
-        monitor: 'f1.val'
-        filename: 'BestModel-{epoch:02d}-{f1.val:.2f}'
-        save_top_k: 1
-        mode: max
-        every_n_epochs: 10 #check every n epochs
-        save_last: True # save the last epoch? or just save the last best model?
-    - class_path: callbacks.model_logger.ModelLogger
-    - class_path: callbacks.confusion_matrix_logger.ConfusionMatrixLogger
-      init_args:
-        log_val_every: 10
-        # use_mask: True
+  fast_dev_run: True
 
   logger:
-      class_path: callbacks.wandb_logger.WandbLogger #lightning.pytorch.loggers.wandb.WandbLogger
+      class_path: callbacks.wandb_logger.WandbLogger
       init_args:
-        project: citytree
+        project: global-vegetation-structure
         name: test
         # job_type: train 

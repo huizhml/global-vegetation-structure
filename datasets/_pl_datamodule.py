@@ -14,7 +14,7 @@ from datasets.s2 import S2Dataset
 
 logger = logging.getLogger(__name__)
 
-class PLDataModle(pl.LightningDataModule):
+class PLDataModel(pl.LightningDataModule):
     TEST_ZONES = ['32M', '01G']
     TROPIC_SIX = ['32M', '32N', '32P', '33M', '33N', '33P']
     

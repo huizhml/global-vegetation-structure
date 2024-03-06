@@ -1,0 +1,34 @@
+class_path: models.pl_model.UNet
+init_args:
+  in_channels: 12
+  n_classes: 1
+  patch_size: 15
+  preprocess:
+    class_path: models.preprocess.Standardize
+  # encoder
+  backbone_model:
+    class_path: models.modules.standard.StandardNet
+    init_args:
+      norm_layer: torch.nn.BatchNorm2d
+      initial_stride: 1
+
+  # decoder
+  norm_layer_up: torch.nn.BatchNorm2d
+  activation_layer:
+    class_path: torch.nn.ELU
+    init_args:
+      inplace: True
+      alpha: 0.54
+
+  upsampling: nearest
+  up_block: models.modules.standard.DoubleConvSkip
+
+
+  loss: 
+    class_path: torch.nn.MSELoss
+  
+
+
+  
+
+
