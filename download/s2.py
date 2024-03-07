@@ -42,7 +42,7 @@ import hydra
 from dotenv import load_dotenv
 
 from utils._stackstac import stack
-from const import dtypes, gedi_attr_dtype, rh_dtype, latlon_dtype
+from ._const import dtypes, gedi_attr_dtype, rh_dtype, latlon_dtype
 from download.dask_downloader import DaskDownloader
 #%%
 load_dotenv('.planetarycomputer/settings.env')
@@ -220,7 +220,7 @@ class S2Downloader(DaskDownloader):
         self.save_dir = root_dir / save_dir
         self.year = year 
         self.esa_wc_year = esa_wc_year
-        self.yearStart = pd.Timestamp(f'{self.year}-01-01', tz='UTC')
+        self.yearStart = pd.Timestamp(f'{self.year}-01-01')
         self.queryDaysRange = pd.to_timedelta(queryDaysRange, unit='D')
         self.extendDays = pd.to_timedelta(extendDays, unit='D')
         self.maxCloudCover = maxCloudCover
