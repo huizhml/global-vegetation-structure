@@ -554,6 +554,8 @@ class S2Downloader(DaskDownloader):
 #%%
 @hydra.main(config_path="../config", config_name="s2_download", version_base="1.2")
 def main(cfg):
+    if not (Path.home() / f'GEDI/{cfg.year}/{cfg.zone}').exists(): # some small zones might not have GEDI data in a certain year
+        return
     from dask.distributed import Client, LocalCluster
     from dask import config 
     config.set({'distributed.scheduler.locks.lease-timeout': 60}) 
@@ -569,7 +571,7 @@ def main(cfg):
 
     logger.info(f'processing zone: {cfg.zone}')
     res = s2downloader.download_zone(cfg.zone, cfg.rewrite)
-    logger.info(f'time taken for {cfg.zone}: {time.time() - t0}')
+    logger.info(f'time taken for {cfg.zone} {cfg.year}: {time.time() - t0}')
     client.close()
 
 
