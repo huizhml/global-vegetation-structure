@@ -8,9 +8,10 @@ import geopandas as gpd
 import dask_geopandas as dgp
 import hydra
 import dask
+import ipdb
 logger = logging.getLogger(__name__)
 
-def repartition(year_folder, zone, partition_size='128K'):
+def _repartition(year_folder, zone, partition_size='128K'):
     ddf = dgp.read_parquet(year_folder / zone / 'GEDI*.parquet')
     ddf = ddf.repartition(partition_size=partition_size)
     ddf.to_parquet(year_folder / f'{zone}', name_function=lambda x: f'partition_{x}.parquet')
@@ -40,8 +41,7 @@ def gen_config_for_zone(zone_folder, year):
     return [n_cores, npartitions, n_parallel]
 
 
-@hydra.main(config_path='../config', config_name='s2_download', version_base='1.2')
-def main(cfg):
+def repartition(cfg):
     from dask.distributed import LocalCluster, Client
     cluster = LocalCluster()
     client = Client(cluster)
@@ -62,7 +62,7 @@ def main(cfg):
                 os.system(f'rm -rf {data_folder / zone}/partition*')
             if not (data_folder / zone / 'partition_0.parquet').exists():
                 logger.info(f'repartition {zone}...')
-                repartition(data_folder, zone, cfg.partition_size)
+                _repartition(data_folder, zone, cfg.partition_size)
 
             s2_data_dir = Path.home() / cfg.save_dir
             if (s2_data_dir / f'{zone}_{year}_done').exists():
@@ -77,6 +77,53 @@ def main(cfg):
         df = df.reset_index()
         df.to_csv(data_folder /'download_config.csv', index=False, sep=';')
     client.close()
+
+
+def queue_zones_for_slurm_job(max_time, df, name='hendrix', years=['2019', '2020', '2021', '2022']):
+    # queue zones for each slurm task until the task capacity(7 days for hendrix & 3 days for LUMI) is reached
+    years = ','.join(years)
+    task_cap = max_time * 24 * 3600 * 10 / 0.703 # the number of locations (divide by 0.703 to be comparable to landmass) that one slurm task can download within the time limit
+    acc_cap = 0
+    acc_zones = []
+    jobId = 1
+    for i, (idx, row) in enumerate(df.iterrows()):
+        if acc_cap >= task_cap:
+            with open(Path.home()/f'GEDI/download_job_{name}_{jobId}.txt', 'w') as f:
+                f.write(f'{years} {",".join(acc_zones)}')
+            acc_cap = 0
+            acc_zones = []
+            jobId += 1
+        else:
+            acc_cap += row['landmass'] * 4 # cap needed for 4 years
+            acc_zones.append(row['MGRS_UTM'])
+        if i == len(df) - 1 and len(acc_zones) > 0:
+            with open(Path.home()/f'GEDI/download_job_{name}_{jobId}.txt', 'w') as f:
+                f.write(f'{years} {",".join(acc_zones)}')
+
+
+def split_zones():
+    years = ['2019', '2020', '2021', '2022']
+    years = ','.join(years)
+    filepath = Path.home() / 'GEDI/mgrs_sampled.csv'
+    sampled_df = pd.read_csv(filepath)
+    # schedule zones with less than 200K locations on hendrix
+    hendrix = sampled_df[sampled_df['landmass']<= 200_000/0.703]
+    merged_zones = hendrix[hendrix['landmass']<= 16_000/0.703]['MGRS_UTM'].values
+    with open(Path.home()/'GEDI/download_job_hendrix_0.txt', 'w') as f:
+        f.write(f'{years} {",".join(merged_zones)} True')
+    hendrix = hendrix[hendrix['landmass']> 16_000/0.703]
+    # queue zones for each slurm task until the task capacity(7 days) is reached
+    queue_zones_for_slurm_job(7, hendrix, 'hendrix')
+    
+    # schedule zones with more than 200K locations on LUMI
+    lumi = sampled_df[sampled_df['landmass']> 200_000/0.703]
+    queue_zones_for_slurm_job(3, lumi, 'lumi')
+    
+
+@hydra.main(config_path='../config', config_name='s2_download', version_base='1.2')
+def main(cfg):
+    # repartition(cfg)
+    split_zones()
 
 if __name__ == '__main__':
     main()
