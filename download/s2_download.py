@@ -1,7 +1,7 @@
 
 # %%
 from download.dask_downloader import DaskDownloader
-from ._const import dtypes, gedi_attr_dtype, rh_dtype, latlon_dtype, STAC_ITEM_KEYS, S2_ITEM_PROPS, WC_ITEM_PROPS, DEM_ITEM_PROPS
+from ._const import dtypes, gedi_attr_dtype, rh_dtype, latlon_dtype, STAC_ITEM_KEYS, S2_ITEM_PROPS
 from utils._stackstac import stack
 from dotenv import load_dotenv
 import hydra
@@ -17,7 +17,7 @@ import dask.dataframe as dd
 import geopandas as gpd
 import pandas as pd
 from dask.utils import natural_sort_key
-from dask.distributed import Lock, Semaphore, get_client
+from dask.distributed import Lock, Semaphore, get_client, as_completed
 import dask_geopandas as dgp
 import dask
 import os
@@ -396,7 +396,7 @@ class S2Downloader(DaskDownloader):
 
         logger.info(f'Processing {gedi_df.npartitions} partitions...')
 
-        # number = 0
+        # number = 17
         # test = gedi_df.get_partition(number).compute()
         # df = self.get_patch_for_partition(test, zone, rewrite=True, partition_info={'number': number, 'division': None})
         # logger.info('test done')
@@ -461,59 +461,73 @@ class S2Downloader(DaskDownloader):
         partition = partition.drop(columns=['date'])
         partition = partition.reset_index().set_index('s2_candidates')
 
+        client = get_client()
         items = row_to_stac_item(s2_meta_table, S2_ITEM_PROPS)
         items_table = []
+        # futures = []
         for item in items:
             bounds = partition.loc[[item.id]]
             items_table.append((item, bounds))
+            # future = dask.delayed(self.calculate_defective_cover)((item, bounds))
+            # futures.append(future)
         del partition
 
-        items_table = db.from_sequence(items_table)
+        # futures = client.map(self.calculate_defective_cover, items_table[:6])
+        # print(len(futures))
+        # df = []
+        # for batch in as_completed(futures, with_results=True).batches():
+        #     for future, result in batch:
+        #         print(result)
+        #         df.append(result)
+        #         future.release()
+
+        items_table = db.from_sequence(items_table, npartitions=10)
         res = items_table.map(self.calculate_defective_cover).compute()
+        # res = dask.compute(futures)
         df = pd.concat(res)
         df = df[df['defective_cover'] <= 0.8]
         df = df.sort_values(['defective_cover', 'delta_day']).groupby('shot_number').head(1)  
 
-        # s2_ids = df.index.unique()
-        # s2_table = s2_meta_table.loc[s2_ids]
-        # wc_df = self.wc_df[self.wc_df.geometry.intersects(box(*s2_table.total_bounds))]
-        # dem_df = self.dem_df[self.dem_df.geometry.intersects(box(*s2_table.total_bounds))]
-        # items = row_to_stac_item(s2_table, S2_ITEM_PROPS)
-        # wc_items = row_to_stac_item(wc_df, ['datetime'])
-        # dem_items = row_to_stac_item(dem_df, ['datetime'])
+        s2_ids = df.index.unique()
+        s2_table = s2_meta_table.loc[s2_ids]
+        wc_df = self.wc_df[self.wc_df.geometry.intersects(box(*s2_table.total_bounds))]
+        dem_df = self.dem_df[self.dem_df.geometry.intersects(box(*s2_table.total_bounds))]
+        items = row_to_stac_item(s2_table, S2_ITEM_PROPS)
+        wc_items = row_to_stac_item(wc_df, ['datetime'])
+        dem_items = row_to_stac_item(dem_df, ['datetime'])
 
-        # items_table = []
-        # for item in items:
-        #     bounds = df.loc[[item.id]]
-        #     items_table.append((item, bounds))
+        items_table = []
+        for item in items:
+            bounds = df.loc[[item.id]]
+            items_table.append((item, bounds))
 
-        # items_table = db.from_sequence(items_table, npartitions=8)
-        # ds = items_table.map(self.extract_patches_from_tile, wc_items, dem_items).compute()
+        items_table = db.from_sequence(items_table, npartitions=8)
+        ds = items_table.map(self.extract_patches_from_tile, wc_items, dem_items).compute()
         # ds = dask.compute(*ds)
-        # slope_da = xr.concat([s['dem_da'] for s in ds], dim='shot_number',
-        #                      compat='override', coords='minimal', join='override')
-        # ds = xr.concat([s['da'] for s in ds], dim='shot_number')
-        # slope_da.attrs['res'] = self.dem_res
-        # slope_da = slope(slope_da)
-        # w, h = slope_da.shape[-2:]
-        # # set xy coords to the center of the pixel (to match s2 xrr coords)
-        # slope_da = slope_da.assign_coords(x=range(1, 3*w, 3), y=range(1, 3*h, 3))
-        # slope_da = slope_da.interp(x=range(3*w), y=range(3*h))
-        # slope_da = slope_da.isel(x=slice(6, -6), y=slice(6, -6))  # remove nan
-        # slope_da = slope_da.assign_coords(x=ds.x, y=ds.y)  # set xy coords back to 0-14
-        # slope_da = slope_da.drop_vars(['x', 'y'])
+        slope_da = xr.concat([s['dem_da'] for s in ds], dim='shot_number',
+                             compat='override', coords='minimal', join='override')
+        ds = xr.concat([s['da'] for s in ds], dim='shot_number')
+        slope_da.attrs['res'] = self.dem_res
+        slope_da = slope(slope_da)
+        w, h = slope_da.shape[-2:]
+        # set xy coords to the center of the pixel (to match s2 xrr coords)
+        slope_da = slope_da.assign_coords(x=range(1, 3*w, 3), y=range(1, 3*h, 3))
+        slope_da = slope_da.interp(x=range(3*w), y=range(3*h))
+        slope_da = slope_da.isel(x=slice(6, -6), y=slice(6, -6))  # remove nan
+        slope_da = slope_da.assign_coords(x=ds.x, y=ds.y)  # set xy coords back to 0-14
+        slope_da = slope_da.drop_vars(['x', 'y'])
 
-        # ds.name = 'image'
-        # ds = xr.merge([ds, slope_da, rh_da.transpose(), gedi_attr_da.transpose(), latlon_da.transpose()])
-        # ds = ds.assign_attrs(partition_bounds=partition_bounds)
-        # ds['band'] = ds['band'].astype('<U6')
-        # bands = ds.band.values
-        # bands[-1] = 'esa_wc'
-        # ds = ds.assign_coords(band=bands)
-        # with Lock('netcdf_lock'):
-        #     ds.to_netcdf(self.save_dir / f'{zone}.h5', group=f'{self.year}/{partition_number}',
-        #                  format='NETCDF4', engine='h5netcdf', encoding=self.comp, mode='a')
-        # flag.touch()
+        ds.name = 'image'
+        ds = xr.merge([ds, slope_da, rh_da.transpose(), gedi_attr_da.transpose(), latlon_da.transpose()])
+        ds = ds.assign_attrs(partition_bounds=partition_bounds)
+        ds['band'] = ds['band'].astype('<U6')
+        bands = ds.band.values
+        bands[-1] = 'esa_wc'
+        ds = ds.assign_coords(band=bands)
+        with Lock('netcdf_lock'):
+            ds.to_netcdf(self.save_dir / f'{zone}.h5', group=f'{self.year}/{partition_number}',
+                         format='NETCDF4', engine='h5netcdf', encoding=self.comp, mode='a')
+        flag.touch()
 
     def calculate_defective_cover(self, entry):
         '''
@@ -525,28 +539,33 @@ class S2Downloader(DaskDownloader):
         Returns:
             pandas.DataFrame: DataFrame with defective cover for each GEDI location
         '''
+        
         item, locs = entry
         epsg = item.properties['proj:epsg']
-        locs = locs.to_crs(epsg)
+        locs = locs.copy().to_crs(epsg)
         bounds = self.buffer_and_snap_bounds(locs.geometry, self.buffer_size, self.out_res)
         total_bounds = self.total_bounds(bounds)
 
         image = get_patch(item, ['SCL'], resolution=self.out_res, bounds=total_bounds, epsg=epsg, dtype='uint8')
         defective_cover = []
+        image = image.load()
         for row in bounds.itertuples():
-            xrange = range(row.minx, row.maxx, self.out_res)
-            yrange = range(row.maxy, row.miny, -self.out_res)
+            xrange = range(row.minx, row.maxx, self.out_res) #slice(row.minx, row.maxx)
+            yrange = range(row.maxy, row.miny, -self.out_res) #slice(row.maxy, row.miny)
             patch = image.sel(x=xrange, y=yrange).squeeze()
             dc = patch.isin(defective_SCL).sum(dim=['x', 'y']) / np.prod(patch.shape[-2:])
             defective_cover.append(dc.data)
-        defective_cover = dask.compute(*defective_cover)
+        # defective_cover = dask.compute(*defective_cover)
         locs['defective_cover'] = defective_cover
+        locs = locs.to_crs(4326)
+        del image
+        gc.collect()
         return locs.astype({'defective_cover': 'float32'})
 
     def extract_patches_from_tile(self, entry, wc_items, dem_items):
         item, locs = entry
         epsg = item.properties['proj:epsg']
-        locs = locs.to_crs(epsg)
+        locs = locs.copy().to_crs(epsg)
         bounds = self.buffer_and_snap_bounds(locs.geometry, self.buffer_size, self.out_res)
         dem_bounds = self.buffer_and_snap_bounds(locs.geometry, self.dem_buffer_size, self.dem_res)
         total_bounds = self.total_bounds(bounds)
@@ -554,15 +573,17 @@ class S2Downloader(DaskDownloader):
         
         s2_image = get_patch(item, self.bands, resolution=self.out_res, bounds=total_bounds, epsg=epsg, dtype='uint16')
         wc_image = get_patch(wc_items, ['map'], resolution=self.out_res,bounds=total_bounds, epsg=epsg, dtype='uint16')
-        wc_image = wc_image.max(dim='time').squeeze()
+        wc_image = wc_image.max(dim='time', skipna=True).squeeze()
+        s2_image = harmonize_to_old(s2_image)
         image = xr.concat([s2_image.squeeze(), wc_image.squeeze()], dim='band',
                           coords='minimal', compat='override')  # only keep s2's time & id
 
-        dem_image = get_patch(dem_items, ['data'], resolution=self.dem_res, bounds=total_bounds_dem, epsg=epsg, dtype='float32', fill_value=np.nan,)
-        dem_image = dem_image.max(dim='time').squeeze()
+        dem_image = get_patch(dem_items, ['data'], resolution=self.dem_res, bounds=total_bounds_dem, epsg=epsg, dtype='float32', fill_value=np.nan)
+        dem_image = dem_image.max(dim='time', skipna=True).squeeze()
 
         patches = []
         specs = []
+        image = image.load()
         for row in bounds.itertuples():
             xrange = range(row.minx, row.maxx, self.out_res)
             yrange = range(row.maxy, row.miny, -self.out_res)
@@ -586,6 +607,7 @@ class S2Downloader(DaskDownloader):
         da['epsg'] = da.epsg.astype('uint16')
 
         patches = []
+        dem_image = dem_image.load()
         for row in dem_bounds.itertuples():
             xrange = range(row.minx, row.maxx, self.dem_res)
             yrange = range(row.maxy, row.miny, -self.dem_res)
@@ -593,7 +615,10 @@ class S2Downloader(DaskDownloader):
             patch = patch.drop_vars(['x', 'y'])
             patches.append(patch)
         dem_da = xr.concat(patches, dim=pd.Index(locs.shot_number.values, name='shot_number'), combine_attrs='drop')
-
+        da, dem_da = dask.compute(da, dem_da)
+        del dem_image
+        del image
+        gc.collect()
         return {'da': da, 'dem_da': dem_da.drop_vars(['epsg'])}
 
     def buffer_and_snap_bounds(self, geom, buffer_size, res):

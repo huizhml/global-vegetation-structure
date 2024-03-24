@@ -27,7 +27,7 @@ gedi_attr_dtype = {
     'selected_mode': 'uint8',
     'selected_mode_flag': 'uint8',
     'sensitivity': 'float32',
-    'shot_number': 'uint64',
+    # 'shot_number': 'uint64',
     'solar_azimuth': 'float32',
     'solar_elevation': 'float32',
     'surface_flag': 'uint8',
@@ -40,12 +40,14 @@ latlon_dtype = {
 }
 dtypes = {**gedi_attr_dtype, **latlon_dtype, **rh_dtype}
 # %%
-
-s2_item_props = ['datetime', 
+STAC_ITEM_KEYS = [
+    'id', 'geometry', 'bbox', 'assets'
+]
+S2_ITEM_PROPS = ['datetime', 
     # 'platform', 
-    # 'proj:epsg', 
+    'proj:epsg', 
     # 'instruments', 
-    's2:mgrs_tile', 
+    # 's2:mgrs_tile', 
     # 'constellation', 
     # 's2:granule_id', 
     # 'eo:cloud_cover', 
@@ -75,7 +77,7 @@ s2_item_props = ['datetime',
     # 's2:medium_proba_clouds_percentage', 
     # 's2:saturated_defective_pixel_percentage'
     ]
-wc_item_props = [
+WC_ITEM_PROPS = [
     # 'created', 
     # 'mission',
     # 'datetime', 
