@@ -22,6 +22,7 @@ import dask_geopandas as dgp
 import dask
 import os
 import gc
+import ctypes
 import time
 import json
 import random
@@ -80,6 +81,10 @@ cfg = {
     "*": {"warnings": "ignore"},
 }
 
+
+def trim_memory() -> int:
+     libc = ctypes.CDLL("libc.so.6")
+     return libc.malloc_trim(0)
 
 def harmonize_to_old(data):
     """
@@ -483,6 +488,8 @@ class S2Downloader(DaskDownloader):
 
         items_table = db.from_sequence(items_table, npartitions=10)
         res = items_table.map(self.calculate_defective_cover).compute()
+        # client.run(gc.collect)
+        client.run(trim_memory)
         # res = dask.compute(futures)
         df = pd.concat(res)
         df = df[df['defective_cover'] <= 0.8]
@@ -501,9 +508,11 @@ class S2Downloader(DaskDownloader):
             bounds = df.loc[[item.id]]
             items_table.append((item, bounds))
 
-        items_table = db.from_sequence(items_table, npartitions=8)
+        items_table = db.from_sequence(items_table, npartitions=4)
         ds = items_table.map(self.extract_patches_from_tile, wc_items, dem_items).compute()
-        # ds = dask.compute(*ds)
+        # client.run(gc.collect)
+        client.run(trim_memory)
+        ds = dask.compute(*ds)
         slope_da = xr.concat([s['dem_da'] for s in ds], dim='shot_number',
                              compat='override', coords='minimal', join='override')
         ds = xr.concat([s['da'] for s in ds], dim='shot_number')
@@ -542,7 +551,7 @@ class S2Downloader(DaskDownloader):
         
         item, locs = entry
         epsg = item.properties['proj:epsg']
-        locs = locs.copy().to_crs(epsg)
+        locs = locs.to_crs(epsg)
         bounds = self.buffer_and_snap_bounds(locs.geometry, self.buffer_size, self.out_res)
         total_bounds = self.total_bounds(bounds)
 
@@ -559,7 +568,6 @@ class S2Downloader(DaskDownloader):
         locs['defective_cover'] = defective_cover
         locs = locs.to_crs(4326)
         del image
-        gc.collect()
         return locs.astype({'defective_cover': 'float32'})
 
     def extract_patches_from_tile(self, entry, wc_items, dem_items):
@@ -605,6 +613,8 @@ class S2Downloader(DaskDownloader):
             'spec': ('shot_number', specs)
         })
         da['epsg'] = da.epsg.astype('uint16')
+        client = get_client()
+        client.run(trim_memory)
 
         patches = []
         dem_image = dem_image.load()
@@ -618,7 +628,8 @@ class S2Downloader(DaskDownloader):
         da, dem_da = dask.compute(da, dem_da)
         del dem_image
         del image
-        gc.collect()
+        
+        client.run(trim_memory)
         return {'da': da, 'dem_da': dem_da.drop_vars(['epsg'])}
 
     def buffer_and_snap_bounds(self, geom, buffer_size, res):
@@ -650,7 +661,8 @@ def main(cfg):
     # might fix the communication error caused by I/O. ref: https://github.com/dask/distributed/issues/3129#issuecomment-1684858307
     dask.config.set({"distributed.comm.retry.count": 10})
     dask.config.set({"distributed.comm.timeouts.connect": 30})
-    cluster = LocalCluster()
+    dask.config.set({"distributed.nanny.pre-spawn-environ.MALLOC_TRIM_THRESHOLD_": 0})
+    cluster = LocalCluster(n_workers=4, threads_per_worker=4)
     client = Client(cluster)  # timeout
     print(client)
 
