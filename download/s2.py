@@ -266,7 +266,7 @@ class S2Downloader(DaskDownloader):
         }
 
       
-    def get_zone_bbox(self, zone:str=None):
+    def get_zone_bbox(self, zone, use_box=True):
         """
         Retrieves the bounding box coordinates for a given zone.
 
@@ -283,6 +283,8 @@ class S2Downloader(DaskDownloader):
         elif bounds[2] > 185:
             bounds[2] = -bounds[0] + 6
             bounds[0] = -180
+        if use_box:
+            bounds = box(*bounds)
         return bounds
     
     def download_zone(self, zone:str=None, rewrite:bool=False):

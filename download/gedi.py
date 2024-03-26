@@ -16,7 +16,7 @@ from retry import retry
 from io import StringIO
 import hydra
 from const import dtypes
-from download.utils import authenticate
+from download._utils import authenticate
 from download.dask_downloader import DaskDownloader
 from dotenv import load_dotenv
 load_dotenv()

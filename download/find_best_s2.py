@@ -124,7 +124,8 @@ class S2Downloader(DaskDownloader):
 
         Parameters
         ----------
-        * zone (str): The GEDI zone to find the best S2 scene for.
+        * zone (str): The MGRS zone to find the best S2 scene for.
+        * from_file (str): The name of the file containing the GEDI data.
 
         Returns
         -------

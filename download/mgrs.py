@@ -13,7 +13,7 @@ import dask.dataframe as dd
 import geopandas as gpd
 import dask_geopandas as dgd
 
-from download.utils import authenticate
+from download._utils import authenticate
 
 logger = logging.getLogger(__name__)
 

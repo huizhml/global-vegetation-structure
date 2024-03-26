@@ -1,8 +1,5 @@
 
 # %%
-from download.dask_downloader import DaskDownloader
-from ._const import dtypes, gedi_attr_dtype, rh_dtype, latlon_dtype, STAC_ITEM_KEYS, S2_ITEM_PROPS
-from utils._stackstac import stack
 from dotenv import load_dotenv
 import hydra
 import ipdb
@@ -10,7 +7,7 @@ from stackstac.raster_spec import RasterSpec
 from shapely.geometry import box, Point
 from rasterio.errors import RasterioIOError
 from rasterio.enums import Resampling
-from download._slope import slope
+
 import pyproj
 import dask.bag as db
 import dask.dataframe as dd
@@ -41,14 +38,18 @@ import pystac_client
 import planetary_computer
 from urllib3 import Retry
 from pystac_client.stac_api_io import StacApiIO
+
+from .dask_downloader import DaskDownloader
+from ._const import dtypes, gedi_attr_dtype, rh_dtype, latlon_dtype, STAC_ITEM_KEYS, S2_ITEM_PROPS
+from ._utils import trim_memory, row_to_stac_item, resign_items, buffer_and_snap_bounds, get_total_bounds
+from ._slope import slope
+from utils._stackstac import stack
+
+# %%
 # disable cuda before importing numba (CudaAPIError(3, 'Call to cuCtxGetCurrent results in CUDA_ERROR_NOT_INITIALIZED'))
 # numba is used to calcluate slope
 os.environ['NUMBA_DISABLE_CUDA'] = '1'
 
-# from xrspatial import slope
-
-
-# %%
 load_dotenv('.planetarycomputer/settings.env')
 os.environ["GDAL_HTTP_MAX_RETRY"] = "3"
 # g0, g1, g2 = gc.get_count()
@@ -80,11 +81,6 @@ cfg = {
     },
     "*": {"warnings": "ignore"},
 }
-
-
-def trim_memory() -> int:
-     libc = ctypes.CDLL("libc.so.6")
-     return libc.malloc_trim(0)
 
 def harmonize_to_old(data):
     """
@@ -137,46 +133,6 @@ def backoff_hdlr(details):
           "{kwargs}".format(**details))
 
 
-def row_to_stac_item(df, props):
-    items = []
-    for idx, row in df.iterrows():
-        row['id'] = idx
-        item = row[STAC_ITEM_KEYS].to_dict()
-        item['geometry'] = item['geometry'].__geo_interface__
-        item['properties'] = row[props].to_dict()
-        item['type'] = 'Feature'
-        item['stac_version'] = '1.0.0'
-        item = planetary_computer.sign_inplace(pystac.Item.from_dict(item))
-        items.append(item)
-    return items
-
-
-def snap_to_grid(point, res_x=10, res_y=10):
-    """Snap a point geometry to a grid with the specified resolution."""
-    # Round the coordinates to the nearest grid intersection
-    new_x = round(point.x / res_x) * res_x
-    new_y = round(point.y / res_y) * res_y
-    # Return a new Point geometry with the updated coordinates
-    return Point(new_x, new_y)
-
-
-def resign_items(items):
-    """
-    Resigns a list of items using the planetary_computer.sign() function.
-
-    Args:
-        items (list): A list of items to be resigned.
-
-    Returns:
-        list: A list of resigned items.
-    """
-    res = []
-    for item in items:
-        item = planetary_computer.sign(item)
-        res.append(item)
-    return res
-
-
 def get_patch(items,
               assets: Union[str, List[str]] = None,
               resolution: int = 10,
@@ -206,65 +162,27 @@ def get_patch(items,
     return patch
 
 
-def get_tile_by_id(tile_id):
-    """
-    Get the sentinel-2 tile by tile id.
-    """
-    url = f'{stac_endpoint}/collections/sentinel-2-l2a/items/{tile_id}'
-    item = pystac.Item.from_file(url)
-    return planetary_computer.sign_inplace(item)  # TO CHCEK: the token generated seems to be only valid for 1 hour
-
-
-def get_most_common_epsg(items):
-    """
-    Get the most common epsg code for a list of items.
-    """
-    epsgs = [item.properties['proj:epsg'] for item in items]
-    return max(set(epsgs), key=epsgs.count)
-
-
-def reproject_bounds(raster_spec, crs_to='EPSG:4326'):
-    transformer = pyproj.Transformer.from_crs(f'EPSG:{raster_spec.epsg}', crs_to, always_xy=True)
-    # Transform the bounds
-    minx, miny = transformer.transform(raster_spec.bounds[0], raster_spec.bounds[1])
-    maxx, maxy = transformer.transform(raster_spec.bounds[2], raster_spec.bounds[3])
-    return [minx, miny, maxx, maxy]
-
-
 class S2Downloader(DaskDownloader):
 
     def __init__(self,
                  year: int = 2019,
                  n_parallel: int = 100,
-                 sem_max_release: int = 60,
                  root_dir: str = None,
                  data_dir='GEDI',
                  save_dir: str = 'data/GEDI',
                  patch_size: int = 15,
-                 maxCloudCover: int = 50,
-                 maxWaterPercentage: int = 100,
-                 queryDaysRange: int = 90,
-                 extendDays: int = 30,
                  esa_wc_year: int = 2021,
                  comp_level: int = 7,
                  out_res: int = 10,
-                 mgrs_file: str = 'mgrs_with_tracks_and_count.parquet',
                  **kwargs
                  ) -> None:
         super().__init__(n_parallel=n_parallel, max_retries=3, **kwargs)
-        # self.mgrs_df = gpd.read_parquet(Path.home() / f'GEDI/{mgrs_file}')
         root_dir = Path(root_dir) if root_dir else Path.home()
         self.gedi_dir = root_dir / f'{data_dir}/{year}'
         self.save_dir = root_dir / save_dir
         self.year = year
         self.esa_wc_time = pd.Timestamp(f'{esa_wc_year}-01-01', tz='UTC')
-        self.yearStart = pd.Timestamp(f'{self.year}-01-01')
-        self.queryDaysRange = pd.to_timedelta(queryDaysRange, unit='D')
-        self.extendDays = pd.to_timedelta(extendDays, unit='D')
-        self.maxCloudCover = maxCloudCover
-        self.maxWaterPercentage = maxWaterPercentage
         self.n_parallel = n_parallel
-        # self.sem = Semaphore(sem_max_release, name='max_queries', register=True)
         self.bands = [
             'B01', 'B04', 'B03', 'B02', 'B05', 'B06', 'B07', 'B08', 'B8A',
             'B09', 'B11', 'B12', 'SCL'
@@ -304,6 +222,19 @@ class S2Downloader(DaskDownloader):
         }
 
     def get_aux_df(self, collection_id, filters=None, time_col=None):
+        """
+        Retrieves auxiliary geodataframe for a specified collection (ESA world cover or DEM).
+
+        Parameter
+        ---------
+        * collection_id (str): The ID of the collection to retrieve data from.
+        * filters (dict, optional): Additional filters to apply to the data. Defaults to None.
+        * time_col (str, optional): The name of the time column to include in the retrieved data. Defaults to None.
+
+        Returns
+        -------
+        * pandas.DataFrame: The retrieved auxiliary data as a pandas DataFrame.
+        """
         parquet_file = self.gedi_dir.parent / f'{collection_id}_items.parquet'
         if parquet_file.exists():
             logger.info(f'Loading STAC parquet files for {collection_id} from: {parquet_file}')
@@ -319,37 +250,16 @@ class S2Downloader(DaskDownloader):
         df = df.set_index('id')
         return df
 
-    def get_zone_bbox(self, zone, use_box=True):
+    def download_zone(self, zone: str = None, from_file: str=None, rewrite: bool = False):
         """
-        Retrieves the bounding box coordinates for a given zone.
+        Download patches for all GEDI locations in given MGRS zone.
 
-        Parameters:
-        - zone (str): The MGRS zone identifier.
-
-        Returns:
-        - bounds (list): The bounding box coordinates [min_lon, min_lat, max_lon, max_lat].
+        Parameters
+        ----------
+        * zone (str): The MGRS zone to download patches from.
+        * from_file (str): The name of the file containing the GEDI data.
+        * rewrite (bool): Whether to rewrite the existing files.
         """
-        # check code https://code.earthengine.google.com/4dcc2d69fa3cab567be1a8b3f43d64e7
-        bounds = self.mgrs_df[self.mgrs_df['MGRS_UTM'] == zone]['geometry'].bounds.values[0]
-        if bounds[2] > 180 and bounds[2] < 185:
-            bounds[2] = 180
-        elif bounds[2] > 185:
-            bounds[2] = -bounds[0] + 6
-            bounds[0] = -180
-        if use_box:
-            bounds = box(*bounds)
-        return bounds
-
-    def download_zone(self, zone: str = None, rewrite: bool = False):
-        '''
-        Filter S2 tiles for each GEDI zone.
-
-        Args:
-            zone (str): The GEDI zone to filter S2 tiles for.
-
-        Returns:
-            str: A string indicating the status of the processing. Returns 'done' if the zone and year have already been processed.
-        '''
         if isinstance(zone, str):
             (self.save_dir/zone).mkdir(exist_ok=True, parents=True)
             flag = self.save_dir / f'{zone}_{self.year}_done'
@@ -362,7 +272,7 @@ class S2Downloader(DaskDownloader):
                 logger.info(f'{zone} {self.year} has been processed.')
                 return
 
-            gedi_df = dgp.read_parquet(self.gedi_dir / f'{zone}/part_*_with_s2.parquet')
+            gedi_df = dgp.read_parquet(self.gedi_dir / f'{zone}/{from_file}.parquet')
         else:
             paths = []
             for z in zone:
@@ -376,7 +286,7 @@ class S2Downloader(DaskDownloader):
                 if flag.exists():
                     logger.info(f'{z} {self.year} has been processed.')
                     continue
-                paths.extend(list(self.gedi_dir.glob(f'{z}/part_*_with_s2.parquet')))
+                paths.extend(list(self.gedi_dir.glob(f'{z}/{from_file}.parquet')))
             if len(paths) == 0:
                 logger.info(f'All zones: {zone} in {self.year} have been processed.')
                 return
@@ -396,16 +306,13 @@ class S2Downloader(DaskDownloader):
         self.wc_df['datetime'] = self.wc_df['start_datetime'].dt.strftime('%Y-%m-%d %H:%M:%S.%f')
         self.dem_df['datetime'] = self.dem_df['datetime'].dt.strftime('%Y-%m-%d %H:%M:%S.%f')
 
-        # s2_meta_table = s2_meta_table.set_index('id')
-        # s2_meta_table['datetime'] = s2_meta_table['datetime'].dt.strftime('%Y-%m-%d %H:%M:%S.%f')
-
         logger.info(f'Processing {gedi_df.npartitions} partitions...')
 
         # number = 17
         # test = gedi_df.get_partition(number).compute()
-        # df = self.get_patch_for_partition(test, zone, rewrite=True, partition_info={'number': number, 'division': None})
+        # df = self.download_patches_for_partition(test, zone, rewrite=True, partition_info={'number': number, 'division': None})
         # logger.info('test done')
-        df = gedi_df.map_partitions(self.get_patch_for_partition, zone, rewrite, meta=(None, 'string'))
+        df = gedi_df.map_partitions(self.download_patches_for_partition, zone, rewrite, meta=(None, 'string'))
         self.schedule_tasks(df)
 
         # # Create flags
@@ -422,16 +329,17 @@ class S2Downloader(DaskDownloader):
         #             (self.save_dir/ f'{zone}_{self.year}_done').touch()
         # return
 
-    def get_patch_for_partition(self, partition, zone: str, rewrite: bool = False, partition_info: dict = None):
+    def download_patches_for_partition(self, partition, zone: str, rewrite: bool = False, partition_info: dict = None):
         """
         Query, filter, and stack S2 and ESA world cover patches for each GEDI partition.
         GEDI data is partitioned to cache a number of locations for the sake of memory efficiency.
 
-        Args:
-            partition (pandas.DataFrame): The partition containing the data.
-            zone (str): The zone identifier.
-            esa_wc_items (pystac.ItemCollection): The collection of ESA WC items.
-            partition_info (dict, optional): Information about the partition.
+        Parameters
+        ----------
+        * partition (pandas.DataFrame): The partition containing the data.
+        * zone (str): The zone identifier.
+        * esa_wc_items (pystac.ItemCollection): The collection of ESA WC items.
+        * partition_info (dict, optional): Information about the partition.
         """
         if partition_info["division"] is not None:
             zone = partition_info["division"].split('/')[-2]
@@ -445,81 +353,35 @@ class S2Downloader(DaskDownloader):
             return
 
         partition = partition.set_index('shot_number')
-        # rh_da = partition[rh_dtype.keys()].to_xarray().to_dataarray('rh', 'rhs')
-        # gedi_attr_da = partition[gedi_attr_dtype.keys()].to_xarray().to_dataarray('attr', 'gedi_attrs')
-        # latlon_da = partition[latlon_dtype.keys()].to_xarray().to_dataarray('xy', 'latlon')
-        # drop_cols = list(rh_dtype.keys()) + list(gedi_attr_dtype.keys()) + list(latlon_dtype.keys())
-        # partition = partition.drop(columns=drop_cols)
-        # partition_bounds = partition.total_bounds
-        op_part = partition[['date', 'geometry', 's2_candidates']]
+        op_part = partition[['geometry', 'best_s2']]
 
-        s2_candidates = set(chain.from_iterable(op_part['s2_candidates']))
+        s2_ids = op_part['best_s2'].unique()
         s2_meta_table = gpd.read_parquet(
-            self.gedi_dir / f'{zone}/s2_items.parquet', filters=[('id', 'in', s2_candidates)])
+            self.gedi_dir / f'{zone}/s2_items.parquet', filters=[('id', 'in', s2_ids)])
         s2_meta_table = s2_meta_table.set_index('id')
         s2_meta_table['datetime'] = s2_meta_table['datetime'].dt.strftime('%Y-%m-%d %H:%M:%S.%f')
 
-        op_part = op_part.explode('s2_candidates')
-        gedi_date = pd.to_datetime(op_part['date'])
-        s2_date = op_part['s2_candidates'].str.extract('(\d{8})')
-        s2_date = pd.to_datetime(s2_date[0], format='%Y%m%d')
-        op_part['delta_day'] = (gedi_date - s2_date).dt.days.abs().astype('uint16')
-        op_part = op_part.drop(columns=['date'])
-        op_part = op_part.reset_index().set_index('s2_candidates')
-
         client = get_client()
+
+        wc_df = self.wc_df[self.wc_df.geometry.intersects(box(*s2_meta_table.total_bounds))]
+        dem_df = self.dem_df[self.dem_df.geometry.intersects(box(*s2_meta_table.total_bounds))]
         items = row_to_stac_item(s2_meta_table, S2_ITEM_PROPS)
-        items_table = []
-        # futures = []
-        for item in items:
-            bounds = op_part.loc[[item.id]]
-            items_table.append((item, bounds))
-            # future = dask.delayed(self.calculate_defective_cover)((item, bounds))
-            # futures.append(future)
-        # del partition
-
-        # futures = client.map(self.calculate_defective_cover, items_table[:6])
-        # print(len(futures))
-        # df = []
-        # for batch in as_completed(futures, with_results=True).batches():
-        #     for future, result in batch:
-        #         print(result)
-        #         df.append(result)
-        #         future.release()
-
-        items_table = db.from_sequence(items_table, npartitions=10)
-        res = items_table.map(self.calculate_defective_cover).compute()
-        # client.run(gc.collect)
-        client.run(trim_memory)
-        # res = dask.compute(futures)
-        df = pd.concat(res)
-        df = df[df['defective_cover'] <= 0.8]
-        df = df.sort_values(['defective_cover', 'delta_day']).groupby('shot_number').head(1)
-        # df = df.reset_index().set_index('shot_number').drop(columns='geometry')
-        # res = partition.merge(df, how='left', left_index=True, right_index=True)
-        # res.to_parquet(self.gedi_dir / zone / f'part_{partition_number}_with_s2.parquet')
-
-        s2_ids = df.index.unique()
-        s2_table = s2_meta_table.loc[s2_ids]
-        wc_df = self.wc_df[self.wc_df.geometry.intersects(box(*s2_table.total_bounds))]
-        dem_df = self.dem_df[self.dem_df.geometry.intersects(box(*s2_table.total_bounds))]
-        items = row_to_stac_item(s2_table, S2_ITEM_PROPS)
         wc_items = row_to_stac_item(wc_df, ['datetime'])
         dem_items = row_to_stac_item(dem_df, ['datetime'])
 
         items_table = []
         for item in items:
-            bounds = df.loc[[item.id]]
+            bounds = op_part.loc[[item.id]]
             items_table.append((item, bounds))
 
         items_table = db.from_sequence(items_table, npartitions=4)
         ds = items_table.map(self.extract_patches_from_tile, wc_items, dem_items).compute()
         # client.run(gc.collect)
         client.run(trim_memory)
-        ds = dask.compute(*ds)
         slope_da = xr.concat([s['dem_da'] for s in ds], dim='shot_number',
                              compat='override', coords='minimal', join='override')
         ds = xr.concat([s['da'] for s in ds], dim='shot_number')
+        ds.name = 'image'
         slope_da.attrs['res'] = self.dem_res
         slope_da = slope(slope_da)
         w, h = slope_da.shape[-2:]
@@ -530,7 +392,12 @@ class S2Downloader(DaskDownloader):
         slope_da = slope_da.assign_coords(x=ds.x, y=ds.y)  # set xy coords back to 0-14
         slope_da = slope_da.drop_vars(['x', 'y'])
 
-        ds.name = 'image'
+        rh_da = partition[rh_dtype.keys()].to_xarray().to_dataarray('rh', 'rhs')
+        gedi_attr_da = partition[gedi_attr_dtype.keys()].to_xarray().to_dataarray('attr', 'gedi_attrs')
+        latlon_da = partition[latlon_dtype.keys()].to_xarray().to_dataarray('xy', 'latlon')
+        drop_cols = list(rh_dtype.keys()) + list(gedi_attr_dtype.keys()) + list(latlon_dtype.keys())
+        partition = partition.drop(columns=drop_cols)
+        partition_bounds = partition.total_bounds
         ds = xr.merge([ds, slope_da, rh_da.transpose(), gedi_attr_da.transpose(), latlon_da.transpose()])
         ds = ds.assign_attrs(partition_bounds=partition_bounds)
         ds['band'] = ds['band'].astype('<U6')
@@ -580,10 +447,10 @@ class S2Downloader(DaskDownloader):
         item, locs = entry
         epsg = item.properties['proj:epsg']
         locs = locs.copy().to_crs(epsg)
-        bounds = self.buffer_and_snap_bounds(locs.geometry, self.buffer_size, self.out_res)
-        dem_bounds = self.buffer_and_snap_bounds(locs.geometry, self.dem_buffer_size, self.dem_res)
-        total_bounds = self.total_bounds(bounds)
-        total_bounds_dem = self.total_bounds(dem_bounds)
+        bounds = buffer_and_snap_bounds(locs.geometry, self.buffer_size, self.out_res)
+        dem_bounds = buffer_and_snap_bounds(locs.geometry, self.dem_buffer_size, self.dem_res)
+        total_bounds = get_total_bounds(bounds)
+        total_bounds_dem = get_total_bounds(dem_bounds)
         
         s2_image = get_patch(item, self.bands, resolution=self.out_res, bounds=total_bounds, epsg=epsg, dtype='uint16')
         wc_image = get_patch(wc_items, ['map'], resolution=self.out_res,bounds=total_bounds, epsg=epsg, dtype='uint16')
@@ -637,22 +504,6 @@ class S2Downloader(DaskDownloader):
         
         client.run(trim_memory)
         return {'da': da, 'dem_da': dem_da.drop_vars(['epsg'])}
-
-    def buffer_and_snap_bounds(self, geom, buffer_size, res):
-        bounds = geom.buffer(buffer_size).bounds
-        # snap to grid
-        bounds['minx'] = np.floor(bounds['minx'] / res) * res
-        bounds['miny'] = np.floor(bounds['miny'] / res) * res
-        bounds['maxx'] = np.ceil(bounds['maxx'] / res) * res
-        bounds['maxy'] = np.ceil(bounds['maxy'] / res) * res
-        return bounds.astype('int')
-
-    def total_bounds(self, geom):
-        return (
-            geom['minx'].min(),
-            geom['miny'].min(),
-            geom['maxx'].max(),
-            geom['maxy'].max())
 
 # %%
 
