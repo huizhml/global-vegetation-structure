@@ -445,37 +445,38 @@ class S2Downloader(DaskDownloader):
             return
 
         partition = partition.set_index('shot_number')
-        rh_da = partition[rh_dtype.keys()].to_xarray().to_dataarray('rh', 'rhs')
-        gedi_attr_da = partition[gedi_attr_dtype.keys()].to_xarray().to_dataarray('attr', 'gedi_attrs')
-        latlon_da = partition[latlon_dtype.keys()].to_xarray().to_dataarray('xy', 'latlon')
-        drop_cols = list(rh_dtype.keys()) + list(gedi_attr_dtype.keys()) + list(latlon_dtype.keys())
-        partition = partition.drop(columns=drop_cols)
-        partition_bounds = partition.total_bounds
+        # rh_da = partition[rh_dtype.keys()].to_xarray().to_dataarray('rh', 'rhs')
+        # gedi_attr_da = partition[gedi_attr_dtype.keys()].to_xarray().to_dataarray('attr', 'gedi_attrs')
+        # latlon_da = partition[latlon_dtype.keys()].to_xarray().to_dataarray('xy', 'latlon')
+        # drop_cols = list(rh_dtype.keys()) + list(gedi_attr_dtype.keys()) + list(latlon_dtype.keys())
+        # partition = partition.drop(columns=drop_cols)
+        # partition_bounds = partition.total_bounds
+        op_part = partition[['date', 'geometry', 's2_candidates']]
 
-        s2_candidates = set(chain.from_iterable(partition['s2_candidates']))
+        s2_candidates = set(chain.from_iterable(op_part['s2_candidates']))
         s2_meta_table = gpd.read_parquet(
             self.gedi_dir / f'{zone}/s2_items.parquet', filters=[('id', 'in', s2_candidates)])
         s2_meta_table = s2_meta_table.set_index('id')
         s2_meta_table['datetime'] = s2_meta_table['datetime'].dt.strftime('%Y-%m-%d %H:%M:%S.%f')
 
-        partition = partition.explode('s2_candidates')
-        gedi_date = pd.to_datetime(partition['date'])
-        s2_date = partition['s2_candidates'].str.extract('(\d{8})')
+        op_part = op_part.explode('s2_candidates')
+        gedi_date = pd.to_datetime(op_part['date'])
+        s2_date = op_part['s2_candidates'].str.extract('(\d{8})')
         s2_date = pd.to_datetime(s2_date[0], format='%Y%m%d')
-        partition['delta_day'] = (gedi_date - s2_date).dt.days.abs().astype('uint16')
-        partition = partition.drop(columns=['date'])
-        partition = partition.reset_index().set_index('s2_candidates')
+        op_part['delta_day'] = (gedi_date - s2_date).dt.days.abs().astype('uint16')
+        op_part = op_part.drop(columns=['date'])
+        op_part = op_part.reset_index().set_index('s2_candidates')
 
         client = get_client()
         items = row_to_stac_item(s2_meta_table, S2_ITEM_PROPS)
         items_table = []
         # futures = []
         for item in items:
-            bounds = partition.loc[[item.id]]
+            bounds = op_part.loc[[item.id]]
             items_table.append((item, bounds))
             # future = dask.delayed(self.calculate_defective_cover)((item, bounds))
             # futures.append(future)
-        del partition
+        # del partition
 
         # futures = client.map(self.calculate_defective_cover, items_table[:6])
         # print(len(futures))
@@ -493,7 +494,10 @@ class S2Downloader(DaskDownloader):
         # res = dask.compute(futures)
         df = pd.concat(res)
         df = df[df['defective_cover'] <= 0.8]
-        df = df.sort_values(['defective_cover', 'delta_day']).groupby('shot_number').head(1)  
+        df = df.sort_values(['defective_cover', 'delta_day']).groupby('shot_number').head(1)
+        # df = df.reset_index().set_index('shot_number').drop(columns='geometry')
+        # res = partition.merge(df, how='left', left_index=True, right_index=True)
+        # res.to_parquet(self.gedi_dir / zone / f'part_{partition_number}_with_s2.parquet')
 
         s2_ids = df.index.unique()
         s2_table = s2_meta_table.loc[s2_ids]
@@ -548,7 +552,7 @@ class S2Downloader(DaskDownloader):
         Returns:
             pandas.DataFrame: DataFrame with defective cover for each GEDI location
         '''
-        
+        client = get_client()
         item, locs = entry
         epsg = item.properties['proj:epsg']
         locs = locs.to_crs(epsg)
@@ -568,9 +572,11 @@ class S2Downloader(DaskDownloader):
         locs['defective_cover'] = defective_cover
         locs = locs.to_crs(4326)
         del image
+        client.run(trim_memory)
         return locs.astype({'defective_cover': 'float32'})
 
     def extract_patches_from_tile(self, entry, wc_items, dem_items):
+        client = get_client()
         item, locs = entry
         epsg = item.properties['proj:epsg']
         locs = locs.copy().to_crs(epsg)
@@ -613,7 +619,7 @@ class S2Downloader(DaskDownloader):
             'spec': ('shot_number', specs)
         })
         da['epsg'] = da.epsg.astype('uint16')
-        client = get_client()
+        
         client.run(trim_memory)
 
         patches = []
@@ -661,7 +667,7 @@ def main(cfg):
     # might fix the communication error caused by I/O. ref: https://github.com/dask/distributed/issues/3129#issuecomment-1684858307
     dask.config.set({"distributed.comm.retry.count": 10})
     dask.config.set({"distributed.comm.timeouts.connect": 30})
-    dask.config.set({"distributed.nanny.pre-spawn-environ.MALLOC_TRIM_THRESHOLD_": 0})
+    dask.config.set({"distributed.scheduler.active-memory-manager.MALLOC_TRIM_THRESHOLD_": 0})
     cluster = LocalCluster(n_workers=4, threads_per_worker=4)
     client = Client(cluster)  # timeout
     print(client)

@@ -150,10 +150,10 @@ class S2MetaGather(DaskDownloader):
         gedi_df['end'] = gedi_df['end'].mask(use_growing_season, leaf_off_date)
         # gedi_df.crs = 'epsg:4326'
 
-        # number = 1
-        # test_df = gedi_df.get_partition(number).compute()#[:20]
-        # df = self.get_meta_for_partition(test_df, partition_info={'number': number, 'division': None})
-        # print('test done')
+        number = 247
+        test_df = gedi_df.get_partition(number).compute()#[:20]
+        df = self.get_meta_for_partition(test_df, zone, partition_info={'number': number, 'division': None})
+        print('test done')
 
         df = gedi_df.map_partitions(self.get_meta_for_partition, zone, meta=(None, 'object'))
         self.schedule_tasks(df)
@@ -189,21 +189,27 @@ class S2MetaGather(DaskDownloader):
         geom = box(*partition.total_bounds)
 
         mgrs_tiles = self.s2_grid[self.s2_grid.geometry.intersects(geom)]['Name'].to_list()
-        s2_df = dgp.read_parquet(
-            self._filter_parquet_files(start, end),
-            storage_options=self.s2asset.extra_fields["table:storage_options"],
-            gather_spatial_partitions=False,
-            columns=STAC_ITEM_KEYS + S2_ITEM_PROPS + ['eo:cloud_cover'],
-            filters=[('s2:mgrs_tile', 'in', mgrs_tiles),
-                     ("eo:cloud_cover", "<", self.max_cloud_cover),
-                     ('s2:water_percentage', '<', self.max_water_percentage)]
-        )
+        try:
+            files = self._filter_parquet_files(start, end)
+            s2_df = dgp.read_parquet(
+                files,
+                storage_options=self.s2asset.extra_fields["table:storage_options"],
+                gather_spatial_partitions=False,
+                columns=STAC_ITEM_KEYS + S2_ITEM_PROPS + ['eo:cloud_cover'],
+                filters=[('s2:mgrs_tile', 'in', mgrs_tiles),
+                        ("eo:cloud_cover", "<", self.max_cloud_cover),
+                        ('s2:water_percentage', '<', self.max_water_percentage)]
+            )
+        except Exception as e:
+            print(files)
+            import ipdb; ipdb.set_trace()
+            # raise e
         s2_df = s2_df.map_partitions(lambda x: x, meta=s2_df).compute()
         if s2_df.empty:
             return
         s2_df['datetime'] = s2_df['datetime'].dt.tz_localize(None)
         s2_df = s2_df.astype({'proj:epsg': 'uint16', 'eo:cloud_cover': 'float32',
-                             'id': 'string[python]', 's2:mgrs_tile': 'string[python]'})
+                             'id': 'string[python]'})
         partition.crs = 'epsg:4326'
         df = partition[['shot_number', 'geometry', 'start', 'end', 'date']].sjoin(
             s2_df[['id', 'geometry', 'eo:cloud_cover', 'datetime']], how='left')
