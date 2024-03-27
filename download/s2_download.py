@@ -352,10 +352,9 @@ class S2Downloader(DaskDownloader):
             logger.info(f'{zone} {self.year}_partition_{partition_number} has been processed.')
             return
 
-        partition = partition.set_index('shot_number')
-        op_part = partition[['geometry', 'best_s2']]
-
-        s2_ids = op_part['best_s2'].unique()
+        partition.dropna(subset='best_s2', inplace=True)
+        op_part = partition[['shot_number', 'geometry', 'best_s2']].set_index('best_s2')
+        s2_ids = op_part.index.unique()
         s2_meta_table = gpd.read_parquet(
             self.gedi_dir / f'{zone}/s2_items.parquet', filters=[('id', 'in', s2_ids)])
         s2_meta_table = s2_meta_table.set_index('id')
@@ -392,6 +391,7 @@ class S2Downloader(DaskDownloader):
         slope_da = slope_da.assign_coords(x=ds.x, y=ds.y)  # set xy coords back to 0-14
         slope_da = slope_da.drop_vars(['x', 'y'])
 
+        partition = partition.set_index('shot_number')
         rh_da = partition[rh_dtype.keys()].to_xarray().to_dataarray('rh', 'rhs')
         gedi_attr_da = partition[gedi_attr_dtype.keys()].to_xarray().to_dataarray('attr', 'gedi_attrs')
         latlon_da = partition[latlon_dtype.keys()].to_xarray().to_dataarray('xy', 'latlon')
@@ -403,44 +403,16 @@ class S2Downloader(DaskDownloader):
         ds['band'] = ds['band'].astype('<U6')
         bands = ds.band.values
         bands[-1] = 'esa_wc'
-        ds = ds.assign_coords(band=bands)
+        ds = ds.assign_coords(
+                    band=bands,
+                    delta_day=('shot_number', partition['delta_day']),
+                    defective_cover=('shot_number', partition['defective_cover']),
+            )
         with Lock('netcdf_lock'):
             ds.to_netcdf(self.save_dir / f'{zone}.h5', group=f'{self.year}/{partition_number}',
                          format='NETCDF4', engine='h5netcdf', encoding=self.comp, mode='a')
         flag.touch()
 
-    def calculate_defective_cover(self, entry):
-        '''
-        Calculate defective cover (patch level) for GEDI locations on the same S2 tile.
-
-        Args:
-            group (pandas.DataFrame): DataFrame of GEDI locations on the same S2 tile
-
-        Returns:
-            pandas.DataFrame: DataFrame with defective cover for each GEDI location
-        '''
-        client = get_client()
-        item, locs = entry
-        epsg = item.properties['proj:epsg']
-        locs = locs.to_crs(epsg)
-        bounds = self.buffer_and_snap_bounds(locs.geometry, self.buffer_size, self.out_res)
-        total_bounds = self.total_bounds(bounds)
-
-        image = get_patch(item, ['SCL'], resolution=self.out_res, bounds=total_bounds, epsg=epsg, dtype='uint8')
-        defective_cover = []
-        image = image.load()
-        for row in bounds.itertuples():
-            xrange = range(row.minx, row.maxx, self.out_res) #slice(row.minx, row.maxx)
-            yrange = range(row.maxy, row.miny, -self.out_res) #slice(row.maxy, row.miny)
-            patch = image.sel(x=xrange, y=yrange).squeeze()
-            dc = patch.isin(defective_SCL).sum(dim=['x', 'y']) / np.prod(patch.shape[-2:])
-            defective_cover.append(dc.data)
-        # defective_cover = dask.compute(*defective_cover)
-        locs['defective_cover'] = defective_cover
-        locs = locs.to_crs(4326)
-        del image
-        client.run(trim_memory)
-        return locs.astype({'defective_cover': 'float32'})
 
     def extract_patches_from_tile(self, entry, wc_items, dem_items):
         client = get_client()
@@ -481,12 +453,9 @@ class S2Downloader(DaskDownloader):
             patches, dim=pd.Index(locs.shot_number.values, name='shot_number'),
             coords='all', combine_attrs='drop')
         da = da.assign_coords({
-            'delta_day': ('shot_number', locs['delta_day']),
-            'defective_cover': ('shot_number', locs['defective_cover']),
             'spec': ('shot_number', specs)
         })
         da['epsg'] = da.epsg.astype('uint16')
-        
         client.run(trim_memory)
 
         patches = []
@@ -502,7 +471,6 @@ class S2Downloader(DaskDownloader):
         del dem_image
         del image
         
-        client.run(trim_memory)
         return {'da': da, 'dem_da': dem_da.drop_vars(['epsg'])}
 
 # %%
@@ -519,7 +487,7 @@ def main(cfg):
     dask.config.set({"distributed.comm.retry.count": 10})
     dask.config.set({"distributed.comm.timeouts.connect": 30})
     dask.config.set({"distributed.scheduler.active-memory-manager.MALLOC_TRIM_THRESHOLD_": 0})
-    cluster = LocalCluster(n_workers=4, threads_per_worker=4)
+    cluster = LocalCluster()# n_workers=4, threads_per_worker=4
     client = Client(cluster)  # timeout
     print(client)
 
@@ -527,7 +495,7 @@ def main(cfg):
     t0 = time.time()
 
     logger.info(f'processing zone: {cfg.zone}')
-    res = s2downloader.download_zone(cfg.zone, cfg.rewrite)
+    s2downloader.download_zone(cfg.zone, cfg.from_file, cfg.rewrite)
     logger.info(f'time taken for {cfg.zone} {cfg.year}: {time.time() - t0}')
     # client.close()
 
