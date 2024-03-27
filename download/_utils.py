@@ -3,12 +3,16 @@ import json
 import ee
 import pystac
 import planetary_computer
+import backoff
 import pyproj
 import ctypes
 import numpy as np
 import geopandas as gpd
+from typing import Union, List
 from stackstac.raster_spec import RasterSpec
-from _const import STAC_ITEM_KEYS
+from rasterio.errors import RasterioIOError
+from ._const import STAC_ITEM_KEYS
+from utils._stackstac import stack
 
 stac_endpoint = 'https://planetarycomputer.microsoft.com/api/stac/v1'
 
@@ -140,6 +144,42 @@ def row_to_stac_item(df, props):
         items.append(item)
     return items
 
+def backoff_hdlr(details):
+    print("Backing off {wait:0.1f} seconds after {tries} tries "
+          "calling function {target} with args {args} and kwargs "
+          "{kwargs}".format(**details))
+
+
+def fatal_code(e):
+    return 400 <= e.response.status_code < 500
+
+@backoff.on_exception(backoff.expo,
+                      RasterioIOError,
+                      max_time=300,
+                      on_backoff=backoff_hdlr,
+                    #   giveup=fatal_code,
+)
+def get_patch(items,
+              assets: Union[str, List[str]] = None,
+              resolution: int = 10,
+              fill_value: Union[int, float] = 0,
+              band_coords: bool = False,
+              properties: bool = False,
+              dtype: str = 'uint16',
+              xy_coords: bool = 'topleft',
+              snap_bounds=False,
+              **kwargs):
+    default_args = dict(assets=assets,
+                        resolution=resolution,
+                        fill_value=fill_value,
+                        band_coords=band_coords,
+                        properties=properties,
+                        dtype=dtype,
+                        xy_coords=xy_coords,
+                        snap_bounds=snap_bounds)
+    #TODO: how to check if the error is caused by the expired token?
+    patch = stack(items, **default_args, **kwargs)
+    return patch
 
 def trim_memory() -> int:
     """
