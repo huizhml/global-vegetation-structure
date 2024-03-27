@@ -12,6 +12,7 @@ import adlfs
 import dask
 import dask_geopandas as dgp
 from dask.utils import natural_sort_key
+from dask.distributed import Variable
 import pandas as pd
 import geopandas as gpd
 import dask.dataframe as dd
@@ -38,22 +39,26 @@ api = pystac_client.Client.open(stac_endpoint, modifier=planetary_computer.sign_
 class S2MetaGather(DaskDownloader):
 
     def __init__(self,
+                 rewrite: bool = False,
                  root_dir: str = None,
                  data_dir: str = 'GEDI',
                  save_dir: str = 'data/GEDI',
+                 S2_meta_dir: str = 'scratch/S2_meta',
                  s2_grid_file: str = 'GEDI/Sentinel-2_tilling_shp/sentinel_2_index_shapefile.shp',
                  year: int = 2019,
                  query_days: int = 90,
                  n_parallel: int = 100,
                  max_cloud_cover: int = 50,
                  max_water_percentage: int = 99,
-                 rewrite: bool = False,
+                 max_retries: int = 3,
                  **kwargs
                  ) -> None:
         super().__init__(n_parallel=n_parallel, max_retries=3, **kwargs)
         root_dir = Path(root_dir) if root_dir else Path.home()
-        self.gedi_dir = root_dir / f'{data_dir}/{year}'
-        self.save_dir = root_dir / f'{save_dir}/{year}'
+        self.gedi_dir = root_dir / data_dir
+        self.save_dir = root_dir / save_dir
+        self.S2_meta_dir = root_dir / S2_meta_dir
+        self.temp_dir = root_dir / f'scratch/tmp/{year}' # save temporary s2_items_*.parquet files
         self.rewrite = rewrite
         self.n_parallel = n_parallel
         self.year_start = pd.Timestamp(f'{year}-01-01')
@@ -102,32 +107,42 @@ class S2MetaGather(DaskDownloader):
         return filtered['fname'].to_list()
 
     def process_zone(self, zone):
-        '''
+        """
         Gather Sentinel-2 metadate(STAC geoparquet items) we'll read data from for each MGRS zone.
         For each partition of GEDI data, we'll filter Sentinel-2 items based on the bounding box and time range of the partition.
 
         Parameters
         ------------
-        zone (str or list): The MGRS zone(s) to filter S2 tiles for. GEDI partitions with S2 candidates added will be saved to their original folder.
+        * zone (str or list): The MGRS zone(s) to filter S2 tiles for. GEDI partitions with S2 candidates added will be saved to self.save_dir / zone.
             * str: A large zone, e.g. '20M'. S2 metadata table will be saved to the zone level folder e.g, GEDI/2019/20M, with name 's2_items.parquet'.
             * list: A list of smaller zones, e.g. ['01G', '01K']. S2 metadata table will be saved to folder smaller_zones, e.g, GEDI/2019/smaller_zones, with name 's2_items.parquet'.
-        '''
+        """
         if isinstance(zone, str):
-            gedi_df = dgp.read_parquet(self.gedi_dir / f'{zone}/partition*.parquet')
+            files = list(self.gedi_dir.glob(f'{zone}/partition*.parquet'))
+            (self.save_dir / zone).mkdir(exist_ok=True, parents=True)
+            self.temp_dir = self.temp_dir / zone
+            s2_table_file = self.S2_meta_dir / f'{zone}.parquet'
         else:
             # Read GEDI partitions from multiple zones, add paths of partitions in divisions
-            paths = []
+            self.temp_dir = self.temp_dir / 'small_zones'
+            s2_table_file = self.gedi_dir / 'small_zones.parquet'
+            files = []
             for z in zone:
-                paths.extend(list(self.gedi_dir.glob(f'{z}/partition*.parquet')))
-            paths = [str(p) for p in paths]
-            paths = sorted(paths, key=natural_sort_key)
-            divisions = tuple(paths + [paths[-1]])
-            gedi_df = dgp.read_parquet(paths, dropna=True)
-            gedi_df.divisions = divisions
-            zone = 'small_zones'
-            (self.gedi_dir / zone).mkdir(exist_ok=True, parents=True)
+                files.extend(list(self.gedi_dir.glob(f'{z}/partition*.parquet')))
+                (self.save_dir / z).mkdir(exist_ok=True, parents=True)
+
+        if not self.rewrite and s2_table_file.exists():
+            logger.info(f'S2 metadata table already exists for {zone}. Skipping...')
+            return
+        
+        files = [str(p) for p in files]
+        files = sorted(files) # key=natural_sort_key
+        divisions = tuple(files + [files[-1]])
+        gedi_df = dgp.read_parquet(files, index='shot_number', gather_spatial_partitions=False)
+        gedi_df.divisions = divisions 
+            
         # tmp dir to cache small S2 metadata tables
-        (self.save_dir / zone).mkdir(exist_ok=True, parents=True)
+        self.temp_dir.mkdir(exist_ok=True, parents=True)
 
         logger.info(f'Processing {gedi_df.npartitions} partitions...')
 
@@ -150,60 +165,70 @@ class S2MetaGather(DaskDownloader):
         gedi_df['end'] = gedi_df['end'].mask(use_growing_season, leaf_off_date)
         # gedi_df.crs = 'epsg:4326'
 
-        number = 247
-        test_df = gedi_df.get_partition(number).compute()#[:20]
-        df = self.get_meta_for_partition(test_df, zone, partition_info={'number': number, 'division': None})
-        print('test done')
+        # number = 247
+        # test_df = gedi_df.get_partition(number).compute()#[:20]
+        # division = gedi_df.divisions[number]
+        # df = self.get_meta_for_partition(test_df, partition_info={'number': number, 'division': division})
+        # print('test done')
 
-        df = gedi_df.map_partitions(self.get_meta_for_partition, zone, meta=(None, 'object'))
-        self.schedule_tasks(df)
-        logger.info('Finish gathering Sentinel-2 metadata. Merging metadata tables...')
-        s2_meta_table = dgp.read_parquet(self.save_dir / zone / 's2_items_*.parquet', gather_spatial_partitions=False)
-        s2_meta_table = s2_meta_table.drop_duplicates(subset=['id'])
-        s2_meta_table = s2_meta_table.compute()
-        s2_meta_table.to_parquet(self.gedi_dir / zone / f's2_items.parquet')
-        logger.info('Finish merging metadata tables. Deleting temporary files...')
-        os.system(f'rm -rf {self.save_dir / zone}')
+        df = gedi_df.map_partitions(self.get_meta_for_partition, meta=(None, 'object'))
+        nfailed = self.schedule_tasks(df)
+        if nfailed > 0:
+            # one more try
+            logger.info('Some partitions failed. Restarting the client...')
+            client = dask.distributed.get_client()
+            client.restart()
+            nfailed = self.schedule_tasks(df)
+        
+        if nfailed <= 0:
+            logger.info('Finish gathering Sentinel-2 metadata. Merging metadata tables...')
+            s2_meta_table = dgp.read_parquet(self.temp_dir / 's2_items_*.parquet', gather_spatial_partitions=False)
+            s2_meta_table = s2_meta_table.drop_duplicates(subset=['id'])
+            s2_meta_table = s2_meta_table.compute()
+            s2_meta_table.to_parquet(s2_table_file)
+            logger.info('Finish merging metadata tables. Deleting temporary files...')
+            os.system(f'rm -rf {self.temp_dir}')
 
-    def get_meta_for_partition(self, partition, zone, partition_info: dict = None):
+
+    def get_meta_for_partition(self, partition, partition_info: dict = None):
         """
         Query, filter, and stack S2 and ESA world cover patches for each GEDI partition.
         GEDI data is partitioned to cache a number of locations for the sake of memory efficiency.
 
         Args:
             partition (pandas.DataFrame): The partition containing the data.
-            zone (str): The zone identifier.
-            esa_wc_items (pystac.ItemCollection): The collection of ESA WC items.
             partition_info (dict, optional): Information about the partition.
         """
-        tmp_zone = zone
-        if partition_info["division"] is not None:
-            zone = partition_info["division"].split('/')[-2]
-            partition_number = int(
-                partition_info["division"].split('_')[1].split('.')[0])
-        else:
-            partition_number = partition_info['number']
+        zone = partition_info["division"].split('/')[-2]
+        partition_number = int(partition_info["division"].split('_')[-1].split('.')[0])
+
+        s2_items_file = self.temp_dir / f's2_items_{partition_number}.parquet'
+        partition_file = self.save_dir / zone / f'partition_{partition_number}.parquet'
+        if not self.rewrite and partition_file.exists() and s2_items_file.exists():
+            logger.info(f'partition {partition_number} with S2 candidates already exists. Skipping...')
+            return
 
         start = partition['start'].min()
         end = partition['end'].max()
         geom = box(*partition.total_bounds)
 
         mgrs_tiles = self.s2_grid[self.s2_grid.geometry.intersects(geom)]['Name'].to_list()
-        try:
-            files = self._filter_parquet_files(start, end)
-            s2_df = dgp.read_parquet(
-                files,
-                storage_options=self.s2asset.extra_fields["table:storage_options"],
-                gather_spatial_partitions=False,
-                columns=STAC_ITEM_KEYS + S2_ITEM_PROPS + ['eo:cloud_cover'],
-                filters=[('s2:mgrs_tile', 'in', mgrs_tiles),
-                        ("eo:cloud_cover", "<", self.max_cloud_cover),
-                        ('s2:water_percentage', '<', self.max_water_percentage)]
-            )
-        except Exception as e:
-            print(files)
-            import ipdb; ipdb.set_trace()
-            # raise e
+        files = self._filter_parquet_files(start, end)
+        # try:
+            
+        s2_df = dgp.read_parquet(
+            files,
+            storage_options=self.s2asset.extra_fields["table:storage_options"],
+            gather_spatial_partitions=False,
+            columns=STAC_ITEM_KEYS + S2_ITEM_PROPS + ['eo:cloud_cover'],
+            filters=[('s2:mgrs_tile', 'in', mgrs_tiles),
+                    ("eo:cloud_cover", "<", self.max_cloud_cover),
+                    ('s2:water_percentage', '<', self.max_water_percentage)]
+        )
+        # except Exception as e:
+        #     print(files)
+        #     import ipdb; ipdb.set_trace()
+        #     # raise e
         s2_df = s2_df.map_partitions(lambda x: x, meta=s2_df).compute()
         if s2_df.empty:
             return
@@ -211,22 +236,20 @@ class S2MetaGather(DaskDownloader):
         s2_df = s2_df.astype({'proj:epsg': 'uint16', 'eo:cloud_cover': 'float32',
                              'id': 'string[python]'})
         partition.crs = 'epsg:4326'
-        df = partition[['shot_number', 'geometry', 'start', 'end', 'date']].sjoin(
+        df = partition[['geometry', 'start', 'end', 'date']].sjoin(
             s2_df[['id', 'geometry', 'eo:cloud_cover', 'datetime']], how='left')
         df = df.dropna(subset=['id'])
         df.loc[:, 'delta_day'] = (df['datetime'] - df['date']).dt.days.abs().astype('uint16')
 
         df = df.groupby('shot_number').apply(self.agg_s2_candidate_ids, include_groups=False)
-        df = df.reset_index()
-        partition = partition.merge(df, on='shot_number')
-        partition = partition.drop(columns=['start', 'end', 'level_1'])
-        partition.to_parquet(self.gedi_dir / zone / f'part_{partition_number}_with_s2.parquet')
+        partition = partition.merge(df, how='left', left_index=True, right_index=True)
+        partition = partition.drop(columns=['start', 'end']).reset_index()
+        partition.to_parquet(partition_file)
 
         s2_df = s2_df.drop(columns='eo:cloud_cover').set_index('id')
         s2_candidates = partition['s2_candidates'].explode().drop_duplicates()
         s2_candidates = s2_df.loc[s2_candidates].reset_index()
-        s2_candidates.to_parquet(self.save_dir / tmp_zone / f's2_items_{partition_number}.parquet')
-
+        s2_candidates.to_parquet(s2_items_file)
         logger.info(f'finish partition {partition_number}')
 
     def agg_s2_candidate_ids(self, group):
@@ -236,8 +259,7 @@ class S2MetaGather(DaskDownloader):
             group = group[mask]
         group = group.sort_values(['eo:cloud_cover', 'delta_day']).iloc[:10]
         s2_ids = group['id'].drop_duplicates().to_list()
-        if len(s2_ids) > 0:
-            return pd.DataFrame({'s2_candidates': [s2_ids]})
+        return pd.DataFrame({'s2_candidates': [s2_ids]})
 
 
 # #%%
@@ -257,7 +279,7 @@ def main(cfg):
     logger.info(f'processing zone: {cfg.zone}')
     print(client)
 
-    s2_meta_gather = S2MetaGather(**cfg)
+    s2_meta_gather = S2MetaGather(cfg.rewrite, cfg.root_dir, **cfg.meta)
     t0 = time.time()
 
     logger.info(f'processing zone: {cfg.zone}')

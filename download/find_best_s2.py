@@ -3,44 +3,33 @@
 from dotenv import load_dotenv
 import hydra
 import ipdb
-from shapely.geometry import box, Point
-from rasterio.errors import RasterioIOError
-import pyproj
 import dask.bag as db
-import dask.dataframe as dd
 import geopandas as gpd
 import pandas as pd
 from dask.utils import natural_sort_key
-from dask.distributed import Lock, Semaphore, get_client, as_completed
+from dask.distributed import get_client
 import dask_geopandas as dgp
 import dask
 import os
 import gc
-import ctypes
 import time
 import logging
 from pathlib import Path
-from typing import Union, List
-import pickle
 from itertools import chain
+from omegaconf import OmegaConf
 
 import numpy as np
-import xarray as xr
-
-import pystac
 import pystac_client
 import planetary_computer
 from urllib3 import Retry
 from pystac_client.stac_api_io import StacApiIO
 
 from download.dask_downloader import DaskDownloader
-from ._const import dtypes, gedi_attr_dtype, rh_dtype, latlon_dtype, STAC_ITEM_KEYS, S2_ITEM_PROPS
-from utils._stackstac import stack
-from _utils import resign_items, row_to_stac_item, trim_memory, buffer_and_snap_bounds, get_total_bounds
+from ._const import  S2_ITEM_PROPS
+from ._utils import row_to_stac_item, trim_memory, buffer_and_snap_bounds, get_total_bounds, get_patch
 
 # %%
 load_dotenv('.planetarycomputer/settings.env')
-os.environ["GDAL_HTTP_MAX_RETRY"] = "3"
 
 # TODO: control from yaml
 # g0, g1, g2 = gc.get_count()
@@ -58,65 +47,36 @@ defective_SCL = [0, 1, 8, 9, 10, 11]  # keep cloud shadows, model should learn t
 
 logger = logging.getLogger(__name__)
 
-def backoff_hdlr(details):
-    print("Backing off {wait:0.1f} seconds after {tries} tries "
-          "calling function {target} with args {args} and kwargs "
-          "{kwargs}".format(**details))
-
-# TODO: add backoff
-def get_patch(items,
-              assets: Union[str, List[str]] = None,
-              resolution: int = 10,
-              fill_value: Union[int, float] = 0,
-              band_coords: bool = False,
-              properties: bool = False,
-              dtype: str = 'uint16',
-              xy_coords: bool = 'topleft',
-              snap_bounds=False,
-              **kwargs):
-    default_args = dict(assets=assets,
-                        resolution=resolution,
-                        fill_value=fill_value,
-                        band_coords=band_coords,
-                        properties=properties,
-                        dtype=dtype,
-                        xy_coords=xy_coords,
-                        snap_bounds=snap_bounds)
-    try:
-        patch = stack(items, **default_args, **kwargs)
-    except:
-        # TODO: rasterioerror still occurs sometimes, the url indeed didn't work, why?
-        # TODO: this will fail the whole partition, how to catch such error and retry?
-        # token might expire, sign again
-        items = resign_items(items)
-        patch = stack(items, **default_args, **kwargs)
-    return patch
-
 
 class S2Downloader(DaskDownloader):
 
     def __init__(self,
+                 rewrite: bool = False,
+                 root_dir: str = None,
                  year: int = 2019,
                  n_parallel: int = 100,
-                 root_dir: str = None,
                  data_dir='GEDI',
                  save_dir: str = 'data/GEDI',
+                 S2_meta_dir: str = 'scratch/S2_meta',
                  patch_size: int = 15,
                  out_res: int = 10,
+                 max_retries: int = 3,
                  **kwargs
                  ) -> None:
         super().__init__(n_parallel=n_parallel, max_retries=3, **kwargs)
         root_dir = Path(root_dir) if root_dir else Path.home()
-        self.gedi_dir = root_dir / f'{data_dir}/{year}'
+        self.gedi_dir = root_dir / data_dir
         self.save_dir = root_dir / save_dir
+        self.S2_meta_dir = root_dir / S2_meta_dir
         self.year = year
         self.n_parallel = n_parallel
         self.patch_size_in_meters = patch_size * out_res
         self.out_res = out_res
         self.buffer_size = patch_size // 2 * out_res  # in meters
         self.patch_size = (self.buffer_size * 2 + out_res) / out_res
+        self.rewrite = rewrite
 
-    def find_best_s2(self, zone: str = None, from_file:str=None, to_file:str=None, rewrite: bool = False):
+    def find_best_s2(self, zone: str = None):
         """
         Find the best Sentinel-2 scene for each GEDI location in the given GEDI zone.
         Sentinel-2 candidates are pre-filtered based on scene level cloud cover and growing season (if the GEDI footprint is captured in the growing season).
@@ -132,65 +92,51 @@ class S2Downloader(DaskDownloader):
         * str: A string indicating the status of the processing. Returns 'done' if the zone and year have already been processed.
         """
         if isinstance(zone, str):
-            (self.save_dir/zone).mkdir(exist_ok=True, parents=True)
-            flag = self.save_dir / f'{zone}_{self.year}_done'
-            if rewrite:
-                if flag.exists():
-                    os.remove(flag)
-                for f in (self.save_dir/zone).glob('*'):
-                    os.remove(f)
-            if flag.exists():
-                logger.info(f'{zone} {self.year} has been processed.')
-                return
-
-            gedi_df = dgp.read_parquet(self.gedi_dir / f'{zone}/{from_file}.parquet')
+            files = list(self.gedi_dir.glob(f'{zone}/partition*.parquet'))
+            (self.save_dir / zone).mkdir(exist_ok=True, parents=True)
+            self.s2_table_file = self.S2_meta_dir / f'{zone}.parquet'
+            flag = self.save_dir / f'{zone}_done'
         else:
-            paths = []
+            # Read GEDI partitions from multiple zones, add paths of partitions in divisions
+            self.s2_table_file = self.S2_meta_dir / 'small_zones.parquet'
+            flag = self.save_dir / 'small_zones_done'
+            files = []
             for z in zone:
-                (self.save_dir/z).mkdir(exist_ok=True, parents=True)
-                flag = self.save_dir / f'{z}_{self.year}_done'
-                if rewrite:
-                    if flag.exists():
-                        os.remove(flag)
-                    for f in (self.save_dir/z).glob('*'):
-                        os.remove(f)
-                if flag.exists():
-                    logger.info(f'{z} {self.year} has been processed.')
-                    continue
-                paths.extend(list(self.gedi_dir.glob(f'{z}/{from_file}.parquet')))
-            if len(paths) == 0:
-                logger.info(f'All zones: {zone} in {self.year} have been processed.')
-                return
-            paths = [str(p) for p in paths]
-            paths = sorted(paths, key=natural_sort_key)
-            divisions = tuple(paths + [paths[-1]])
-            gedi_df = dgp.read_parquet(paths, dropna=True)
-            gedi_df.divisions = divisions
+                files.extend(list(self.gedi_dir.glob(f'{z}/partition*.parquet')))
+                (self.save_dir / z).mkdir(exist_ok=True, parents=True)
+        if not self.rewrite and flag.exists():
+            logger.info(f'{zone} has been processed.')
+            return 
+        
+
+        files = [str(p) for p in files]
+        files = sorted(files)
+        divisions = tuple(files + [files[-1]])
+        gedi_df = dgp.read_parquet(files, gather_spatial_partitions=False, index='shot_number')
+        gedi_df.divisions = divisions
 
         logger.info(f'Processing {gedi_df.npartitions} partitions...')
 
-        number = 13
-        test = gedi_df.get_partition(number).compute()
-        df = self.find_best_s2_for_partition(test, zone, rewrite=True, partition_info={'number': number, 'division': None})
-        logger.info('test done')
-        df = gedi_df.map_partitions(self.find_best_s2_for_partition, zone, to_file, rewrite, meta=(None, 'string'))
-        self.schedule_tasks(df)
+        # number = 13
+        # test = gedi_df.get_partition(number).compute()
+        # division = gedi_df.divisions[number]
+        # df = self.find_best_s2_for_partition(test, partition_info={'number': number, 'division': division})
+        # logger.info('test done')
+        df = gedi_df.map_partitions(self.find_best_s2_for_partition, meta=(None, 'string'))
+        nfailed = self.schedule_tasks(df)
 
-        # Create flags #TODO: use global Variable
-        if isinstance(zone, str):
-            flags = list(self.save_dir.glob(f'{zone}/{self.year}*'))
-            if len(flags) == df.npartitions: # all partitions are done
-                flag.touch()
-        else:
-            for p in paths:
-                zone = Path(p).parent.name
-                # check if if #partition parquet files == #zone/year_partition_done files
-                flags = list(self.save_dir.glob(f'{zone}/{self.year}*'))
-                if len(flags) == len(list((self.gedi_dir/zone).glob('partition*.parquet'))):
-                    (self.save_dir/ f'{zone}_{self.year}_done').touch()
-        return
+        if nfailed > 0:
+            # one more try
+            logger.info('Some partitions failed. Restarting the client...')
+            client = dask.distributed.get_client()
+            client.restart()
+            nfailed = self.schedule_tasks(df)
 
-    def find_best_s2_for_partition(self, partition, zone: str, to_file:str, rewrite: bool = False, partition_info: dict = None):
+        if nfailed <= 0:
+            flag.touch()
+
+
+    def find_best_s2_for_partition(self, partition, partition_info: dict = None):
         """
         Find the best Sentinel-2 scene for each GEDI location in the given partition.
         A new column 'best_s2' is added to the partition(GeoDataFrame) and saved to the save_dir with name pattern specified by to_file.
@@ -198,28 +144,20 @@ class S2Downloader(DaskDownloader):
         Parameters
         ----------
         * partition (pandas.DataFrame): The partition containing s2_candidates.
-        * zone (str): The zone identifier.
         * to_file (str): The name pattern of the output file.
         * rewrite (bool): Whether to overwrite the existing file.
         """
-        flag = 'best_s2' in partition.columns
-        if flag and not rewrite:
-            logger.info(f'{zone} {self.year}_partition_{partition_number} has been processed.')
-            # TODO: update the list of done partitions using global Variable
+        partition_file = self.save_dir / zone / f'partition_{partition_number}.parquet'
+        if not self.rewrite and partition_file.exists():
+            logger.info(f'partition {partition_number} with best S2 already exists. Skipping...')
             return
+        zone = partition_info["division"].split('/')[-2]
+        partition_number = int(partition_info["division"].split('_')[-1].split('.')[0])
 
-        if partition_info["division"] is not None:
-            zone = partition_info["division"].split('/')[-2]
-            partition_number = int(partition_info["division"].split('_')[1].split('.')[0])
-        else:
-            partition_number = partition_info['number']
-
-        partition = partition.set_index('shot_number')
         op_part = partition[['date', 'geometry', 's2_candidates']]
 
         s2_candidates = set(chain.from_iterable(op_part['s2_candidates']))
-        s2_meta_table = gpd.read_parquet(
-            self.gedi_dir / f'{zone}/s2_items.parquet', filters=[('id', 'in', s2_candidates)])
+        s2_meta_table = gpd.read_parquet(self.s2_table_file, filters=[('id', 'in', s2_candidates)])
         s2_meta_table = s2_meta_table.set_index('id')
         s2_meta_table['datetime'] = s2_meta_table['datetime'].dt.strftime('%Y-%m-%d %H:%M:%S.%f')
 
@@ -248,9 +186,7 @@ class S2Downloader(DaskDownloader):
         df = df.rename(columns={'s2_candidates': 'best_s2'})
         res = partition.merge(df, how='left', left_index=True, right_index=True)
         res = res.reset_index()
-        to_file = to_file.replace('*', str(partition_number))
-        res.to_parquet(self.save_dir / zone / f'{to_file}.parquet')
-        #TODO: create a list of done partitions using global Vairable
+        res.to_parquet(partition_file)
 
 
     def calculate_defective_cover(self, entry):
@@ -294,8 +230,8 @@ class S2Downloader(DaskDownloader):
 def main(cfg):
     # if not (Path.home() / f'GEDI/{cfg.year}/{cfg.zone}').exists(): #TODO: some small zones might not have GEDI data in a certain year
     #     return
+    logger.info(OmegaConf.to_yaml(cfg))
     from dask.distributed import Client, LocalCluster
-    from dask import config
     # might fix the communication error caused by I/O. ref: https://github.com/dask/distributed/issues/3129#issuecomment-1684858307
     dask.config.set({"distributed.comm.retry.count": 10})
     dask.config.set({"distributed.comm.timeouts.connect": 30})
@@ -304,11 +240,11 @@ def main(cfg):
     client = Client(cluster)
     print(client)
 
-    s2downloader = S2Downloader(**cfg)
+    s2downloader = S2Downloader(cfg.rewrite, cfg.root_dir, **cfg.select)
     t0 = time.time()
 
     logger.info(f'processing zone: {cfg.zone}')
-    s2downloader.find_best_s2(cfg.zone, cfg.rewrite)
+    s2downloader.find_best_s2(cfg.zonee)
     logger.info(f'time taken for {cfg.zone} {cfg.year}: {time.time() - t0}')
     client.close()
 

@@ -42,6 +42,7 @@ class DaskDownloader:
         futures_monitor = as_completed(futures, with_results=False)
         n_left = total_tasks - n_parallel
         retry_counter: Dict[str, int] = defaultdict(int)
+        nfailed = 0
         while futures_monitor.count() > 0:
             f = next(futures_monitor)
             if f.status == 'error':
@@ -58,9 +59,9 @@ class DaskDownloader:
                         retry_counter[f.key] += 1
                     continue
                 else:
-                    logger.info(
-                        f'Failed to download {f.key} after {self.max_retries} retries.')
-                    # TODO: save the failed tasks to a file and retry later
+                    logger.info(f'Failed to download {f.key} after {self.max_retries} retries.')
+                    nfailed += 1
+
             f.release()
             if n_left > 0:
                 if delayed_tasks:
@@ -76,4 +77,4 @@ class DaskDownloader:
             else:
                 logger.info(f'************ all partitions submitted ****************')
                 logger.info(f'{futures_monitor.count()} in processing, 0 waiting')
-            
+        return nfailed
