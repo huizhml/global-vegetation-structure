@@ -255,7 +255,7 @@ class S2MetaGather(DaskDownloader):
     def agg_s2_candidate_ids(self, group):
         mask = (group['datetime'] >= group['start']) & (
             group['datetime'] <= group['end'])
-        if mask.sum() > 0:
+        if mask.sum() >= 10:
             group = group[mask]
         group = group.sort_values(['eo:cloud_cover', 'delta_day']).iloc[:10]
         s2_ids = group['id'].drop_duplicates().to_list()
@@ -265,7 +265,8 @@ class S2MetaGather(DaskDownloader):
 # #%%
 @hydra.main(config_path="../config", config_name="s2_download", version_base="1.2")
 def main(cfg):
-    from dask.distributed import Client, LocalCluster
+    from dask.distributed import Client, LocalCluster, performance_report
+    from distributed.diagnostics import MemorySampler
     from dask import config
     config.set({'distributed.scheduler.locks.lease-timeout': 60}) 
     # might fix the communication error caused by I/O. ref: https://github.com/dask/distributed/issues/3129#issuecomment-1684858307
@@ -283,7 +284,8 @@ def main(cfg):
     t0 = time.time()
 
     logger.info(f'processing zone: {cfg.zone}')
-    s2_meta_gather.process_zone(cfg.zone)
+    with performance_report(f'logs/meta-gather_{cfg.zone}_{cfg.year}.html'):
+        s2_meta_gather.process_zone(cfg.zone)
     logger.info(f'time taken for {cfg.zone} {cfg.year}: {time.time() - t0}')
     client.close()
 
