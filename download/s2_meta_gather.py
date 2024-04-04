@@ -5,13 +5,11 @@ import gc
 import time
 import logging
 from pathlib import Path
-from typing import Union, List
 import pystac_client
 import planetary_computer
 import adlfs
 import dask
 import dask_geopandas as dgp
-from dask.utils import natural_sort_key
 from dask.distributed import Variable
 import pandas as pd
 import geopandas as gpd
@@ -138,7 +136,7 @@ class S2MetaGather(DaskDownloader):
         files = [str(p) for p in files]
         files = sorted(files) # key=natural_sort_key
         divisions = tuple(files + [files[-1]])
-        gedi_df = dgp.read_parquet(files, index='shot_number', gather_spatial_partitions=False)
+        gedi_df = dgp.read_parquet(files, index=False, gather_spatial_partitions=False)
         gedi_df.divisions = divisions 
             
         # tmp dir to cache small S2 metadata tables
@@ -166,6 +164,7 @@ class S2MetaGather(DaskDownloader):
         # gedi_df.crs = 'epsg:4326'
 
         # number = 247
+        # self.rewrite = True
         # test_df = gedi_df.get_partition(number).compute()#[:20]
         # division = gedi_df.divisions[number]
         # df = self.get_meta_for_partition(test_df, partition_info={'number': number, 'division': division})
@@ -214,7 +213,6 @@ class S2MetaGather(DaskDownloader):
 
         mgrs_tiles = self.s2_grid[self.s2_grid.geometry.intersects(geom)]['Name'].to_list()
         files = self._filter_parquet_files(start, end)
-        # try:
             
         s2_df = dgp.read_parquet(
             files,
@@ -225,13 +223,10 @@ class S2MetaGather(DaskDownloader):
                     ("eo:cloud_cover", "<", self.max_cloud_cover),
                     ('s2:water_percentage', '<', self.max_water_percentage)]
         )
-        # except Exception as e:
-        #     print(files)
-        #     import ipdb; ipdb.set_trace()
-        #     # raise e
         s2_df = s2_df.map_partitions(lambda x: x, meta=s2_df).compute()
         if s2_df.empty:
             return
+        # TODO: remove invalid s2 items
         s2_df['datetime'] = s2_df['datetime'].dt.tz_localize(None)
         s2_df = s2_df.astype({'proj:epsg': 'uint16', 'eo:cloud_cover': 'float32',
                              'id': 'string[python]'})
@@ -241,23 +236,25 @@ class S2MetaGather(DaskDownloader):
         df = df.dropna(subset=['id'])
         df.loc[:, 'delta_day'] = (df['datetime'] - df['date']).dt.days.abs().astype('uint16')
 
-        df = df.groupby('shot_number').apply(self.agg_s2_candidate_ids, include_groups=False)
+        df = df.groupby(level=0).apply(self.agg_s2_candidate_ids, zone, include_groups=False)
+        df = df.droplevel(1)
         partition = partition.merge(df, how='left', left_index=True, right_index=True)
-        partition = partition.drop(columns=['start', 'end']).reset_index()
+        partition = partition.drop(columns=['start', 'end'])
         partition.to_parquet(partition_file)
 
         s2_df = s2_df.drop(columns='eo:cloud_cover').set_index('id')
-        s2_candidates = partition['s2_candidates'].explode().drop_duplicates()
+        s2_candidates = partition['s2_candidates'].explode().drop_duplicates().dropna()
         s2_candidates = s2_df.loc[s2_candidates].reset_index()
         s2_candidates.to_parquet(s2_items_file)
         logger.info(f'finish partition {partition_number}')
 
-    def agg_s2_candidate_ids(self, group):
+    def agg_s2_candidate_ids(self, group, zone):
         mask = (group['datetime'] >= group['start']) & (
             group['datetime'] <= group['end'])
         if mask.sum() >= 10:
             group = group[mask]
-        group = group.sort_values(['eo:cloud_cover', 'delta_day']).iloc[:10]
+        group['mgrs_tile'] = group['id'].str.extract(r'T(\d{2}[A-Z]{1})') == zone
+        group = group.sort_values(['mgrs_tile', 'eo:cloud_cover', 'delta_day']).iloc[:10] # should we keep all candidates and decide how many to keep in the next step?
         s2_ids = group['id'].drop_duplicates().to_list()
         return pd.DataFrame({'s2_candidates': [s2_ids]})
 
