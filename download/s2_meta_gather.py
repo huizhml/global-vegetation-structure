@@ -18,6 +18,7 @@ from shapely.geometry import box
 
 import hydra
 from dotenv import load_dotenv
+import warnings
 
 from download.dask_downloader import DaskDownloader
 from download._const import S2_ITEM_PROPS, STAC_ITEM_KEYS
@@ -30,6 +31,7 @@ logger = logging.getLogger('azure.core.pipeline.policies.http_logging_policy')
 # Set the logger level to WARNING, suppressing INFO logs
 logger.setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
+warnings.filterwarnings("ignore", category=pd.errors.SettingWithCopyWarning)
 
 stac_endpoint = 'https://planetarycomputer.microsoft.com/api/stac/v1'
 api = pystac_client.Client.open(stac_endpoint, modifier=planetary_computer.sign_inplace)
@@ -52,7 +54,6 @@ class S2MetaGather(DaskDownloader):
                  **kwargs
                  ) -> None:
         super().__init__(n_parallel=n_parallel, max_retries=3, **kwargs)
-        root_dir = Path(root_dir) if root_dir else Path.home()
         self.gedi_dir = root_dir / data_dir
         self.save_dir = root_dir / save_dir
         self.S2_meta_dir = root_dir / S2_meta_dir
@@ -128,10 +129,6 @@ class S2MetaGather(DaskDownloader):
             for z in zone:
                 files.extend(list(self.gedi_dir.glob(f'{z}/partition*.parquet')))
                 (self.save_dir / z).mkdir(exist_ok=True, parents=True)
-
-        if not self.rewrite and s2_table_file.exists():
-            logger.info(f'S2 metadata table already exists for {zone}. Skipping...')
-            return
         
         files = [str(p) for p in files]
         files = sorted(files) # key=natural_sort_key
@@ -163,7 +160,7 @@ class S2MetaGather(DaskDownloader):
         gedi_df['end'] = gedi_df['end'].mask(use_growing_season, leaf_off_date)
         # gedi_df.crs = 'epsg:4326'
 
-        # number = 247
+        # number = 39
         # self.rewrite = True
         # test_df = gedi_df.get_partition(number).compute()#[:20]
         # division = gedi_df.divisions[number]
@@ -212,6 +209,8 @@ class S2MetaGather(DaskDownloader):
         geom = box(*partition.total_bounds)
 
         mgrs_tiles = self.s2_grid[self.s2_grid.geometry.intersects(geom)]['Name'].to_list()
+        if len(mgrs_tiles) == 0:
+            return
         files = self._filter_parquet_files(start, end)
             
         s2_df = dgp.read_parquet(
@@ -234,18 +233,22 @@ class S2MetaGather(DaskDownloader):
         df = partition[['geometry', 'start', 'end', 'date']].sjoin(
             s2_df[['id', 'geometry', 'eo:cloud_cover', 'datetime']], how='left')
         df = df.dropna(subset=['id'])
-        df.loc[:, 'delta_day'] = (df['datetime'] - df['date']).dt.days.abs().astype('uint16')
+        # NOTE: s2 geoparquet items are pre-filtered using the partition bbox, each point not necessarily intersects with the s2 item, therefore df could by empty
+        if df.empty:
+            partition['s2_candidates'] = pd.NA
+        else:
+            df.loc[:, 'delta_day'] = (df['datetime'] - df['date']).dt.days.abs().astype('uint16')
+            df = df.groupby(level=0).apply(self.agg_s2_candidate_ids, zone, include_groups=False)
+            df = df.droplevel(1)
+            partition = partition.merge(df, how='left', left_index=True, right_index=True)
 
-        df = df.groupby(level=0).apply(self.agg_s2_candidate_ids, zone, include_groups=False)
-        df = df.droplevel(1)
-        partition = partition.merge(df, how='left', left_index=True, right_index=True)
+            s2_df = s2_df.drop(columns='eo:cloud_cover').set_index('id')
+            s2_candidates = partition['s2_candidates'].explode().drop_duplicates().dropna()
+            s2_candidates = s2_df.loc[s2_candidates].reset_index()
+            s2_candidates.to_parquet(s2_items_file)
+
         partition = partition.drop(columns=['start', 'end'])
         partition.to_parquet(partition_file)
-
-        s2_df = s2_df.drop(columns='eo:cloud_cover').set_index('id')
-        s2_candidates = partition['s2_candidates'].explode().drop_duplicates().dropna()
-        s2_candidates = s2_df.loc[s2_candidates].reset_index()
-        s2_candidates.to_parquet(s2_items_file)
         logger.info(f'finish partition {partition_number}')
 
     def agg_s2_candidate_ids(self, group, zone):
@@ -262,6 +265,17 @@ class S2MetaGather(DaskDownloader):
 # #%%
 @hydra.main(config_path="../config", config_name="s2_download", version_base="1.2")
 def main(cfg):
+    root_dir = Path(cfg.root_dir) if cfg.root_dir else Path.home()
+    S2_meta_dir = root_dir / cfg.meta.S2_meta_dir
+    if isinstance(cfg.zone, str):
+        s2_table_file = S2_meta_dir / f'{cfg.zone}.parquet'
+    else:
+        s2_table_file = S2_meta_dir / 'small_zones.parquet'
+
+    if not cfg.rewrite and s2_table_file.exists():
+        logger.info(f'S2 metadata table already exists for {cfg.zone}. Skipping...')
+        return
+
     from dask.distributed import Client, LocalCluster, performance_report
     from distributed.diagnostics import MemorySampler
     from dask import config
@@ -277,7 +291,7 @@ def main(cfg):
     logger.info(f'processing zone: {cfg.zone}')
     print(client)
 
-    s2_meta_gather = S2MetaGather(cfg.rewrite, cfg.root_dir, **cfg.meta)
+    s2_meta_gather = S2MetaGather(cfg.rewrite, root_dir, **cfg.meta)
     t0 = time.time()
 
     logger.info(f'processing zone: {cfg.zone}')
