@@ -5,8 +5,8 @@
 #SBATCH --mem=64G
 ##SBATCH --exclude hendrixgpu04fl,hendrixgpu03fl,hendrixgpu11fl,hendrixgpu12fl,hendrixgpu14fl,hendrixgpu15fl,hendrixgpu18fl #for using /scratch
 #SBATCH --time=3-00:00:00
-#SBATCH --output=./logs/%x-%j.out
-#SBATCH --error=./logs/%x-%j.err
+#SBATCH --output=./logs/%x-%A_%a.out
+#SBATCH --error=./logs/%x-%A_%a.err
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=huzh@di.ku.dk
 hostname
@@ -46,14 +46,15 @@ get_list() {
 
 # Example usage
 ID=$SLURM_ARRAY_TASK_ID
-echo 'reading config file ~/GEDI/download_job_lumi_'${ID}'.txt'
-read years zones merge_zones <  ~/GEDI/download_job_lumi_${ID}.txt
+# echo 'reading config file ~/GEDI/download_job_hendrix_'${ID}'.txt'
+# read years zones merge_zones <  ~/GEDI/download_job_hendrix_${ID}.txt
+read zones merge_zones <<< $(sed -n ${ID}p ~/GEDI/slurm_job_config.txt)
+years=${1:-[2019,2020,2021,2022]}
 echo $years 
 echo $zones 
 echo $merge_zones
 
 # zones=$1
-# years=$2
 # merge_zones=${3:-False}
 # rewrite=${4:-False}
 rewrite=False
@@ -67,8 +68,8 @@ echo "zones: $zone_list"
 if [[ $merge_zones == "True" ]]; then ## for small zones, processing them together as one big df
     IFS=','
     for year in ${year_list[@]}; do
-        echo download zones "$zones" $year;
-        python -u -m download.s2_meta_gather zone="$zones" year=$year rewrite=$rewrite
+        echo download zones "[$zones]" $year;
+        python -u -m download.s2_meta_gather zone="[$zones]" year=$year rewrite=$rewrite
     done
 else ## for large zones, processing them sequentially
     IFS=','
