@@ -64,7 +64,6 @@ class S2Downloader(DaskDownloader):
                  **kwargs
                  ) -> None:
         super().__init__(n_parallel=n_parallel, max_retries=3, **kwargs)
-        root_dir = Path(root_dir) if root_dir else Path.home()
         self.gedi_dir = root_dir / data_dir
         self.save_dir = root_dir / save_dir
         self.S2_meta_dir = root_dir / S2_meta_dir
@@ -110,14 +109,20 @@ class S2Downloader(DaskDownloader):
         
 
         files = [str(p) for p in files]
+        for file in files:
+            df = gpd.read_parquet(file)
+            if 'level_1' in df.columns:
+                df = df.drop(columns=['level_1'])
+                df.to_parquet(file)
         files = sorted(files)
         divisions = tuple(files + [files[-1]])
-        gedi_df = dgp.read_parquet(files, gather_spatial_partitions=False, index='shot_number')
+        gedi_df = dgp.read_parquet(files, gather_spatial_partitions=False)
         gedi_df.divisions = divisions
 
         logger.info(f'Processing {gedi_df.npartitions} partitions...')
 
-        # number = 13
+        # number = 15
+        # self.rewrite = True
         # test = gedi_df.get_partition(number).compute()
         # division = gedi_df.divisions[number]
         # df = self.find_best_s2_for_partition(test, partition_info={'number': number, 'division': division})
@@ -147,12 +152,12 @@ class S2Downloader(DaskDownloader):
         * to_file (str): The name pattern of the output file.
         * rewrite (bool): Whether to overwrite the existing file.
         """
+        zone = partition_info["division"].split('/')[-2]
+        partition_number = int(partition_info["division"].split('_')[-1].split('.')[0])
         partition_file = self.save_dir / zone / f'partition_{partition_number}.parquet'
         if not self.rewrite and partition_file.exists():
             logger.info(f'partition {partition_number} with best S2 already exists. Skipping...')
             return
-        zone = partition_info["division"].split('/')[-2]
-        partition_number = int(partition_info["division"].split('_')[-1].split('.')[0])
 
         op_part = partition[['date', 'geometry', 's2_candidates']]
 
@@ -168,6 +173,7 @@ class S2Downloader(DaskDownloader):
         op_part['delta_day'] = (gedi_date - s2_date).dt.days.abs().astype('uint16')
         op_part = op_part.drop(columns=['date'])
         op_part = op_part.reset_index().set_index('s2_candidates')
+        op_part = op_part.loc[s2_meta_table.index] # remove s2_candidates that are not in s2_meta_table
         client = get_client()
         items = row_to_stac_item(s2_meta_table, S2_ITEM_PROPS)
         items_table = []
@@ -180,12 +186,11 @@ class S2Downloader(DaskDownloader):
         
         client.run(trim_memory)
         df = pd.concat(res)
-        df = df[df['defective_cover'] <= 0.8]
-        df = df.sort_values(['defective_cover', 'delta_day']).groupby('shot_number').head(1)
-        df = df.reset_index().set_index('shot_number').drop(columns='geometry')
+        df = df[df['defective_cover'] <= 0.2]
+        df = df.sort_values(['defective_cover', 'delta_day']).groupby('index').head(1)
+        df = df.reset_index().set_index('index').drop(columns='geometry')
         df = df.rename(columns={'s2_candidates': 'best_s2'})
         res = partition.merge(df, how='left', left_index=True, right_index=True)
-        res = res.reset_index()
         res.to_parquet(partition_file)
 
 
@@ -210,9 +215,14 @@ class S2Downloader(DaskDownloader):
         bounds = buffer_and_snap_bounds(locs.geometry, self.buffer_size, self.out_res)
         total_bounds = get_total_bounds(bounds)
 
-        image = get_patch(item, ['SCL'], resolution=self.out_res, bounds=total_bounds, epsg=epsg, dtype='uint8')
+        image = get_patch(item, assets=['SCL'], resolution=self.out_res, bounds=total_bounds, epsg=epsg, dtype='uint8')
+        if image.shape[0] == 0: #NOTE: point and S2 geometry intersects in EPSG:4326 but not in the local crs
+            return
         defective_cover = []
-        image = image.load() #NOTE: slicing on lazy object is inefficient
+        try:
+            image = image.load() #NOTE: slicing on lazy object is inefficient
+        except Exception as e:
+            print()
         for row in bounds.itertuples():
             xrange = range(row.minx, row.maxx, self.out_res) #slice(row.minx, row.maxx)
             yrange = range(row.maxy, row.miny, -self.out_res) #slice(row.maxy, row.miny)
@@ -228,8 +238,12 @@ class S2Downloader(DaskDownloader):
 # %%
 @hydra.main(config_path="../config", config_name="s2_download", version_base="1.2")
 def main(cfg):
-    # if not (Path.home() / f'GEDI/{cfg.year}/{cfg.zone}').exists(): #TODO: some small zones might not have GEDI data in a certain year
-    #     return
+    # check if the zone has Sentinel-2 candidates gathered
+    root_dir = Path(cfg.root_dir) if cfg.root_dir else Path.home()
+    if not os.path.exists(root_dir / cfg.select.S2_meta_dir / f'{cfg.zone}.parquet'):
+        logger.info(f'Sentinel-2 candidates not yet collected for zone {cfg.zone} {cfg.year}. Skipping...')
+        return
+
     logger.info(OmegaConf.to_yaml(cfg))
     from dask.distributed import Client, LocalCluster
     # might fix the communication error caused by I/O. ref: https://github.com/dask/distributed/issues/3129#issuecomment-1684858307
@@ -240,11 +254,11 @@ def main(cfg):
     client = Client(cluster)
     print(client)
 
-    s2downloader = S2Downloader(cfg.rewrite, cfg.root_dir, **cfg.select)
+    s2downloader = S2Downloader(cfg.rewrite, root_dir, **cfg.select)
     t0 = time.time()
 
     logger.info(f'processing zone: {cfg.zone}')
-    s2downloader.find_best_s2(cfg.zonee)
+    s2downloader.find_best_s2(cfg.zone)
     logger.info(f'time taken for {cfg.zone} {cfg.year}: {time.time() - t0}')
     client.close()
 
