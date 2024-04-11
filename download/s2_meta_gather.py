@@ -14,6 +14,7 @@ from dask.distributed import Variable
 import pandas as pd
 import geopandas as gpd
 import dask.dataframe as dd
+from dask.utils import natural_sort_key
 from shapely.geometry import box
 
 import hydra
@@ -124,17 +125,15 @@ class S2MetaGather(DaskDownloader):
         else:
             # Read GEDI partitions from multiple zones, add paths of partitions in divisions
             self.temp_dir = self.temp_dir / 'small_zones'
-            s2_table_file = self.gedi_dir / 'small_zones.parquet'
+            s2_table_file = self.S2_meta_dir / 'small_zones.parquet'
             files = []
             for z in zone:
                 files.extend(list(self.gedi_dir.glob(f'{z}/partition*.parquet')))
                 (self.save_dir / z).mkdir(exist_ok=True, parents=True)
         
         files = [str(p) for p in files]
-        files = sorted(files) # key=natural_sort_key
-        divisions = tuple(files + [files[-1]])
-        gedi_df = dgp.read_parquet(files, index=False, gather_spatial_partitions=False)
-        gedi_df.divisions = divisions 
+        self.files = sorted(files, key=natural_sort_key)
+        gedi_df = dgp.read_parquet(self.files, index=False, gather_spatial_partitions=False)
             
         # tmp dir to cache small S2 metadata tables
         self.temp_dir.mkdir(exist_ok=True, parents=True)
@@ -195,11 +194,13 @@ class S2MetaGather(DaskDownloader):
             partition (pandas.DataFrame): The partition containing the data.
             partition_info (dict, optional): Information about the partition.
         """
-        zone = partition_info["division"].split('/')[-2]
-        partition_number = int(partition_info["division"].split('_')[-1].split('.')[0])
+        partition_idx = partition_info["number"] # the index of the partition in the dataframe
+        partition_number = self.files[partition_idx].split('_')[-1].split('.')[0] # the index of the partition in zone
+        zone = self.files[partition_idx].split('/')[-2]
 
-        s2_items_file = self.temp_dir / f's2_items_{partition_number}.parquet'
+        s2_items_file = self.temp_dir / f's2_items_{zone}_{partition_number}.parquet'
         partition_file = self.save_dir / zone / f'partition_{partition_number}.parquet'
+        
         if not self.rewrite and partition_file.exists() and s2_items_file.exists():
             logger.info(f'partition {partition_number} with S2 candidates already exists. Skipping...')
             return
@@ -225,11 +226,15 @@ class S2MetaGather(DaskDownloader):
         s2_df = s2_df.map_partitions(lambda x: x, meta=s2_df).compute()
         if s2_df.empty:
             return
-        # TODO: remove invalid s2 items
+        # NOTE: remove invalid s2 items
+        s2_df[['group_id', 'generation_time']] = s2_df['id'].str.rsplit('_', n=1, expand=True)
+        s2_df = s2_df.sort_values('generation_time').groupby('group_id').first()
+        s2_df = s2_df.reset_index().drop(columns=['generation_time', 'group_id'])
         s2_df['datetime'] = s2_df['datetime'].dt.tz_localize(None)
         s2_df = s2_df.astype({'proj:epsg': 'uint16', 'eo:cloud_cover': 'float32',
                              'id': 'string[python]'})
         partition.crs = 'epsg:4326'
+        s2_df.crs = 'epsg:4326'
         df = partition[['geometry', 'start', 'end', 'date']].sjoin(
             s2_df[['id', 'geometry', 'eo:cloud_cover', 'datetime']], how='left')
         df = df.dropna(subset=['id'])
@@ -257,7 +262,7 @@ class S2MetaGather(DaskDownloader):
         if mask.sum() >= 10:
             group = group[mask]
         group['mgrs_tile'] = group['id'].str.extract(r'T(\d{2}[A-Z]{1})') == zone
-        group = group.sort_values(['mgrs_tile', 'eo:cloud_cover', 'delta_day']).iloc[:10] # should we keep all candidates and decide how many to keep in the next step?
+        group = group.sort_values(['mgrs_tile', 'eo:cloud_cover', 'delta_day']).iloc[:20] # should we keep all candidates and decide how many to keep in the next step?
         s2_ids = group['id'].drop_duplicates().to_list()
         return pd.DataFrame({'s2_candidates': [s2_ids]})
 

@@ -49,15 +49,14 @@ ID=$SLURM_ARRAY_TASK_ID
 # echo 'reading config file ~/GEDI/download_job_hendrix_'${ID}'.txt'
 # read years zones merge_zones <  ~/GEDI/download_job_hendrix_${ID}.txt
 read zones merge_zones <<< $(sed -n ${ID}p ~/GEDI/slurm_job_config.txt)
-years=${1:-[2019,2020,2021,2022]}
+years=${2:-[2019,2020,2021,2022]}
 echo $years 
 echo $zones 
 echo $merge_zones
 
 # zones=$1
 # merge_zones=${3:-False}
-# rewrite=${4:-False}
-rewrite=False
+rewrite=${1:-False}
 
 year_list=$(get_list "$years")
 echo "years: $year_list"
