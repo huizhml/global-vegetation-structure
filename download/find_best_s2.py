@@ -17,6 +17,7 @@ import logging
 from pathlib import Path
 from itertools import chain
 from omegaconf import OmegaConf
+import pyarrow.parquet as pq
 
 import numpy as np
 import pystac_client
@@ -107,13 +108,7 @@ class S2Downloader(DaskDownloader):
             logger.info(f'{zone} has been processed.')
             return 
         
-
         files = [str(p) for p in files]
-        for file in files:
-            df = gpd.read_parquet(file)
-            if 'level_1' in df.columns:
-                df = df.drop(columns=['level_1'])
-                df.to_parquet(file)
         files = sorted(files)
         divisions = tuple(files + [files[-1]])
         gedi_df = dgp.read_parquet(files, gather_spatial_partitions=False)
@@ -158,9 +153,14 @@ class S2Downloader(DaskDownloader):
         if not self.rewrite and partition_file.exists():
             logger.info(f'partition {partition_number} with best S2 already exists. Skipping...')
             return
+        if partition['s2_candidates'].isna().all():
+            partition['best_s2'] = pd.NA
+            partition.to_parquet(partition_file)
+            logger.info(f'all none parition: {partition_number}, {zone}')
+            return
 
         op_part = partition[['date', 'geometry', 's2_candidates']]
-
+        op_part = op_part.dropna(subset='s2_candidates')
         s2_candidates = set(chain.from_iterable(op_part['s2_candidates']))
         s2_meta_table = gpd.read_parquet(self.s2_table_file, filters=[('id', 'in', s2_candidates)])
         s2_meta_table = s2_meta_table.set_index('id')
@@ -189,8 +189,8 @@ class S2Downloader(DaskDownloader):
         df = df[df['defective_cover'] <= 0.2]
         df = df.sort_values(['defective_cover', 'delta_day']).groupby('index').head(1)
         df = df.reset_index().set_index('index').drop(columns='geometry')
-        df = df.rename(columns={'s2_candidates': 'best_s2'})
         res = partition.merge(df, how='left', left_index=True, right_index=True)
+        res = res.rename(columns={'id': 'best_s2'})
         res.to_parquet(partition_file)
 
 
@@ -222,7 +222,9 @@ class S2Downloader(DaskDownloader):
         try:
             image = image.load() #NOTE: slicing on lazy object is inefficient
         except Exception as e:
-            print()
+            locs['defective_cover'] = 1.0
+            locs = locs.to_crs(4326)
+            return locs.astype({'defective_cover': 'float32'})
         for row in bounds.itertuples():
             xrange = range(row.minx, row.maxx, self.out_res) #slice(row.minx, row.maxx)
             yrange = range(row.maxy, row.miny, -self.out_res) #slice(row.maxy, row.miny)
@@ -240,11 +242,10 @@ class S2Downloader(DaskDownloader):
 def main(cfg):
     # check if the zone has Sentinel-2 candidates gathered
     root_dir = Path(cfg.root_dir) if cfg.root_dir else Path.home()
-    if not os.path.exists(root_dir / cfg.select.S2_meta_dir / f'{cfg.zone}.parquet'):
-        logger.info(f'Sentinel-2 candidates not yet collected for zone {cfg.zone} {cfg.year}. Skipping...')
+    zone = cfg.zone if isinstance(cfg.zone, str) else 'small_zones'
+    if not os.path.exists(root_dir / cfg.select.S2_meta_dir / f'{zone}.parquet'):
+        logger.info(f'Sentinel-2 candidates not yet collected for zone {zone} {cfg.year}. Skipping...')
         return
-
-    logger.info(OmegaConf.to_yaml(cfg))
     from dask.distributed import Client, LocalCluster
     # might fix the communication error caused by I/O. ref: https://github.com/dask/distributed/issues/3129#issuecomment-1684858307
     dask.config.set({"distributed.comm.retry.count": 10})
