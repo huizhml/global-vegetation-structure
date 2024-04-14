@@ -11,16 +11,56 @@ import dask
 import ipdb
 logger = logging.getLogger(__name__)
 
-def _repartition(year_folder, zone, partition_size='128K'):
+
+class GEDIPostProcessor:
+    def __init__(self, year, data_dir, save_dir, root_dir:str=None, partition_size:str=None, rewrite:bool=False):
+        if isinstance(year, int):
+            self.years = [year]
+        else:
+            self.years = year
+
+        root_dir = Path(root_dir) if root_dir else Path.home()
+        self.data_dir = root_dir / data_dir / str(year)
+        self.save_dir = root_dir / save_dir / str(year)
+        self.partition_size = partition_size
+        self.rewrite = rewrite
+
+    def __call__(self):
+        pass
+
+    def repartition(self, zone, year, root_dir, data_dir, partition_size):
+        for year in self.years:
+            config = []
+            for zone in os.listdir(self.data_dir):
+                if not os.path.isdir(self.data_dir / zone):
+                    continue
+                (self.save_dir / zone).mkdir(parents=True, exist_ok=True)
+                if self.rewrite:
+                    logger.info(f'remove partitions in {zone}...')
+                    os.system(f'rm -rf {self.save_dir / zone}/*')
+                if not (self.save_dir / zone / 'partition_0.parquet').exists():
+                    logger.info(f'repartition {zone}...')
+                    _repartition(self.data_dir, zone, self.partition_size, self.partition_name)
+
+                logger.info(f'generate download config for {zone} {year}...')
+                line = gen_config_for_zone(self.data_dir/zone, year)
+                config.append(line+[zone])
+            df = pd.DataFrame(config, columns=['ncores', 'npartitions', 'nparallel', 'MGRS_UTM'])
+            mgrs_df = pd.read_csv(Path.home() / 'GEDI/mgrs_sampled.csv')
+            pd.merge(df, mgrs_df, on='MGRS_UTM', how='left').to_csv(self.data_dir /'download_config_count.csv', index=False, sep=';')
+            df = df.set_index('ncores').groupby('ncores').apply(aggregate_zones)
+            df = df.reset_index()
+            df.to_csv(self.data_dir /'download_config.csv', index=False, sep=';')
+
+def _repartition(year_folder, zone, partition_size='128K', partition_name='partition_'):
     ddf = dgp.read_parquet(year_folder / zone / 'GEDI*.parquet')
     ddf = ddf.repartition(partition_size=partition_size)
-    ddf.to_parquet(year_folder / f'{zone}', name_function=lambda x: f'partition_{x}.parquet')
+    ddf.to_parquet(year_folder / f'{zone}', name_function=lambda x: f'{partition_name}{x}.parquet')
 
 def aggregate_zones(group):
     if group.index[0] <= 16:
         zones = ','.join(group['MGRS_UTM'])
         res = group.iloc[0, :]
-        # logger.info(res)
         res['MGRS_UTM'] = zones
         return res.to_frame().T
     else:
@@ -41,42 +81,8 @@ def gen_config_for_zone(zone_folder, year):
     return [n_cores, npartitions, n_parallel]
 
 
-def repartition(cfg):
-    from dask.distributed import LocalCluster, Client
-    cluster = LocalCluster()
-    client = Client(cluster)
-    if isinstance(cfg.year, int):
-        years = [cfg.year]
-    else:
-        years = cfg.year
 
-    for year in years:
-        data_folder = Path.home() / cfg.data_dir/ str(year)
-        config = []
-        for zone in os.listdir(data_folder):
-            s2_data_dir = Path.home() / cfg.save_dir
-            if not os.path.isdir(data_folder / zone):
-                continue
-            if cfg.rewrite:
-                logger.info(f'remove partitions in {zone}...')
-                os.system(f'rm -rf {data_folder / zone}/partition*')
-            if not (data_folder / zone / 'partition_0.parquet').exists():
-                logger.info(f'repartition {zone}...')
-                _repartition(data_folder, zone, cfg.partition_size)
 
-            s2_data_dir = Path.home() / cfg.save_dir
-            if (s2_data_dir / f'{zone}_{year}_done').exists():
-                continue
-            logger.info(f'generate download config for {zone} {year}...')
-            line = gen_config_for_zone(data_folder/zone, year)
-            config.append(line+[zone])
-        df = pd.DataFrame(config, columns=['ncores', 'npartitions', 'nparallel', 'MGRS_UTM'])
-        mgrs_df = pd.read_csv(Path.home() / 'GEDI/mgrs_sampled.csv')
-        pd.merge(df, mgrs_df, on='MGRS_UTM', how='left').to_csv(data_folder /'download_config_count.csv', index=False, sep=';')
-        df = df.set_index('ncores').groupby('ncores').apply(aggregate_zones)
-        df = df.reset_index()
-        df.to_csv(data_folder /'download_config.csv', index=False, sep=';')
-    client.close()
 
 
 def queue_zones_for_slurm_job(max_time, df, name='hendrix', years=['2019', '2020', '2021', '2022']):
@@ -122,8 +128,28 @@ def split_zones():
 
 @hydra.main(config_path='../config', config_name='s2_download', version_base='1.2')
 def main(cfg):
-    # repartition(cfg)
-    split_zones()
+    if cfg.dask_cluster:
+        import dask_gateway
+        gateway = dask_gateway.Gateway()
+        options = gateway.cluster_options()
+        options['worker_cores'] = 8
+        options['worker_memory'] = 64
+        cluster = gateway.new_cluster(options)
+        cluster.scale(13)
+    else:
+
+        from dask.distributed import LocalCluster, Client
+        cluster = LocalCluster()
+    
+    client = Client(cluster)
+    
+    processor = GEDIPostProcessor(**cfg)
+    
+    if cfg.repartition:
+        processor.repartition(cfg)
+    else:
+        processor.split_zones()
+    client.close()
 
 if __name__ == '__main__':
     main()

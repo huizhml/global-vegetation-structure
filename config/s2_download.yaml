@@ -3,14 +3,16 @@ defaults:
   - override hydra/hydra_logging: disabled  
   # - override hydra/job_logging: none
 
-zone: 01G
+zone: [23J,25L,25S,26K,26P,26Q,26S,27P,27Q,27R,28H,28M,30K,30L,31M,32K,32L,33H,38M,60U,40K,40M,40P,41K,42M,43M,43N,46N,46P,48L,49J,49K,49L,50P,52P,52R,53N,54N,54P,54R,55N,55P,55Q,55T,55U,56K,56L,56N,56P,56R,56T,56U,57J,57K,57L,57M,57N,57U,58J,58K,58L,58M,58P,58Q,59H,59K,59L,59N,60K,60M,01K,01L,01R,02K,02L,03K,03L,04K,04L,04N,05K,05L,05M,06J,06K,06L,07K,07L,07M,08K,40L,58N,59P,60L,01J,01N,02M,04M,07J,29G,58G,60G,01G,02Q,02R,28N,22T,22U,28S,29U,01U,02U,04Q,05Q,52H,20S,54G,37G,58F,60F,09J,10J,11Q,12J,13J,15M,15N,16M,17L,18K,21F,20F,21P,14P,12Q,18R,20Q,21T]
 year: 2019
+patch_size: 15
 root_dir:
 data_dir: GEDI
 save_dir: data/GEDI
 rewrite: False
 sem_max_release: 100
 max_retries: 3
+
 # STEP 0: Repartition GEDI data
 repartition: True
 partition_size: 512K
@@ -50,6 +52,7 @@ download:
 
 
 hydra:
+  output_subdir: null #prevent saving the files into .hydra
   job_logging:
     root:
       handlers: [console]

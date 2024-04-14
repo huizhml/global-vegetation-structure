@@ -152,7 +152,6 @@ class S2Downloader(DaskDownloader):
         partition_file = self.save_dir / zone / f'partition_{partition_number}.parquet'
         if not self.rewrite and partition_file.exists():
             logger.info(f'partition {partition_number} with best S2 already exists. Skipping...')
-            return
         if partition['s2_candidates'].isna().all():
             partition['best_s2'] = pd.NA
             partition.to_parquet(partition_file)

@@ -229,17 +229,19 @@ class S2Downloader(DaskDownloader):
         """
         if isinstance(zone, str):
             files = list(self.gedi_dir.glob(f'{zone}/partition*.parquet'))
-            (self.save_dir / zone).mkdir(exist_ok=True, parents=True)
+            # (self.save_dir / zone).mkdir(exist_ok=True, parents=True)
             zone_flag = self.flag_dir / f'{zone}_{self.year}_done'
             self.flag_dir  = self.flag_dir / zone
+            self.s2_table_file = self.S2_meta_dir / f'{zone}.parquet'
         else:
             zone_flag = self.flag_dir / f'small_zones_{self.year}_done'
             self.flag_dir  = self.flag_dir / 'small_zones'
             files = []
             for z in zone:
                 files.extend(list(self.gedi_dir.glob(f'{z}/partition*.parquet')))
-                (self.save_dir / z).mkdir(exist_ok=True, parents=True)
-
+                # (self.save_dir / z).mkdir(exist_ok=True, parents=True)
+            self.s2_table_file = self.S2_meta_dir / 'small_zones.parquet'
+        self.flag_dir.mkdir(exist_ok=True, parents=True)
         if self.rewrite:
             if zone_flag.exists():
                 os.remove(zone_flag)
@@ -250,12 +252,10 @@ class S2Downloader(DaskDownloader):
             return
 
         files = [str(p) for p in files]
-        files = sorted(files)
-        divisions = tuple(files + [files[-1]])
-        gedi_df = dgp.read_parquet(files, gather_spatial_partitions=False)
-        gedi_df.divisions = divisions
+        self.files = sorted(files, key=natural_sort_key)
+        gedi_df = dgp.read_parquet(self.files, gather_spatial_partitions=False)
 
-        s2_meta_table = gpd.read_parquet(self.S2_meta_dir / f'{zone}.parquet')
+        s2_meta_table = gpd.read_parquet(self.s2_table_file)
         wc_df = self.get_aux_df(
             'esa-worldcover', filters=[('start_datetime', '>=', self.esa_wc_time)],
             time_col='start_datetime')
@@ -267,20 +267,20 @@ class S2Downloader(DaskDownloader):
 
         logger.info(f'Processing {gedi_df.npartitions} partitions...')
 
-        # number = 17
+        # number = 5
         # test = gedi_df.get_partition(number).compute()
-        # division = gedi_df.divisions[number]
-        # df = self.download_patches_for_partition(test, partition_info={'number': number, 'division': division})
+        # # division = gedi_df.divisions[number]
+        # df = self.download_patches_for_partition(test, partition_info={'number': number})
         # logger.info('test done')
         df = gedi_df.map_partitions(self.download_patches_for_partition, meta=(None, 'string'))
         nfailed = self.schedule_tasks(df)
         
-        if nfailed > 0:
-            # one more try
-            logger.info('Some partitions failed. Restarting the client...')
-            client = dask.distributed.get_client()
-            client.restart()
-            nfailed = self.schedule_tasks(df)
+        # if nfailed > 0:
+        #     # one more try
+        #     logger.info('Some partitions failed. Restarting the client...')
+        #     client = dask.distributed.get_client()
+        #     client.restart()
+        #     nfailed = self.schedule_tasks(df)
 
         if nfailed <= 0:
             zone_flag.touch()
@@ -297,19 +297,21 @@ class S2Downloader(DaskDownloader):
         * esa_wc_items (pystac.ItemCollection): The collection of ESA WC items.
         * partition_info (dict, optional): Information about the partition.
         """
-        zone = partition_info["division"].split('/')[-2]
-        partition_number = int(partition_info["division"].split('_')[-1].split('.')[0])
+        partition = partition.dropna(subset='best_s2')
+        if partition.empty:
+            return
+        partition_number = partition_info["number"] # the index of the partition in the dataframe
+        zone = self.files[partition_number].split('/')[-2]
 
         flag = self.flag_dir / f'{self.year}_partition_{partition_number}_done'
         if flag.exists() and not self.rewrite:
             logger.info(f'{zone} {self.year}_partition_{partition_number} has been processed.')
             return
 
-        partition.dropna(subset='best_s2', inplace=True)
         op_part = partition[['shot_number', 'geometry', 'best_s2']].set_index('best_s2')
         s2_ids = op_part.index.unique()
         s2_meta_table = gpd.read_parquet(
-            self.S2_meta_dir / f'{zone}.parquet', filters=[('id', 'in', s2_ids)])
+            self.s2_table_file, filters=[('id', 'in', s2_ids)])
         s2_meta_table = s2_meta_table.set_index('id')
         s2_meta_table['datetime'] = s2_meta_table['datetime'].dt.strftime('%Y-%m-%d %H:%M:%S.%f')
 
@@ -351,7 +353,7 @@ class S2Downloader(DaskDownloader):
         drop_cols = list(rh_dtype.keys()) + list(gedi_attr_dtype.keys()) + list(latlon_dtype.keys())
         partition = partition.drop(columns=drop_cols)
         partition_bounds = partition.total_bounds
-        ds = xr.merge([ds, slope_da, rh_da.transpose(), gedi_attr_da.transpose(), latlon_da.transpose()])
+        ds = xr.merge([ds, slope_da, rh_da.transpose(), gedi_attr_da.transpose(), latlon_da.transpose()], join="override")
         ds = ds.assign_attrs(partition_bounds=partition_bounds)
         ds['band'] = ds['band'].astype('<U6')
         bands = ds.band.values

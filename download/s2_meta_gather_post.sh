@@ -2,9 +2,9 @@
 #SBATCH --account=project_465000894
 #SBATCH --partition=small
 #SBATCH --cpus-per-task=32
-#SBATCH --mem=128G
+#SBATCH --mem=64G
 ##SBATCH --exclude hendrixgpu04fl,hendrixgpu03fl,hendrixgpu11fl,hendrixgpu12fl,hendrixgpu14fl,hendrixgpu15fl,hendrixgpu18fl #for using /scratch
-#SBATCH --time=1-7:00:00
+#SBATCH --time=3-00:00:00
 #SBATCH --output=./logs/%x-%A_%a.out
 #SBATCH --error=./logs/%x-%A_%a.err
 #SBATCH --mail-type=END,FAIL
@@ -50,11 +50,11 @@ ID=$SLURM_ARRAY_TASK_ID
 # read years zones merge_zones <  ~/GEDI/download_job_hendrix_${ID}.txt
 read zones merge_zones <<< $(sed -n ${ID}p ~/GEDI/slurm_job_config.txt)
 years=${1:-[2019,2020,2021,2022]}
+echo $years 
 echo $zones 
 echo $merge_zones
 
 # zones=$1
-# years=$2
 # merge_zones=${3:-False}
 # rewrite=${4:-False}
 rewrite=False
@@ -69,14 +69,14 @@ if [[ $merge_zones == "True" ]]; then ## for small zones, processing them togeth
     IFS=','
     for year in ${year_list[@]}; do
         echo download zones "[$zones]" $year;
-        python -u -m download.s2_download zone="[$zones]" year=$year rewrite=$rewrite
+        python -u -m download.s2_meta_gather_post zone="[$zones]" year=$year rewrite=$rewrite
     done
 else ## for large zones, processing them sequentially
     IFS=','
     for zone in ${zone_list[@]}; do
         for year in ${year_list[@]}; do
             echo download zone "$zone" $year;
-            python -u -m download.s2_download zone="$zone" year=$year rewrite=$rewrite
+            python -u -m download.s2_meta_gather_post zone="$zone" year=$year rewrite=$rewrite
         done
     done
 fi
