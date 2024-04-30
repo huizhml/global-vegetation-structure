@@ -2,33 +2,79 @@ seed_everything: 42
 optimizer:
   class_path: torch.optim.AdamW
   init_args:
-    lr: 0.0001
+    lr: 0.00001
 
 data:
   class_path: datasets._pl_datamodule.PLDataModel
   init_args:
     cache_dir: cache
-    data_dir: data/GEDI
-    split_files_dir: split_files
-    h5_file: merged_h5_test
+    data_dir: ~/data #/tmp/
+    h5_dir: GEDI
+    split_files_dir: ~/data/GEDI/split_files
+    index_table_file: ~/data/GEDI/index_table.parquet
+    merged_h5_file: merged_h5_test.h5
+    test_data_name: cal
     use_zones: TEST_ZONES
-    batch_size: 64
-    num_workers: 8
+    batch_size: 512
+    num_workers: 16
     pin_memory: True
     shuffle: True
     drop_last: False
 
+model:
+  class_path: models.pl_model.UNet
+  init_args:
+    in_channels: 12
+    out_channels: 101
+    patch_size: 15
+    norm_layer_up: torch.nn.BatchNorm2d
+    up_block: models.modules.standard.DoubleConvSkip
+    last_activation:
+      class_path: torch.nn.Softplus
+      init_args:
+        beta: 1
+        threshold: 20
+    activation_layer: 
+      class_path: torch.nn.ELU
+      init_args:
+        inplace: True
+        alpha: 0.54
+    backbone_model:
+      class_path: models.modules.standard.StandardNet
+      init_args:
+        initial_stride: 1
+        norm_layer: torch.nn.BatchNorm2d
+    preprocess: models.preprocess.Standardize
+    loss: torch.nn.MSELoss
+    upsampling: nearest
+    blur_final: False
+    blur: False
+    final_skip: False
+    self_attention: False
+
 trainer:
-  accelerator: cpu
-  default_root_dir: /tmp/runs
+  accelerator: gpu
+  default_root_dir: /tmp/wandb
   devices: 1
   max_epochs: 500
   num_sanity_val_steps: 0
-  fast_dev_run: True
+  # fast_dev_run: 2000
+  # profiler: simple
+  enable_checkpointing: False
+  # callbacks:
+  #   - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+  #     init_args:
+  #       monitor: 'f1.val'
+  #       filename: 'BestModel-{epoch:02d}-{f1.val:.2f}'
+  #       save_top_k: 1
+  #       mode: max
+  #       every_n_epochs: 10 #check every n epochs
+  #       save_last: True # save the last epoch? or just save the last best model?
 
   logger:
       class_path: callbacks.wandb_logger.WandbLogger
       init_args:
         project: global-vegetation-structure
         name: test
-        # job_type: train 
+        job_type: train
+        save_dir: /tmp/wandb
