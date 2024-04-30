@@ -18,11 +18,13 @@ if [ ! -f "$config_file" ]; then
     exit 1
 fi
 # first job - no dependencies
-id1=$(submit_job job1.sh)
+offset=10
+id1=$(submit_job --array=1-10 job1.sh)
 
 # Two jobs that depend on the first job
-id2=$(submit_job --dependency=afterany:$id1 job2.sh)
-id3=$(submit_job --dependency=afterany:$id1 job3.sh)
+id2=$(submit_job --dependency=aftercorr:$id1 --array=1-10 download/download_s2.sh 10) #11-20
+id3=$(submit_job --dependency=aftercorr:$id2 --array=1-10 download/download_s2.sh 20) #21-30
+# .....
 
 # One job that depends on both the second and the third jobs
 id4=$(submit_job  --dependency=afterany:$id2:$id3 job4.sh)
