@@ -47,9 +47,11 @@ class Standardize(nn.Module):
 
     @torch.no_grad()  # disable gradients for effiency
     def forward(self, x, y, wc, slope, device) -> Tensor:
+        # NOTE: zero out the central pixel if it is in classes: 'Built-up', 'Snow and ice', 'Permanent water bodies'
         zero_cls = torch.tensor([ESA_WC['Built-up'], ESA_WC['Snow and ice'], ESA_WC['Permanent water bodies']], device=device)
         label_mask = torch.where(torch.isin(wc[..., 7,7], zero_cls), 0, 1)
         y = y * label_mask
+        # NOTE: if the central pixel is in the exclude class and the slope is greater than the threshold, the loss mask is 0
         exclude_cls = torch.tensor([ESA_WC['Grassland'], ESA_WC['Bare / sparse vegetation'], ESA_WC['Moss and lichen']], device=device)
         loss_mask_wc = torch.where(torch.isin(wc[..., 7,7], exclude_cls), 1, 0)
         loss_mask_slope = torch.where(slope[:, 7,7:8] > self.slope_th, 1, 0)
