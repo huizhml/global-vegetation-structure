@@ -16,7 +16,7 @@ class UNet(L.LightningModule):
                 norm_layer_up: str,
                 up_block: str,
                 activation_layer: nn.Module,
-                last_activation: nn.Module,
+                delta_rh_rectifier: nn.Module,
                 backbone_model: nn.Module,
                 preprocess: nn.Module,
                 loss: nn.Module,
@@ -35,7 +35,6 @@ class UNet(L.LightningModule):
         self.blur = blur
         self.blur_final = blur_final
         self.self_attention = self_attention
-        self.last_activation = last_activation
         self.final_skip = final_skip
         self.patch_size = patch_size
         self.in_channels = in_channels
@@ -45,17 +44,17 @@ class UNet(L.LightningModule):
         self.up_block = get_class(up_block)
         self.out_channels = out_channels
 
-        self.init_decoder()
+        self.init_decoder(delta_rh_rectifier)
 
         self.preprocess = preprocess
         self.loss = loss
-        if isinstance(last_activation, nn.Sequential):
+        if isinstance(delta_rh_rectifier.activation, nn.Sequential):
             self.yhat_trasform = lambda x: x
         else:
             self.yhat_trasform =  lambda x: x.cumsum(dim=1)
         torch.set_float32_matmul_precision('high')
 
-    def init_decoder(self):
+    def init_decoder(self, delta_rh_rectifier):
         self.backbone_model.eval()
 
         # create dummy features to test network integrity
@@ -114,7 +113,9 @@ class UNet(L.LightningModule):
         x = self.pre_final_conv(x, img)
 
         self.last_conv = nn.Conv2d(x.size(1), self.out_channels, 1).eval()
-        self.last_conv(x)
+        x = self.last_conv(x)
+        self.last_opt = nn.Sequential() if self.out_channels == 1 else delta_rh_rectifier
+        self.last_opt(x)
 
     def forward(self, img):
         x = img
@@ -126,8 +127,7 @@ class UNet(L.LightningModule):
             x = up_layer(x, out)
         x = self.final_upsampling(x)
         x = self.last_conv(self.pre_final_conv(x, img))
-        delta_rhs = self.last_activation(x[:,1:,:,:])
-        out = torch.cat([x[:,0:1,:,:], delta_rhs], dim=1)
+        out = self.last_opt(x)
         return out
 
     def reset_parameters(self):
@@ -154,8 +154,8 @@ class UNet(L.LightningModule):
         y = y * mask
         loss = self.loss(y_hat, y)
         rmse = torch.sqrt(loss)
-        self.log('train_rmse', rmse)
-        self.log('train_loss', loss)
+        self.log('train_rmse', rmse, on_epoch=True, on_step=False)
+        self.log('train_loss', loss, on_epoch=True, on_step=False)
         return loss
 
     def validation_step(self, sample, batch_idx) -> torch.Tensor | Mapping[str, Any] | None:
@@ -166,8 +166,8 @@ class UNet(L.LightningModule):
         y = y * mask
         loss = self.loss(y_hat, y)
         rmse = torch.sqrt(loss)
-        self.log('val_rmse', rmse)
-        self.log('val_loss', loss)
+        self.log('val_rmse', rmse, on_epoch=True, on_step=False)
+        self.log('val_loss', loss, on_epoch=True, on_step=False)
         return 
 
 
