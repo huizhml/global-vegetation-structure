@@ -4,6 +4,8 @@ import torch.nn as nn
 from torch import Tensor
 from kornia.enhance import normalize
 
+from const import ESA_WC
+
 MEAN = np.array([172.49044799804688,
         217.19879150390625,
         306.56103515625,
@@ -39,7 +41,18 @@ STD = np.array([439.42572021484375,
 
 class Standardize(nn.Module):
     """Module to perform pre-process using Kornia on torch tensors."""
+    def __init__(self, slope_th: float = 20):
+        super().__init__()
+        self.slope_th =slope_th
 
     @torch.no_grad()  # disable gradients for effiency
-    def forward(self, x) -> Tensor:
-        return normalize(x, MEAN, STD)
+    def forward(self, x, y, wc, slope, device) -> Tensor:
+        zero_cls = torch.tensor([ESA_WC['Built-up'], ESA_WC['Snow and ice'], ESA_WC['Permanent water bodies']], device=device)
+        label_mask = torch.where(torch.isin(wc[..., 7,7], zero_cls), 0, 1)
+        y = y * label_mask
+        exclude_cls = torch.tensor([ESA_WC['Grassland'], ESA_WC['Bare / sparse vegetation'], ESA_WC['Moss and lichen']], device=device)
+        loss_mask_wc = torch.where(torch.isin(wc[..., 7,7], exclude_cls), 1, 0)
+        loss_mask_slope = torch.where(slope[:, 7,7:8] > self.slope_th, 1, 0)
+        loss_mask = loss_mask_wc * loss_mask_slope
+        loss_mask = 1 - loss_mask
+        return normalize(x, MEAN, STD), y, loss_mask

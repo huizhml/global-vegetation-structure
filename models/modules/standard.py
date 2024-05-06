@@ -13,10 +13,9 @@ class DoubleConv(nn.Module):
         self.pool = nn.MaxPool2d(2, ceil_mode=True) if pool else nn.Sequential()
         self.conv1 = ConvNormActivation(in_channels, out_channels, activation_layer=activation_layer,
                                         norm_layer=norm_layer)
-        self.conv2 = ConvNormActivation(
-            out_channels, out_channels, activation_layer=activation_layer,
-            norm_layer=norm_layer, self_attention=self_attention
-        )
+        self.conv2 = ConvNormActivation(out_channels, out_channels, activation_layer=activation_layer,
+                                        norm_layer=norm_layer, 
+                                        self_attention=self_attention)
 
     def forward(self, x):
         x = self.pool(x)
@@ -43,20 +42,15 @@ class DoubleConvSkip(DoubleConv):
 
 class StandardNet(BaseModule):
     def __init__(self, in_channels: int, activation_layer: nn.Module, norm_layer: str,
-                 skip_connection: bool = True, initial_stride: int = 1, **kwargs):
+                 skip_connection: bool = True, initial_stride: int = 1, depths=(64, 128, 256, 512, 1024), **kwargs):
         super(StandardNet, self).__init__()
         assert initial_stride in [1, 2], "standard model only supports initial_stride of 1 or 2"
         block = DoubleConvSkip if skip_connection else DoubleConv
         norm_layer = get_class(norm_layer)
-        depths = [in_channels, 64, 128, 256, 512, 1024]
-        layers = [
-            block(depths[0], depths[1], activation_layer, norm_layer, pool=initial_stride == 2),
-            block(depths[1], depths[2], activation_layer, norm_layer, pool=True),
-            block(depths[2], depths[3], activation_layer, norm_layer, pool=True),
-            block(depths[3], depths[4], activation_layer, norm_layer, pool=True),
-            block(depths[4], depths[5], activation_layer, norm_layer, pool=True),
-        ]
-
+        # depths = [in_channels, 64, 128, 256, 512, 1024]
+        layers = [block(in_channels, depths[0], activation_layer, norm_layer, pool=initial_stride==2)]
+        for i in range(len(depths) - 1):
+            layers.append(block(depths[i], depths[i + 1], activation_layer, norm_layer, pool=True))
         self.blocks = nn.ModuleList(layers)
 
 

@@ -11,11 +11,12 @@ class UNet(L.LightningModule):
     @torch.no_grad()
     def __init__(self, 
                 in_channels: int,
-                n_classes: int,
+                out_channels: int,
                 patch_size: int,
                 norm_layer_up: str,
                 up_block: str,
                 activation_layer: nn.Module,
+                last_activation: nn.Module,
                 backbone_model: nn.Module,
                 preprocess: nn.Module,
                 loss: nn.Module,
@@ -26,7 +27,7 @@ class UNet(L.LightningModule):
                 self_attention: bool = False,
                  *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self.save_hyperparameters()
+        # self.save_hyperparameters(ignore=['activation_layer', 'last_activation', 'backbone_model', 'preprocess', 'loss'])
         self.backbone_model = backbone_model
 
         if isinstance(patch_size, int):
@@ -34,6 +35,7 @@ class UNet(L.LightningModule):
         self.blur = blur
         self.blur_final = blur_final
         self.self_attention = self_attention
+        self.last_activation = last_activation
         self.final_skip = final_skip
         self.patch_size = patch_size
         self.in_channels = in_channels
@@ -41,12 +43,17 @@ class UNet(L.LightningModule):
         self.upsampling = upsampling
         self.activation_layer = activation_layer
         self.up_block = get_class(up_block)
-        self.n_classes = n_classes
+        self.out_channels = out_channels
 
         self.init_decoder()
 
         self.preprocess = preprocess
         self.loss = loss
+        if isinstance(last_activation, nn.Sequential):
+            self.yhat_trasform = lambda x: x
+        else:
+            self.yhat_trasform =  lambda x: x.cumsum(dim=1)
+        torch.set_float32_matmul_precision('high')
 
     def init_decoder(self):
         self.backbone_model.eval()
@@ -106,7 +113,7 @@ class UNet(L.LightningModule):
             self.pre_final_conv = PassBlock()
         x = self.pre_final_conv(x, img)
 
-        self.last_conv = nn.Conv2d(x.size(1), self.n_classes, 1).eval()
+        self.last_conv = nn.Conv2d(x.size(1), self.out_channels, 1).eval()
         self.last_conv(x)
 
     def forward(self, img):
@@ -118,7 +125,9 @@ class UNet(L.LightningModule):
         for out, up_layer in zip(outs, self.up_layers):
             x = up_layer(x, out)
         x = self.final_upsampling(x)
-        out = self.last_conv(self.pre_final_conv(x, img))
+        x = self.last_conv(self.pre_final_conv(x, img))
+        delta_rhs = self.last_activation(x[:,1:,:,:])
+        out = torch.cat([x[:,0:1,:,:], delta_rhs], dim=1)
         return out
 
     def reset_parameters(self):
@@ -137,20 +146,27 @@ class UNet(L.LightningModule):
     def reset_head(self):
         self.last_conv.apply(self.backbone_model.init_weights)
 
-
     def training_step(self, sample, batch_idx) -> torch.Tensor | Mapping[str, Any] | None:
-        x, y = sample
-        x = self.preprocess(x).float()
-        y_hat = self(x)
-        loss = self.loss(y_hat[:,0,7,7], y)
+        x, y, mask = self.preprocess(*sample, self.device)
+        y_hat = self.forward(x.float())
+        y_hat = self.yhat_trasform(y_hat[...,7,7])
+        y_hat = y_hat * mask
+        y = y * mask
+        loss = self.loss(y_hat, y)
+        rmse = torch.sqrt(loss)
+        self.log('train_rmse', rmse)
         self.log('train_loss', loss)
         return loss
 
     def validation_step(self, sample, batch_idx) -> torch.Tensor | Mapping[str, Any] | None:
-        x, y = sample
-        x = self.preprocess(x)
-        y_hat = self(x)
+        x, y, mask = self.preprocess(*sample, self.device)
+        y_hat = self.forward(x.float())
+        y_hat = self.yhat_trasform(y_hat[...,7,7])
+        y_hat = y_hat * mask
+        y = y * mask
         loss = self.loss(y_hat, y)
+        rmse = torch.sqrt(loss)
+        self.log('val_rmse', rmse)
         self.log('val_loss', loss)
         return 
 

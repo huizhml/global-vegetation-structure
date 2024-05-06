@@ -2,19 +2,24 @@ seed_everything: 42
 optimizer:
   class_path: torch.optim.AdamW
   init_args:
-    lr: 0.00001
+    lr: 0.0001
+lr_scheduler:
+  class_path: torch.optim.lr_scheduler.StepLR
+  init_args:
+    gamma: 0.2
+    step_size: 1000
 
 data:
   class_path: datasets._pl_datamodule.PLDataModel
   init_args:
     cache_dir: cache
-    data_dir: ~/data #/tmp/
-    h5_dir: GEDI
+    data_dir:  /tmp/ # ~/data # 
+    h5_dir: /tmp/GEDI
     split_files_dir: ~/data/GEDI/split_files
     index_table_file: ~/data/GEDI/index_table.parquet
     merged_h5_file: merged_h5_test.h5
     test_data_name: cal
-    use_zones: TEST_ZONES
+    use_zones: TROPIC_SIX # TEST_ZONES
     batch_size: 512
     num_workers: 16
     pin_memory: True
@@ -42,6 +47,7 @@ model:
     backbone_model:
       class_path: models.modules.standard.StandardNet
       init_args:
+        depths: [64, 128]
         initial_stride: 1
         norm_layer: torch.nn.BatchNorm2d
     preprocess: models.preprocess.Standardize
@@ -56,7 +62,7 @@ trainer:
   accelerator: gpu
   default_root_dir: /tmp/wandb
   devices: 1
-  max_epochs: 500
+  max_epochs: 100
   num_sanity_val_steps: 0
   # fast_dev_run: 2000
   # profiler: simple

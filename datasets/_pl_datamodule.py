@@ -14,7 +14,7 @@ from datasets.s2 import S2Dataset
 logger = logging.getLogger(__name__)
 
 class PLDataModel(L.LightningDataModule):
-    TEST_ZONES = ['23L', '33N', '33P']
+    TEST_ZONES = ['23L', '23K']
     TROPIC_SIX = ['32M', '32N', '32P', '33M', '33N', '33P']
     
     def __init__(self, 
@@ -37,20 +37,20 @@ class PLDataModel(L.LightningDataModule):
         ):
         super().__init__()
         data_dir = Path(data_dir).expanduser()
+        h5_dir = Path(h5_dir).expanduser()
         index_table_file = Path(index_table_file).expanduser()
         split_files_dir = Path(split_files_dir).expanduser()
-        h5_dir = data_dir / h5_dir
         self.merged_h5_file = data_dir / merged_h5_file
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.test_data_name = test_data_name
+        self.val_ratio = val_ratio
+        self.random_state = random_state
 
         self._merge_h5_files(use_zones, h5_dir)
         self._gen_index_table(index_table_file)
         self.train_cal_test_split(index_table_file, split_files_dir)
         
-        self.val_ratio = val_ratio
-        self.random_state = random_state
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.pin_memory = pin_memory
@@ -104,20 +104,22 @@ class PLDataModel(L.LightningDataModule):
         """
         # Make sure the train dataset doesn't include any images from the cal and test splits
         if  (self.cache_dir / 'cal_index_table.csv').exists() and (self.cache_dir / 'test_index_table.csv').exists() and (self.cache_dir / 'train_index_table.csv').exists():
-            logger.info('Splitting index tables for train, cal, test datasets...')
-            cal_tiles_df = pd.read_csv(split_files_dir / "cal_tiles.txt", sep=" ", names=['s2_tile'])
-            test_tiles_df = pd.read_csv(split_files_dir / "test_tiles.txt", sep=" ", names=['s2_tile'])
-            index_df = pd.read_csv(index_table_file)
+            logger.info('index tables for train, cal, test datasets exist, skipping...')
+            return
+        logger.info('Splitting index tables for train, cal, test datasets...')
+        cal_tiles_df = pd.read_csv(split_files_dir / "cal_tiles.txt", sep=" ", names=['s2_tile'])
+        test_tiles_df = pd.read_csv(split_files_dir / "test_tiles.txt", sep=" ", names=['s2_tile'])
+        index_df = pd.read_csv(index_table_file)
 
-            cal_index_df = index_df[index_df['s2_tile'].isin(cal_tiles_df['s2_tile'])]
-            test_index_df = index_df[index_df['s2_tile'].isin(test_tiles_df['s2_tile'])]
-            train_index_df = index_df[~index_df['s2_tile'].isin(cal_tiles_df['s2_tile']) & ~index_df['s2_tile'].isin(test_tiles_df['s2_tile'])]
-            val_index_df = train_index_df.sample(frac=self.val_ratio, random_state=self.random_state)
-            train_index_df = train_index_df.drop(val_index_df.index)
-            train_index_df.to_csv(self.cache_dir / 'train_index_table.csv')
-            val_index_df.to_csv(self.cache_dir / 'val_index_table.csv')
-            cal_index_df.to_csv(self.cache_dir / 'cal_index_table.csv')
-            test_index_df.to_csv(self.cache_dir / 'test_index_table.csv')
+        cal_index_df = index_df[index_df['s2_tile'].isin(cal_tiles_df['s2_tile'])]
+        test_index_df = index_df[index_df['s2_tile'].isin(test_tiles_df['s2_tile'])]
+        train_index_df = index_df[~index_df['s2_tile'].isin(cal_tiles_df['s2_tile']) & ~index_df['s2_tile'].isin(test_tiles_df['s2_tile'])]
+        val_index_df = train_index_df.sample(frac=self.val_ratio, random_state=self.random_state)
+        train_index_df = train_index_df.drop(val_index_df.index)
+        train_index_df.to_csv(self.cache_dir / 'train_index_table.csv')
+        val_index_df.to_csv(self.cache_dir / 'val_index_table.csv')
+        cal_index_df.to_csv(self.cache_dir / 'cal_index_table.csv')
+        test_index_df.to_csv(self.cache_dir / 'test_index_table.csv')
     
     def _merge_h5_files(self, use_zones, h5_dir):
         """
@@ -147,7 +149,17 @@ class PLDataModel(L.LightningDataModule):
         with h5py.File(self.merged_h5_file, 'w') as h5_out:
             for zone in zones:
                 h5_out[zone] = h5py.ExternalLink(h5_dir/f'{zone}.h5', '/')
+        # with h5py.File(self.merged_h5_file, 'w') as h5_out:
+        #     for zone in zones:
+        #         if zone in h5_out:
+        #             print(f"Group '{zone}' already exists in the destination file.")
+        #         else:
+        #             # Copy the entire source file under a new group in the destination file
+        #             with h5py.File(h5_dir/f'{zone}.h5', 'r') as h5_in:
+        #                 h5_in.copy('/', h5_out, name=zone)
+                
 
+                    
 
     def train_dataloader(self):
         if not hasattr(self, 'train_dataset'):
@@ -191,8 +203,12 @@ if __name__ == '__main__':
     @hydra.main(config_name='train', config_path='../config', version_base='1.2')
     def main(cfg):
         datamodel = PLDataModel(**cfg.data.init_args)
-        for img, label in datamodel.train_dataloader():
-            print(img.shape, label.shape)
+        import ipdb; ipdb.set_trace()
+        for img, label, wc, slope in datamodel.train_dataloader():
+            continue
+        print('----------------------------------------------------------')
+        for img, label, wc, slope in datamodel.train_dataloader():
+            continue
 
     main()
     

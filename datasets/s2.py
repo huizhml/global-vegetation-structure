@@ -4,7 +4,8 @@ from pathlib import Path
 from torch.utils.data import Dataset
 from torchvision.transforms import ToTensor
 import pandas as pd
-import tables
+import numpy as np
+import h5py
 
 import warnings
 from tables import DataTypeWarning
@@ -24,7 +25,9 @@ class S2Dataset(Dataset):
                 transform (callable, optional): A function/transform that takes in an image and returns a transformed version. Defaults to None.
             """
             self.transform = transform
-            self.h5_file = tables.open_file(h5_file)
+            self.h5_file = h5py.File(h5_file, mode='r')
+            # self.h5_file = tables.open_file(h5_file, mode='r')
+            self.h5_file_path = h5_file
             self.index_table = pd.read_csv(index_table)
 
 
@@ -32,14 +35,22 @@ class S2Dataset(Dataset):
         return len(self.index_table)
 
     def __getitem__(self, idx):
-        row = self.index_table.iloc[idx]
-        image = self.h5_file.root[f'{row.zone}/{row.year}/{row.partition_idx}/image'][row.in_partition_idx][:12]
-        label = self.h5_file.root[f'{row.zone}/{row.year}/{row.partition_idx}/rhs'][row.in_partition_idx][99]
+        # if not hasattr(self, 'h5_file'):
+        #     self.h5_file = h5py.File(self.h5_file_path, mode='r')
 
+        row = self.index_table.loc[idx]
+        image = self.h5_file[f'{row.path}/image'][row.in_partition_idx]
+        image = image.astype(np.int16)
+        wc = image[13:]
+        image = image[:12]
+        label = self.h5_file[f'{row.path}/rhs'][row.in_partition_idx][:]
+        slope = self.h5_file[f'{row.path}/slope'][row.in_partition_idx]
+        
         image = image.astype('float')
         if self.transform:
             image = self.transform(image)
-        return image, label
+        # self.h5_file.close()
+        return image, label, wc, slope
     
     def __del__(self):
         if hasattr(self, 'h5_file'):
