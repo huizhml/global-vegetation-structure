@@ -25,8 +25,7 @@ class S2Dataset(Dataset):
             transform (callable, optional): A function/transform that takes in an image and returns a transformed version. Defaults to None.
         """
         self.transform = transform
-        self.h5_file = h5py.File(h5_file, mode='r')
-        # self.h5_file = tables.open_file(h5_file, mode='r')
+        # self.h5_file = h5py.File(h5_file, mode='r')
         self.h5_file_path = h5_file
         self.index_table = pd.read_csv(index_table)
 
@@ -35,8 +34,8 @@ class S2Dataset(Dataset):
         return len(self.index_table)
 
     def __getitem__(self, idx):
-        # if not hasattr(self, 'h5_file'):
-        #     self.h5_file = h5py.File(self.h5_file_path, mode='r')
+        if not hasattr(self, 'h5_file'):
+            self.h5_file = h5py.File(self.h5_file_path, mode='r')
 
         row = self.index_table.loc[idx]
         image = self.h5_file[f'{row.path}/image'][row.in_partition_idx]
