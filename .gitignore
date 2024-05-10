@@ -52,3 +52,4 @@ output*
 *.csv
 */*.html
 *.parquet
+logs/

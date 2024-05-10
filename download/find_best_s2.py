@@ -48,8 +48,7 @@ defective_SCL = [0, 1, 8, 9, 10, 11]  # keep cloud shadows, model should learn t
 
 logger = logging.getLogger(__name__)
 
-
-class S2Downloader(DaskDownloader):
+class BestS2Finder(DaskDownloader):
 
     def __init__(self,
                  rewrite: bool = False,
@@ -254,11 +253,11 @@ def main(cfg):
     client = Client(cluster)
     print(client)
 
-    s2downloader = S2Downloader(cfg.rewrite, root_dir, **cfg.select)
+    bestS2Finder = BestS2Finder(cfg.rewrite, root_dir, **cfg.select)
     t0 = time.time()
 
     logger.info(f'processing zone: {cfg.zone}')
-    s2downloader.find_best_s2(cfg.zone)
+    bestS2Finder.find_best_s2(cfg.zone)
     logger.info(f'time taken for {cfg.zone} {cfg.year}: {time.time() - t0}')
     client.close()
 

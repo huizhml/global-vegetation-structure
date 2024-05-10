@@ -38,7 +38,8 @@ def get_tile_by_id(tile_id):
     """
     url = f'{stac_endpoint}/collections/sentinel-2-l2a/items/{tile_id}'
     item = pystac.Item.from_file(url)
-    return planetary_computer.sign_inplace(item)  # TO CHCEK: the token generated seems to be only valid for 1 hour
+    return item #planetary_computer.sign_inplace(item)  not sign to update meta table
+    # TO CHCEK: the token generated seems to be only valid for 1 hour
 
 
 def get_most_common_epsg(items):
@@ -87,8 +88,8 @@ def buffer_and_snap_bounds(geom: gpd.GeoSeries, buffer_size:int, res:int=10):
     # snap to grid
     bounds['minx'] = np.floor(bounds['minx'] / res) * res
     bounds['miny'] = np.floor(bounds['miny'] / res) * res
-    bounds['maxx'] = np.ceil(bounds['maxx'] / res) * res
-    bounds['maxy'] = np.ceil(bounds['maxy'] / res) * res
+    bounds['maxx'] = np.ceil(bounds['maxx'] / res + 1e-6) * res # for point with coords 0
+    bounds['maxy'] = np.ceil(bounds['maxy'] / res + 1e-6) * res
     return bounds.astype('int')
 
 def get_total_bounds(geom:gpd.GeoSeries):

@@ -13,7 +13,7 @@ years = np.arange(2019, 2023)
 zone_table = np.full((len(mgrs_df), len(years)), None, dtype=ASSET_TABLE_DT)
 for i, zone in enumerate(mgrs_df['MGRS_UTM']):
     for j, year in enumerate(years):
-        if (data_dir/f"{year}/{zone}").exists() and mgrs_df[f'nbest_{year}'][i]<0 and any((data_dir/f"{year}/{zone}").iterdir()):
+        if (data_dir/f"{year}/{zone}").exists() and any((data_dir/f"{year}/{zone}").iterdir()):
             zone_table[i, j] = f"{year}/{zone}/partition_*.parquet"
             
 
@@ -38,6 +38,7 @@ count_arr = zone_table_dask.map_blocks(count_nbest).compute()
 for i, year in enumerate(years):
     mgrs_df[f'nbest_{year}'] = count_arr[:, i]
     mgrs_df[f'enough_{year}'] = mgrs_df[f'nbest_{year}'] >= mgrs_df['nwant']
+    mgrs_df[f'percentage_{year}'] = mgrs_df[f'nbest_{year}'] / mgrs_df['nwant']
 
-mgrs_df.to_parquet('~/GEDI/mgrs_with_nbest_v1.parquet')
+mgrs_df.to_parquet('~/GEDI/mgrs_with_nbest_v2.parquet')
 

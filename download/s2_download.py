@@ -3,8 +3,9 @@
 from dotenv import load_dotenv
 import hydra
 import ipdb
+import pystac.item_collection
 from stackstac.raster_spec import RasterSpec
-from shapely.geometry import box
+from shapely.geometry import box, shape
 
 import pyproj
 import dask.bag as db
@@ -26,6 +27,7 @@ from omegaconf import OmegaConf
 
 import numpy as np
 import xarray as xr
+import h5py
 
 import pystac
 import pystac_client
@@ -35,7 +37,7 @@ from pystac_client.stac_api_io import StacApiIO
 
 from .dask_downloader import DaskDownloader
 from ._const import gedi_attr_dtype, rh_dtype, latlon_dtype, STAC_ITEM_KEYS, S2_ITEM_PROPS
-from ._utils import trim_memory, row_to_stac_item, buffer_and_snap_bounds, get_total_bounds, get_patch
+from ._utils import trim_memory, row_to_stac_item, buffer_and_snap_bounds, get_total_bounds, get_patch, get_tile_by_id
 from ._slope import slope
 
 
@@ -253,9 +255,34 @@ class S2Downloader(DaskDownloader):
 
         files = [str(p) for p in files]
         self.files = sorted(files, key=natural_sort_key)
-        gedi_df = dgp.read_parquet(self.files, gather_spatial_partitions=False)
+        self.unfinished_files = []
+        for i, fp in enumerate(self.files):
+            flag = self.flag_dir / f'{self.year}_partition_{i}_done'
+            if not flag.exists():
+                self.unfinished_files.append(fp)
+        
+        gedi_df = dgp.read_parquet(self.unfinished_files, gather_spatial_partitions=False)
 
         s2_meta_table = gpd.read_parquet(self.s2_table_file)
+
+        # update s2 meta table. TODO: to be put in find_best_s2_api
+        s2_ids = gedi_df.map_partitions(lambda x: x['best_s2']).compute()
+        s2_ids = s2_ids.reset_index().dropna().drop_duplicates(subset='best_s2')
+        new_ids = s2_ids[~s2_ids['best_s2'].isin(s2_meta_table['id'])]
+        if not new_ids.empty:
+            df = []
+            for i in new_ids['best_s2']:
+                item = get_tile_by_id(i)
+                assets = {k: v.to_dict() for k, v in item.assets.items()}
+                df.append([item.id, item.bbox, assets, item.properties['datetime'], item.properties['proj:epsg'], shape(item.geometry)])
+            df = gpd.GeoDataFrame(df, columns=['id', 'bbox', 'assets', 'datetime', 'proj:epsg', 'geometry'])
+            df = df.astype({'proj:epsg': 'uint16'})
+            df.crs='epsg:4326'
+            df['datetime'] = pd.to_datetime(df['datetime']).dt.tz_localize(None)
+            new_meta_table = pd.concat([s2_meta_table, df])
+            new_meta_table = gpd.GeoDataFrame(new_meta_table)
+            new_meta_table.to_parquet(self.s2_table_file)
+
         wc_df = self.get_aux_df(
             'esa-worldcover', filters=[('start_datetime', '>=', self.esa_wc_time)],
             time_col='start_datetime')
@@ -267,9 +294,10 @@ class S2Downloader(DaskDownloader):
 
         logger.info(f'Processing {gedi_df.npartitions} partitions...')
 
-        # number = 5
-        # test = gedi_df.get_partition(number).compute()
-        # # division = gedi_df.divisions[number]
+        # number = 0
+        # # # test = gedi_df.get_partition(number).compute()
+        # #  2022/35L/partition_167
+        # test = gpd.read_parquet('/users/zhanghui/scratch/GEDI_with_s2_candidates_and_best/2022/38S/partition_380.parquet')
         # df = self.download_patches_for_partition(test, partition_info={'number': number})
         # logger.info('test done')
         df = gedi_df.map_partitions(self.download_patches_for_partition, meta=(None, 'string'))
@@ -297,41 +325,51 @@ class S2Downloader(DaskDownloader):
         * esa_wc_items (pystac.ItemCollection): The collection of ESA WC items.
         * partition_info (dict, optional): Information about the partition.
         """
+
+        partition_number = partition_info["number"] # the index of the partition in the dataframe
+        zone = self.unfinished_files[partition_number].split('/')[-2]
+        partition_number_infile = self.files.index(self.unfinished_files[partition_number])
+
+        flag = self.flag_dir / f'{self.year}_partition_{partition_number_infile}_done'
+        # if flag.exists() and not self.rewrite:
+        #     logger.info(f'{zone} {self.year}_partition_{partition_number_infile} has been processed.')
+        #     return
+
         partition = partition.dropna(subset='best_s2')
         if partition.empty:
-            return
-        partition_number = partition_info["number"] # the index of the partition in the dataframe
-        zone = self.files[partition_number].split('/')[-2]
-
-        flag = self.flag_dir / f'{self.year}_partition_{partition_number}_done'
-        if flag.exists() and not self.rewrite:
-            logger.info(f'{zone} {self.year}_partition_{partition_number} has been processed.')
             return
 
         op_part = partition[['shot_number', 'geometry', 'best_s2']].set_index('best_s2')
         s2_ids = op_part.index.unique()
         s2_meta_table = gpd.read_parquet(
             self.s2_table_file, filters=[('id', 'in', s2_ids)])
+
         s2_meta_table = s2_meta_table.set_index('id')
         s2_meta_table['datetime'] = s2_meta_table['datetime'].dt.strftime('%Y-%m-%d %H:%M:%S.%f')
 
         client = get_client()
+        bbox = box(*s2_meta_table.total_bounds)
+        wc_df = self.wc_df[self.wc_df.geometry.intersects(bbox)]
+        if wc_df.empty:
+            print(s2_meta_table.total_bounds)
+            logger.info('No world cover found.')
+            return
 
-        wc_df = self.wc_df[self.wc_df.geometry.intersects(box(*s2_meta_table.total_bounds))]
-        dem_df = self.dem_df[self.dem_df.geometry.intersects(box(*s2_meta_table.total_bounds))]
         items = row_to_stac_item(s2_meta_table, S2_ITEM_PROPS)
         wc_items = row_to_stac_item(wc_df, ['datetime'])
-        dem_items = row_to_stac_item(dem_df, ['datetime'])
-
+        
         items_table = []
         for item in items:
             bounds = op_part.loc[[item.id]]
             items_table.append((item, bounds))
 
-        items_table = db.from_sequence(items_table, npartitions=4)
-        ds = items_table.map(self.extract_patches_from_tile, wc_items, dem_items).compute()
+        items_table_db = db.from_sequence(items_table, npartitions=4)
+        ds = items_table_db.map(self.extract_patches_from_tile, wc_items).compute()
         # client.run(gc.collect)
         client.run(trim_memory)
+        ds = [s for s in ds if s is not None]
+        if len(ds) == 0:
+            return
         slope_da = xr.concat([s['dem_da'] for s in ds], dim='shot_number',
                              compat='override', coords='minimal', join='override')
         ds = xr.concat([s['da'] for s in ds], dim='shot_number')
@@ -346,6 +384,7 @@ class S2Downloader(DaskDownloader):
         slope_da = slope_da.assign_coords(x=ds.x, y=ds.y)  # set xy coords back to 0-14
         slope_da = slope_da.drop_vars(['x', 'y'])
 
+        partition = partition[partition['shot_number'].isin(ds.shot_number.data)]
         partition = partition.set_index('shot_number')
         rh_da = partition[rh_dtype.keys()].to_xarray().to_dataarray('rh', 'rhs')
         gedi_attr_da = partition[gedi_attr_dtype.keys()].to_xarray().to_dataarray('attr', 'gedi_attrs')
@@ -364,30 +403,47 @@ class S2Downloader(DaskDownloader):
                     defective_cover=('shot_number', partition['defective_cover']),
             )
         with Lock('netcdf_lock'):
-            ds.to_netcdf(self.save_dir / f'{zone}.h5', group=f'{self.year}/{partition_number}',
+            try:
+                ds.to_netcdf(self.save_dir / f'{zone}.h5', group=f'{self.year}/{partition_number_infile}',
+                         format='NETCDF4', engine='h5netcdf', encoding=self.comp, mode='a')
+            except:
+                with h5py.File(self.save_dir / f'{zone}.h5', 'a') as file:
+                    del file[f'{self.year}/{partition_number_infile}']
+                ds.to_netcdf(self.save_dir / f'{zone}.h5', group=f'{self.year}/{partition_number_infile}',
                          format='NETCDF4', engine='h5netcdf', encoding=self.comp, mode='a')
         flag.touch()
 
 
-    def extract_patches_from_tile(self, entry, wc_items, dem_items):
+    def extract_patches_from_tile(self, entry, wc_items):
         client = get_client()
         item, locs = entry
+        bbox = box(*locs.geometry.total_bounds)
         epsg = item.properties['proj:epsg']
         locs = locs.copy().to_crs(epsg)
         bounds = buffer_and_snap_bounds(locs.geometry, self.buffer_size, self.out_res)
         dem_bounds = buffer_and_snap_bounds(locs.geometry, self.dem_buffer_size, self.dem_res)
         total_bounds = get_total_bounds(bounds)
         total_bounds_dem = get_total_bounds(dem_bounds)
-        
         s2_image = get_patch(item, self.bands, resolution=self.out_res, bounds=total_bounds, epsg=epsg, dtype='uint16')
         wc_image = get_patch(wc_items, ['map'], resolution=self.out_res,bounds=total_bounds, epsg=epsg, dtype='uint16')
+        dem_df = self.dem_df[self.dem_df.geometry.intersects(bbox)]
+        if dem_df.empty:
+            dem_items = api.search(collections=['nasadem'], intersects=bbox).item_collection()
+            dem_items.asset_name = 'elevation'
+        else:
+            dem_items = row_to_stac_item(dem_df, ['datetime'])
+            dem_items = pystac.item_collection.ItemCollection(dem_items)
+            dem_items.asset_name = 'data'
+        dem_image = get_patch(dem_items.items, [dem_items.asset_name], resolution=self.dem_res, bounds=total_bounds_dem, epsg=epsg, dtype='float32', fill_value=np.nan)
+        if wc_image.shape[0] == 0 or dem_image.shape[0]==0: # there're areas without world cover or dem https://code.earthengine.google.com/72d2134898deffe65f81150ac7caeb73
+            return
+        
+        dem_image = dem_image.max(dim='time', skipna=True).squeeze()
         wc_image = wc_image.max(dim='time', skipna=True).squeeze()
         s2_image = harmonize_to_old(s2_image)
         image = xr.concat([s2_image.squeeze(), wc_image.squeeze()], dim='band',
                           coords='minimal', compat='override')  # only keep s2's time & id
 
-        dem_image = get_patch(dem_items, ['data'], resolution=self.dem_res, bounds=total_bounds_dem, epsg=epsg, dtype='float32', fill_value=np.nan)
-        dem_image = dem_image.max(dim='time', skipna=True).squeeze()
 
         patches = []
         specs = []

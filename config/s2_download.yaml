@@ -40,6 +40,16 @@ select:
   S2_meta_dir: scratch/S2_geoparquet_items/${year}
   flag_dir: scratch/Download_flags
 
+# STEP 2.2: Sentinel-2 best candidates selection
+select_post:
+  year: ${year}
+  n_parallel: 32
+  patch_size: ${patch_size}
+  data_dir: scratch/GEDI_with_s2_candidates_and_best/${year}
+  save_dir: scratch/GEDI_with_s2_candidates_and_best/${year}
+  S2_meta_dir: scratch/S2_geoparquet_items/${year}
+  flag_dir: scratch/Download_flags
+
 # STEP 3: Download patches
 download:
   year: ${year}
