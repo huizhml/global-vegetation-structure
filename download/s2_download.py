@@ -297,7 +297,8 @@ class S2Downloader(DaskDownloader):
         # number = 0
         # # # test = gedi_df.get_partition(number).compute()
         # #  2022/35L/partition_167
-        # test = gpd.read_parquet('/users/zhanghui/scratch/GEDI_with_s2_candidates_and_best/2022/38S/partition_380.parquet')
+        # # self.unfinished_files = self.files
+        # test = gpd.read_parquet(self.unfinished_files[number])
         # df = self.download_patches_for_partition(test, partition_info={'number': number})
         # logger.info('test done')
         df = gedi_df.map_partitions(self.download_patches_for_partition, meta=(None, 'string'))

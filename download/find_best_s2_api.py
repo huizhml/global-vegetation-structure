@@ -105,6 +105,18 @@ class BestS2FinderAPI(DaskDownloader):
         with open('download/invalid_s2_items.txt', 'r') as file:
             self.invalid_s2_ids = [line.strip() for line in file.readlines()]
 
+
+    @property
+    def unfinished_files(self):
+        if self.rewrite:
+            return self.files
+        files = []
+        for i, fp in enumerate(self.files):
+            fg = self.flag_dir / f'{self.year}_partition_{i}_done'
+            if not fg.exists():
+                files.append(fp)
+        return files
+
     def find_best_s2(self, zone: str = None):
         """
         Find the best Sentinel-2 scene for each GEDI location in the given GEDI zone.
@@ -139,11 +151,6 @@ class BestS2FinderAPI(DaskDownloader):
         # Get unfinished partition files indicated by the done flags
         files = [str(p) for p in files]
         self.files = sorted(files, key=natural_sort_key)
-        self.unfinished_files = []
-        for i, fp in enumerate(self.files):
-            fg = self.flag_dir / f'{self.year}_partition_{i}_done'
-            if not fg.exists():
-                self.unfinished_files.append(fp)
         
         if len(self.unfinished_files) == 0:
             logger.info('All partitions have been processed.')
@@ -167,7 +174,7 @@ class BestS2FinderAPI(DaskDownloader):
         gedi_df['end'] = gedi_df['end'].mask(with_growing_season, self.yearStart + leaf_off_doy)
 
         # *** DEBUG BLOCK
-        # number = 0
+        # number = 7
         # # self.rewrite = True
         # test = gedi_df.get_partition(number).compute()
         # # test = gpd.read_parquet('/users/zhanghui/scratch/GEDI_with_s2_candidates_and_best/2021/21H/partition_53.parquet')
@@ -222,7 +229,7 @@ class BestS2FinderAPI(DaskDownloader):
         partition_idx = partition_info["number"] # the index of the partition in the dataframe
         partition_file = self.unfinished_files[partition_idx]
         partition_number = self.files.index(partition_file) # the index of the partition in zone
-        zone = self.unfinished_files[partition_idx].split('/')[-2]
+        zone = partition_file.split('/')[-2]
         
         invalid_mask = partition['best_s2'].isin(self.invalid_s2_ids)
         partition.loc[invalid_mask, 'best_s2'] = pd.NA

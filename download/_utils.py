@@ -88,8 +88,8 @@ def buffer_and_snap_bounds(geom: gpd.GeoSeries, buffer_size:int, res:int=10):
     # snap to grid
     bounds['minx'] = np.floor(bounds['minx'] / res) * res
     bounds['miny'] = np.floor(bounds['miny'] / res) * res
-    bounds['maxx'] = np.ceil(bounds['maxx'] / res + 1e-6) * res # for point with coords 0
-    bounds['maxy'] = np.ceil(bounds['maxy'] / res + 1e-6) * res
+    bounds['maxx'] = np.ceil(bounds['maxx'] / res + 1e-12) * res # for point with coords 0
+    bounds['maxy'] = np.ceil(bounds['maxy'] / res + 1e-12) * res
     return bounds.astype('int')
 
 def get_total_bounds(geom:gpd.GeoSeries):
