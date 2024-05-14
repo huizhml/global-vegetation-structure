@@ -9,6 +9,11 @@ class GNLLoss(nn.GaussianNLLLoss):
 
 
     def forward(self, y_hat, y) -> Tensor:
-        var = y_hat[..., 101:]
+        var = torch.exp(y_hat[..., 101:])
         input = y_hat[..., :101]
-        return super().forward(input, y, var)
+        rmse = torch.sqrt(torch.mean((input-y)**2))
+        loss = super().forward(input, y, var)
+        return {
+            'loss': loss,
+            'rmse': rmse,
+        }

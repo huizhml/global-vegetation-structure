@@ -150,25 +150,25 @@ class UNet(L.LightningModule):
         x, y, mask = self.preprocess(*sample, self.device)
         y_hat = self.forward(x.float())
         y_hat = self.yhat_trasform(y_hat[...,7,7])
-        y_hat = y_hat * mask
-        y = y * mask
-        loss = self.loss(y_hat, y)
-        rmse = torch.sqrt(loss)
-        self.log('train_rmse', rmse, on_epoch=True, on_step=False)
-        self.log('train_loss', loss, on_epoch=True, on_step=False)
-        return loss
+        y_hat = y_hat[mask]
+        y = y[mask]
+        losses = self.loss(y_hat, y)
+        for name, loss in losses.items():
+            self.log(f'train_{name}', loss, on_epoch=True, on_step=False)
+        
+        return {'loss': losses['loss'], 'pred': y_hat, 'target': y}
 
     def validation_step(self, sample, batch_idx) -> torch.Tensor | Mapping[str, Any] | None:
         x, y, mask = self.preprocess(*sample, self.device)
         y_hat = self.forward(x.float())
         y_hat = self.yhat_trasform(y_hat[...,7,7])
-        y_hat = y_hat * mask
-        y = y * mask
-        loss = self.loss(y_hat, y)
-        rmse = torch.sqrt(loss)
-        self.log('val_rmse', rmse, on_epoch=True, on_step=False)
-        self.log('val_loss', loss, on_epoch=True, on_step=False)
-        return 
+        y_hat = y_hat[mask]
+        y = y[mask]
+        losses = self.loss(y_hat, y)
+        for name, loss in losses.items():
+            self.log(f'train_{name}', loss, on_epoch=True, on_step=False)
+        
+        return {'loss': losses['loss'], 'pred': y_hat, 'target': y}
 
 
 
