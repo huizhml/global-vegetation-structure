@@ -4,7 +4,7 @@
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=128G
 ##SBATCH --exclude hendrixgpu04fl,hendrixgpu03fl,hendrixgpu11fl,hendrixgpu12fl,hendrixgpu14fl,hendrixgpu15fl,hendrixgpu18fl #for using /scratch
-#SBATCH --time=1-7:00:00
+#SBATCH --time=3-00:00:00
 #SBATCH --output=./logs/%x-%A_%a.out
 #SBATCH --error=./logs/%x-%A_%a.err
 #SBATCH --mail-type=END,FAIL
@@ -48,8 +48,10 @@ get_list() {
 ID=$SLURM_ARRAY_TASK_ID
 # echo 'reading config file ~/GEDI/download_job_hendrix_'${ID}'.txt'
 # read years zones merge_zones <  ~/GEDI/download_job_hendrix_${ID}.txt
-read zones merge_zones <<< $(sed -n ${ID}p ~/GEDI/slurm_job_config.txt)
-years=${1:-[2019,2020,2021,2022]}
+offset=${1:-0}
+idx=$((ID+offset))
+read zones merge_zones <<< $(sed -n ${idx}p ~/GEDI/slurm_job_config.txt)
+years=${2:-[2019,2020,2021,2022]}
 echo $zones 
 echo $merge_zones
 

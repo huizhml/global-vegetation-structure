@@ -71,14 +71,14 @@ if [[ $merge_zones == "True" ]]; then ## for small zones, processing them togeth
     IFS=','
     for year in ${year_list[@]}; do
         echo download zones "[$zones]" $year;
-        python -u -m download.find_best_s2 zone="[$zones]" year=$year rewrite=$rewrite
+        python -u -m download.find_best_s2_api zone="[$zones]" year=$year rewrite=$rewrite
     done
 else ## for large zones, processing them sequentially
     IFS=','
     for zone in ${zone_list[@]}; do
         for year in ${year_list[@]}; do
             echo download zone "$zone" $year;
-            python -u -m download.find_best_s2 zone="$zone" year=$year rewrite=$rewrite
+            python -u -m download.find_best_s2_api zone="$zone" year=$year rewrite=$rewrite
         done
     done
 fi
