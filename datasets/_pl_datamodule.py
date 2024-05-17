@@ -26,6 +26,7 @@ class PLDataModel(L.LightningDataModule):
         merged_h5_file: str=None,
         test_data_name: str='cal',
         use_zones:Union[str, List[str]]='TEST_ZONES',
+        group_len: int=4,
         val_ratio: float=0.2,
         random_state: int=42,
         batch_size: int=64,
@@ -40,6 +41,7 @@ class PLDataModel(L.LightningDataModule):
         h5_dir = Path(h5_dir).expanduser()
         index_table_file = Path(index_table_file).expanduser()
         split_files_dir = Path(split_files_dir).expanduser()
+        self.group_len = group_len
         self.merged_h5_file = data_dir / merged_h5_file
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -69,7 +71,6 @@ class PLDataModel(L.LightningDataModule):
         Returns:
             None
         """
-        #TODO: use dask for larger data?
         if index_table_file.exists():
             logger.info('index table exists, skipping...')
             return
@@ -79,7 +80,7 @@ class PLDataModel(L.LightningDataModule):
             index_df = []
             with h5py.File(self.merged_h5_file) as data:
                 for group in _iter_nc_groups(ncds):
-                    if len(group.split('/')) == 4:
+                    if len(group.split('/')) == self.group_len:
                         s2_ids = data[f'{group}/id'][:].astype('U')
                         index_df.append([group, s2_ids])
         index_df = pd.DataFrame(index_df, columns=['path','s2_tile'])
