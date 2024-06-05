@@ -5,10 +5,22 @@ import json
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import matplotlib.cbook as cbook
+import dask
+import seaborn as sns
+# import hvplot.pandas  # noqa
+# import hvplot.dask  # noqa
+# hvplot.extension('matplotlib')
 import dask.bag as db
+import dask.array as da
+import xarray as xr
+import dask.dataframe as dd
 from datatree.io import _iter_nc_groups
 from h5netcdf.legacyapi import Dataset as h5Dataset
 from const import ESA_WC
+import os
+import json
+os.environ['BOKEH_ALLOW_WS_ORIGIN'] = 'www.lumi.csc.fi'
 
 HIST_PARAMS = {
     # keys from the h5 data
@@ -36,10 +48,96 @@ class AverageMeter:
 
 
 class Stats:
-    def __init__(self, h5_dir:str='~/data/GEDI'):
+    def __init__(self, h5_dir:str='~/data/GEDI', mgrs_file:str='~/data/mgrs_zones.json'):
         self.h5_dir = Path(h5_dir).expanduser()
 
-    def plot(self):
+    def plot_map(self):
+        pass
+
+    def read_h5(self, index_df):
+
+        if not hasattr(self, 'h5_file'):
+            self.h5_file = h5py.File('/users/zhanghui/flash/data/GVS.h5', 'r')
+        try:
+            index_df.name in self.h5_file
+        except:
+            print(index_df)
+        # #  TMP
+        # if not index_df.name in self.h5_file:
+        #     return
+
+        idx = index_df['in_partition_idx'].to_list()
+        idx = sorted(idx)
+        rhs = self.h5_file[f'{index_df.name}/rhs'][idx]
+        return rhs.tolist()
+        # rhs = []
+        # for i, row in index_df.iterrows():
+        #     path = row['path']
+        #     idx = row['in_partition_idx']
+        #     if path in self.h5_file:
+        #         rhs.append(self.h5_file[f'{path}/rhs'][idx:idx+1])
+        # #     rhs.append(self.h5_file[f'{path}/rhs'][:])
+        # if len(rhs) > 0:
+        #     return np.concatenate(rhs, axis=0)
+
+
+    def boxplot(self, subset_size:int=1e4, repeat:int=10, seed:int=0):
+        """
+        Using bootstrap method to plot the boxplot of the relative heights.
+        Extracts the relative heights from the h5 files and saves them as parquet files.
+        Then plots the boxplot/violin plot of the relative heights.
+
+        """
+        import time
+        from dask.distributed import Client, LocalCluster
+        cluster = LocalCluster(n_workers=8)
+        client = Client(cluster)
+        print(client)
+        
+        # self.h5_file = h5py.File(self.h5_dir.parent /'GVS.h5', 'r')
+        index_df = dd.read_parquet(f"{str(self.h5_dir.parent)}/index_table/*.parquet")
+        index_df = index_df.compute()
+        index_df = index_df.sample(frac=0.01, random_state=seed)
+        # index_df = index_df.groupby('path')
+        index_df = dd.from_pandas(index_df, npartitions=32)
+        rhs = index_df.groupby('path').apply(self.read_h5,  meta=('rh', object)).compute()
+        # rhs = index_df.map_partitions(self.read_h5, meta=('rh', 'object')).compute()
+        rhs = rhs.dropna()
+        rhs = [json.loads(rh) for rh in rhs]
+        rhs = np.concatenate(rhs, axis=0)
+        rhs_df = pd.DataFrame(rhs, columns=[f'rh{i}' for i in range(101)])
+        rhs_df.to_csv(f'/users/zhanghui/scratch/data/rhs_sample0.01_{seed}.csv')
+        plt.figure(figsize=(24,6))
+        ax = sns.boxenplot(data=rhs_df)
+        plt.savefig(f'outputs/boxenplot_sample0.01_{seed}.png')
+              
+
+    def agg_rhs(self, zone, save_dir:Path):
+        # rhs = {
+        #     '2019': [],
+        #     '2020': [],
+        #     '2021': [],
+        #     '2022': []
+        # }
+        rhs = []
+        with h5Dataset(self.h5_dir/f'{zone}.h5', mode='r') as ncds:
+            with h5py.File(self.h5_dir/f'{zone}.h5',) as data:
+                for group in _iter_nc_groups(ncds):
+                    if len(group.split('/')) == 3:
+                        rhs.append(data[f'{group}/rhs'][:])
+                        # year = group.split('/')[1]
+                        # rhs[year].append(data[f'{group}/rhs'][:])
+        # for k, v in rhs.items():
+        #     res = np.concatenate(v, axis=0)
+        #     df = pd.DataFrame(res, columns=[f'rh{i}' for i in range(101)])
+        #     df.to_parquet(f'{save_dir}/{zone}_{k}.parquet')
+        #     del rhs[k], res
+        res = np.concatenate(rhs, axis=0)
+        df = pd.DataFrame(res, columns=[f'rh{i}' for i in range(101)])
+        df.to_parquet(f'{save_dir}/{zone}.parquet')
+        return
+    
+    def plot_histgram(self):
         data = self.get_hist_counts(self.h5_dir.parent /'hist_data.json')
         plt.figure()
         for k, m in data.items():
@@ -120,5 +218,5 @@ class Stats:
 
 if __name__ == '__main__':
     stats = Stats()
-    stats.plot()
+    stats.boxplot(seed=3)
     
