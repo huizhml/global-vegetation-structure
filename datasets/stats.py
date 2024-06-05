@@ -8,9 +8,6 @@ import matplotlib.pyplot as plt
 import matplotlib.cbook as cbook
 import dask
 import seaborn as sns
-# import hvplot.pandas  # noqa
-# import hvplot.dask  # noqa
-# hvplot.extension('matplotlib')
 import dask.bag as db
 import dask.array as da
 import xarray as xr
@@ -70,15 +67,7 @@ class Stats:
         idx = sorted(idx)
         rhs = self.h5_file[f'{index_df.name}/rhs'][idx]
         return rhs.tolist()
-        # rhs = []
-        # for i, row in index_df.iterrows():
-        #     path = row['path']
-        #     idx = row['in_partition_idx']
-        #     if path in self.h5_file:
-        #         rhs.append(self.h5_file[f'{path}/rhs'][idx:idx+1])
-        # #     rhs.append(self.h5_file[f'{path}/rhs'][:])
-        # if len(rhs) > 0:
-        #     return np.concatenate(rhs, axis=0)
+
 
 
     def boxplot(self, subset_size:int=1e4, repeat:int=10, seed:int=0):
@@ -93,8 +82,7 @@ class Stats:
         cluster = LocalCluster(n_workers=8)
         client = Client(cluster)
         print(client)
-        
-        # self.h5_file = h5py.File(self.h5_dir.parent /'GVS.h5', 'r')
+
         index_df = dd.read_parquet(f"{str(self.h5_dir.parent)}/index_table/*.parquet")
         index_df = index_df.compute()
         index_df = index_df.sample(frac=0.01, random_state=seed)
@@ -113,25 +101,12 @@ class Stats:
               
 
     def agg_rhs(self, zone, save_dir:Path):
-        # rhs = {
-        #     '2019': [],
-        #     '2020': [],
-        #     '2021': [],
-        #     '2022': []
-        # }
         rhs = []
         with h5Dataset(self.h5_dir/f'{zone}.h5', mode='r') as ncds:
             with h5py.File(self.h5_dir/f'{zone}.h5',) as data:
                 for group in _iter_nc_groups(ncds):
                     if len(group.split('/')) == 3:
                         rhs.append(data[f'{group}/rhs'][:])
-                        # year = group.split('/')[1]
-                        # rhs[year].append(data[f'{group}/rhs'][:])
-        # for k, v in rhs.items():
-        #     res = np.concatenate(v, axis=0)
-        #     df = pd.DataFrame(res, columns=[f'rh{i}' for i in range(101)])
-        #     df.to_parquet(f'{save_dir}/{zone}_{k}.parquet')
-        #     del rhs[k], res
         res = np.concatenate(rhs, axis=0)
         df = pd.DataFrame(res, columns=[f'rh{i}' for i in range(101)])
         df.to_parquet(f'{save_dir}/{zone}.parquet')
@@ -175,9 +150,6 @@ class Stats:
         t0 = time.time()
         h5_files = self.h5_dir.glob('*.h5')
         zones = [f.stem for f in h5_files]
-        # test = self.agg_zone('38J')
-        # import ipdb; ipdb.set_trace()
-        # stats = [test]
         data = db.from_sequence(zones).map(self.agg_zone, HIST_PARAMS)
         data = data.compute()
         print(f'time taken: {time.time() - t0}')
@@ -201,6 +173,10 @@ class Stats:
         return res
 
     def agg_zone(self, zone, hist_params):
+        """
+        Walk through all groups in given zone.h5, 
+        and aggregate data/cols specified by hist_params for histogram plot.
+        """
         metrics = []
         for name, params in hist_params.items():
             metric = AverageMeter(bins=params['bins'], name=name)
