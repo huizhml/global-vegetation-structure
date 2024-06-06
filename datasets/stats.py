@@ -4,8 +4,12 @@ import h5py
 import json
 import numpy as np
 import pandas as pd
+import geopandas as gpd
 import matplotlib.pyplot as plt
 import matplotlib.cbook as cbook
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+from matplotlib.ticker import ScalarFormatter, MaxNLocator
+import matplotlib.colors as colors
 import dask
 import seaborn as sns
 import dask.bag as db
@@ -48,13 +52,106 @@ class Stats:
     def __init__(self, h5_dir:str='~/data/GEDI', mgrs_file:str='~/data/mgrs_zones.json'):
         self.h5_dir = Path(h5_dir).expanduser()
 
-    def plot_map(self):
-        pass
+    def plot_sample_map(self, mgrs_file:str='~/scratch/sample_stats.parquet'):
+        if os.path.exists(mgrs_file):
+            mgrs_df = self.sample_stats(mgrs_file=mgrs_df)
+        else:
+            mgrs_df = gpd.read_parquet(mgrs_file)
+        mgrs_df.crs = 'EPSG:4326'
+
+        countries = gpd.read_file(gpd.datasets.get_path('naturalearth_lowres'))
+        countries_flt = countries[countries.geometry.apply(lambda x: x.bounds[1] > -60)]#.to_crs('+proj=robin')
+
+        count_cols = [f'count_{year}' for year in range(2019, 2023)]
+        sampled_cols = [f'sampled_{year}' for year in range(2019, 2023)]
+        diff_cols = [f'diff_{year}' for year in range(2019, 2023)]
+        perc_cols = [f'percentage_{year}' for year in range(2019, 2023)]
+        mgrs_df = mgrs_df.astype({'nwant': int})
+        for year in range(2019, 2023):
+            mgrs_df[f'diff_{year}'] = mgrs_df[f'nwant'] - mgrs_df[f'downloaded_{year}']
+        
+        vmin = {}
+        vmax = {}
+        vmin['count'] = int(np.percentile(mgrs_df[count_cols], 2))
+        vmax['count'] = int(np.percentile(mgrs_df[count_cols], 98))
+        vmin['sampled'] =int(np.percentile(mgrs_df[sampled_cols], 2))
+        vmax['sampled'] =int(np.percentile(mgrs_df[sampled_cols], 98))
+        vmin['downloaded'] = vmin['sampled']
+        vmax['downloaded'] = vmax['sampled']
+        vmin['diff'] = mgrs_df[diff_cols].min().min()
+        vmax['diff'] = mgrs_df[diff_cols].max().max()
+        vmin['percentage'] = 0
+        vmax['percentage'] = 1
+
+        years = [2019, 2020, 2021, 2022]
+        cols = ['sampled', 'count', 'downloaded', 'diff', 'percentage']
+        # Create a color map
+        cmap = 'viridis'
+        titles = ['#Sampled', '#Total', '#Downloaded', '#Want - #Downloaded', '#Downloaded.div#Want']
+        fig_width, fig_height = 10, 6  # Set the figure size
+        for r, col in enumerate(cols):
+            norm = colors.Normalize(vmin=vmin[col], vmax=vmax[col])
+            if col == 'percentage':
+                cmap = colors.ListedColormap(['gray', 'purple','orange', 'yellow', 'cyan', 'green'])
+                bounds = [0, 0.6, 0.7, 0.8, 0.9, 1.0]
+                norm = colors.BoundaryNorm(bounds, cmap.N)
+            for c, year in enumerate(years):
+                fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+                # Create a divider for the existing axes instance
+                divider = make_axes_locatable(ax)
+                cax = divider.append_axes("right", size="5%", pad=0.1)
+                mgrs_df.plot(column=f'{col}_{year}', vmin=vmin[col], vmax=vmax[col], cmap=cmap, norm=norm, ax=ax)
+                countries_flt.plot(ax=ax, color='none', edgecolor='black', linewidth=0.5)
+                ax.set_xlim(-180, 180)
+                ax.set_title(f'{titles[r]} footprints in {year}', fontsize=16)
+                # Create a scalar mappable for the colorbar
+                sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+                sm.set_array([])  # You can also pass in some data here if needed
+                
+                # Create colorbar in the appended axes
+                cbar = plt.colorbar(sm, cax=cax)
+                cbar.ax.set_ylabel(col)
+                # Set the colorbar to use a reasonable number of ticks
+                cbar.locator = MaxNLocator(nbins=5, integer=False)
+                cbar.update_ticks()
+
+                # Set the colorbar formatter to scientific notation
+                formatter = ScalarFormatter(useMathText=True)
+                formatter.set_scientific(True)
+                formatter.set_powerlimits((0, 0))  # Adjust limits if necessary
+                cbar.ax.yaxis.set_major_formatter(formatter)
+                plt.tight_layout()
+                plt.savefig(f'outputs/{titles[r]}_{year}.png', dpi=300, bbox_inches='tight', transparent=False)
+
+
+    def sample_stats(self, index_table:str='~/scratch/data/index_table', mgrs_file:str='~/scratch/mgrs_with_nbest_v2.parquet'):
+        from dask.distributed import Client, LocalCluster
+        cluster = LocalCluster()
+        client = Client(cluster)
+        print(client)
+        index_df = dd.read_parquet(f'{index_table}/*.parquet')
+        splits = index_df.path.str.split('/')
+        index_df['zone'] = splits.str[6:9]
+        index_df['year'] = splits.str[13:17]
+        downloaded_count = index_df.groupby(['zone', 'year']).size()
+        downloaded_count = downloaded_count.compute()
+        mgrs_df = gpd.read_parquet(mgrs_file)
+        mgrs_df = mgrs_df.drop(columns=['tracks'] + [f'tracks_{year}' for year in range(2019, 2023)])
+        mgrs_df = mgrs_df.set_index('MGRS_UTM')
+        for zone in downloaded_count.index.get_level_values('zone'):
+            for year in range(2019,2023):
+                mgrs_df.loc[zone, f'downloaded_{year}'] =  downloaded_count.loc[zone, str(year)] if str(year) in downloaded_count.loc[zone] else 0
+                mgrs_df.loc[zone, f'percentage_{year}'] = mgrs_df.loc[zone, f'downloaded_{year}'] / mgrs_df.loc[zone, f'sampled_{year}']
+        withna_cols = [f'downloaded_{year}' for year in range(2019, 2023)] + [f'percentage_{year}' for year in range(2019, 2023)]
+        mgrs_df[withna_cols] = mgrs_df[withna_cols].fillna(0)
+        mgrs_df.to_parquet('~/scratch/sample_stats.parquet')
+        return mgrs_df
+        
 
     def read_h5(self, index_df):
 
         if not hasattr(self, 'h5_file'):
-            self.h5_file = h5py.File('/users/zhanghui/flash/data/GVS.h5', 'r')
+            self.h5_file = h5py.File('~/flash/data/GVS.h5', 'r')
         try:
             index_df.name in self.h5_file
         except:
@@ -94,7 +191,7 @@ class Stats:
         rhs = [json.loads(rh) for rh in rhs]
         rhs = np.concatenate(rhs, axis=0)
         rhs_df = pd.DataFrame(rhs, columns=[f'rh{i}' for i in range(101)])
-        rhs_df.to_csv(f'/users/zhanghui/scratch/data/rhs_sample0.01_{seed}.csv')
+        rhs_df.to_csv(f'~/scratch/data/rhs_sample0.01_{seed}.csv')
         plt.figure(figsize=(24,6))
         ax = sns.boxenplot(data=rhs_df)
         plt.savefig(f'outputs/boxenplot_sample0.01_{seed}.png')
@@ -194,5 +291,6 @@ class Stats:
 
 if __name__ == '__main__':
     stats = Stats()
-    stats.boxplot(seed=3)
+    # stats.boxplot(seed=3)
+    stats.plot_sample_map()
     
