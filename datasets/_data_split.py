@@ -2,6 +2,8 @@ import os
 import time
 import hydra
 from pathlib import Path
+import dask
+import hvplot.dask
 import dask.dataframe as dd
 from dask.utils import natural_sort_key
 import geopandas as gpd
@@ -75,8 +77,8 @@ class DataSplitter:
                 overlapped_tiles = overlapped_tiles.drop(columns=['index_right'])
                 split_index_df = index_df.sjoin(overlapped_tiles, how='left')
                 split_index_df = split_index_df.dropna(subset='index_right')
-                split_index_df = split_index_df.drop(columns='index_right')
-                split_index_df = split_index_df.drop_duplicates()
+                split_index_df = split_index_df.rename(columns={'index_right': 'assigned_tile'})
+                split_index_df = split_index_df[~split_index_df.index.duplicated(keep='first')]
                 split_index_df.to_parquet(getattr(self, f'{name}_index_table') / f'{zone}.parquet')
                 index_df = index_df.drop(split_index_df.index)
         
@@ -84,13 +86,15 @@ class DataSplitter:
         print(f'{zone} done')
     
 
-    def run(self):
-
+    def run_split(self):
         index_table_fps = [f'{self.index_dir}/{zone}' for zone in os.listdir(self.index_dir)]
         self.index_table_fps = sorted(index_table_fps, key=natural_sort_key)
         index_df = dgp.read_parquet(self.index_table_fps , gather_spatial_partitions=False, columns=['path', 's2_tile', 'in_partition_idx', 'geometry'])
         index_df.map_partitions(self.split_zone, meta=index_df._meta).compute()
 
+    def visualize_split(self):
+        
+        pass
 
 
 @dataclass
@@ -117,7 +121,7 @@ def main(cfg: DictConfig) -> None:
 
     t0 = time.time()
     splitter = DataSplitter(cfg.index_dir, cfg.test_ratio, cfg.val_ratio, cfg.cal_ratio, cfg.random_state, cfg.s2_grid_file, cfg.mgrs_file)
-    splitter.run()
+    splitter.run_split()
     print(f'time taken: {time.time() - t0}')
     client.close()
 
