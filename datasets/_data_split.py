@@ -4,6 +4,7 @@ import hydra
 from pathlib import Path
 import dask
 import hvplot.dask
+import pandas as pd
 import dask.dataframe as dd
 from dask.utils import natural_sort_key
 import geopandas as gpd
@@ -11,6 +12,8 @@ import dask_geopandas as dgp
 from dataclasses import dataclass
 from hydra.core.config_store import ConfigStore
 from omegaconf import DictConfig
+import matplotlib.pyplot as plt
+from matplotlib.colors import ListedColormap
 
 
 class DataSplitter:
@@ -21,24 +24,16 @@ class DataSplitter:
         self.val_ratio = val_ratio
         self.cal_ratio = cal_ratio
         self.random_state = random_state
-        self.train_cal_val_test_split(s2_grid_file)
-        self.mgrs_df = gpd.read_parquet(mgrs_file, columns=['MGRS_UTM', 'geometry'])
-        self.mgrs_df = self.mgrs_df.set_index('MGRS_UTM')
-        self.mgrs_df.crs = 'EPSG:4326'
+        self.s2_grid_file = s2_grid_file
+        self.mgrs_file = mgrs_file
         self.splits = ['test', 'cal', 'val']
-        for name in self.splits + ['train']:
-            directory = self.index_dir.parent / f'{name}_index_table'
-            directory.mkdir(exist_ok=True)
-            self.__setattr__(f'{name}_index_table', directory)
+        self.save_dir = self.index_dir.parent / f'split_test{self.test_ratio}_cal{self.cal_ratio}_val{self.val_ratio}_seed{self.random_state}'
+        self.save_dir.mkdir(exist_ok=True)
 
-
-
-    def train_cal_val_test_split(self, s2_grid_file:Path=None):
-        save_dir = self.index_dir.parent / 'splited_tiles'
-        save_dir.mkdir(exist_ok=True)
+    def train_cal_val_test_split(self):
         geo_index_df = dd.read_parquet(f'{self.index_dir}/*.parquet')
         unique_tiles = geo_index_df['s2_tile'].unique().compute()
-        s2_grid = gpd.read_file(s2_grid_file)
+        s2_grid = gpd.read_file(self.s2_grid_file)
         s2_grid = s2_grid.set_index('Name')
         self.s2_grid = s2_grid.loc[unique_tiles]
 
@@ -47,21 +42,21 @@ class DataSplitter:
         n_cal = int(len(unique_tiles) * self.cal_ratio)
 
         test_tiles = unique_tiles.sample(n=n_test, random_state=self.random_state)
-        test_tiles.to_csv(save_dir / 'test_tiles.csv', header=None, index=None, sep=' ', mode='w')
+        test_tiles.to_csv(self.save_dir / 'test_tiles.csv', header=None, index=None, sep=' ', mode='w')
         self.test_tiles = self.s2_grid.loc[test_tiles]
         
         unique_tiles = unique_tiles.drop(test_tiles.index)
         val_tiles = unique_tiles.sample(n=n_val, random_state=self.random_state)
-        val_tiles.to_csv(save_dir / 'val_tiles.csv', header=None, index=None, sep=' ', mode='w')
+        val_tiles.to_csv(self.save_dir / 'val_tiles.csv', header=None, index=None, sep=' ', mode='w')
         self.val_tiles = self.s2_grid.loc[val_tiles]
 
         unique_tiles = unique_tiles.drop(val_tiles.index)
         cal_tiles = unique_tiles.sample(n=n_cal, random_state=self.random_state)
-        cal_tiles.to_csv(save_dir / 'cal_tiles.csv', header=None, index=None, sep=' ', mode='w')
+        cal_tiles.to_csv(self.save_dir / 'cal_tiles.csv', header=None, index=None, sep=' ', mode='w')
         self.cal_tiles = self.s2_grid.loc[cal_tiles]
 
-        # train_tiles = unique_tiles.drop(cal_tiles.index)
-        # train_tiles.to_csv(save_dir / 'train_tiles.csv', header=None, index=None, sep=' ', mode='w')
+        self.train_tiles = unique_tiles.drop(cal_tiles.index)
+        self.train_tiles.to_csv(self.save_dir / 'train_tiles.csv', header=None, index=None, sep=' ', mode='w')
         # self.train_tiles = self.s2_grid.loc[train_tiles]
         # print()
 
@@ -87,20 +82,124 @@ class DataSplitter:
     
 
     def run_split(self):
+        self.train_cal_val_test_split(self.s2_grid_file)
+        self.mgrs_df = gpd.read_parquet(self.mgrs_file, columns=['MGRS_UTM', 'geometry'])
+        self.mgrs_df = self.mgrs_df.set_index('MGRS_UTM')
+        self.mgrs_df.crs = 'EPSG:4326'
+        for name in self.splits + ['train']:
+            directory = self.index_dir.parent / f'{name}_index_table'
+            directory.mkdir(exist_ok=True)
+            self.__setattr__(f'{name}_index_table', directory)
+
         index_table_fps = [f'{self.index_dir}/{zone}' for zone in os.listdir(self.index_dir)]
         self.index_table_fps = sorted(index_table_fps, key=natural_sort_key)
         index_df = dgp.read_parquet(self.index_table_fps , gather_spatial_partitions=False, columns=['path', 's2_tile', 'in_partition_idx', 'geometry'])
         index_df.map_partitions(self.split_zone, meta=index_df._meta).compute()
 
-    def visualize_split(self):
-        
-        pass
+    def count_for_split_per_zone(self):
+        '''
+        Count the number of samples for each split in each MGRS zone
+        Data splitting has been done.
+        '''
+        self.mgrs_df = gpd.read_parquet(self.mgrs_file)
+        self.mgrs_df['total_downloaded'] = self.mgrs_df[[f'downloaded_{year}' for year in range(2019, 2023)]].sum(axis=1)
+        splits = self.splits + ['train']
+        # for each split, e.g., test, reading index_df for each zone from test_index_table
+        ntiles_per_split = {}
+        for name in splits:
+            data_dir = self.save_dir / f'{name}_index_table'
+            split_index_df_fps = [f'{data_dir}/{zone}' for zone in os.listdir(data_dir)]
+            split_index_df_fps = sorted(split_index_df_fps, key=natural_sort_key)
+            split_index_df = dd.read_parquet(split_index_df_fps)
+            count = split_index_df.map_partitions(len).compute()
+            ntiles = split_index_df['s2_tile'].nunique().compute()
+            ntiles_per_split[name] = ntiles
+            count = count.to_frame()
+            count.loc[:, 'MGRS_UTM'] = [os.path.basename(f)[:3] for f in split_index_df_fps]
+            count = count.set_index('MGRS_UTM', drop=True)
+            self.mgrs_df.loc[:, f'count_{name}'] = count[0]
+            self.mgrs_df[f'ratio_{name}'] = self.mgrs_df[f'count_{name}'] / self.mgrs_df['total_downloaded']
+            self.mgrs_df[f'ratio_{name}'] = self.mgrs_df[f'ratio_{name}'].replace(0, pd.NA)
+        # self.mgrs_df = self.mgrs_df.fillna(value={f'count_{name}': 0 for name in splits})
+        # sum_split = self.mgrs_df[[f'count_{name}' for name in splits]].sum(axis=1)
+        self.mgrs_df.to_parquet(self.save_dir / 'mgrs_stats.parquet')
 
+        # generate a summary
+        stats = []
+        for name in splits:
+            n = self.mgrs_df[f'count_{name}'].sum()
+            tiles = pd.read_csv(self.save_dir / f'{name}_tiles.csv', header=None, sep=' ')
+            stats.append([n, len(tiles)])
+
+        stats = pd.DataFrame(stats, index=splits, columns=['count', 'n_s2_cells'])
+        stats['ratio'] = stats['count'] / stats['count'].sum()
+        stats['n_image_tiles'] = pd.Series(ntiles_per_split)
+        stats.to_csv(self.save_dir / 'split_stats.txt', sep=' ')
+    
+    def visualize_split(self):
+        import matplotlib.pyplot as plt
+        from mpl_toolkits.axes_grid1 import make_axes_locatable
+        # Visualize splitted tiles        
+        s2_grid = gpd.read_file(self.s2_grid_file)
+        s2_grid = s2_grid.set_index('Name')
+        splits = self.splits + ['train']
+        for name in splits:
+            tiles = pd.read_csv(self.save_dir / f'{name}_tiles.csv', header=None, sep=' ')
+            tiles = tiles[0].tolist()
+            s2_grid.loc[tiles, 'split'] = name
+        s2_grid = s2_grid.dropna(subset=['split'])
+        s2_grid.plot(column='split', legend=True)
+        s2_grid.to_parquet(self.save_dir / 's2_grid_with_split.parquet')
+        # plot
+        colors = ['red', 'yellow', 'gray', 'blue']
+        cmap = ListedColormap(colors)
+        fig = plt.figure()
+        ax = s2_grid.plot(column='split', legend=True, cmap=cmap, figsize=(24, 10))
+        plt.tight_layout()
+        overlay_country_boundaries(ax)
+        plt.savefig(self.save_dir / 'splitted_s2_tiles.png')
+
+        # Visualize the number of samples in each zone for each split
+        df = gpd.read_parquet(self.save_dir / 'mgrs_stats.parquet')
+        df = df[df['total_downloaded']>0]
+        df.crs = 'EPSG:4326'
+        cmap = 'coolwarm'
+        for name in splits:
+            fig, ax = plt.subplots(1, 1, figsize=(30, 10))
+            # Plotting
+            df.plot(column='ratio_train', 
+                    cmap=cmap, 
+                    ax=ax, 
+                    legend=False, 
+                    missing_kwds={
+                        "color": "lightgrey",
+                        "edgecolor": "red",
+                        "hatch": "///",
+                        "label": "Missing values",
+                    })
+
+            # Create a divider for the existing axes instance
+            divider = make_axes_locatable(ax)
+            cax = divider.append_axes("bottom", size="5%", pad=0.1)  # Adjust pad to 
+
+            # Add colorbar
+            sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=0, vmax=1))
+            cbar = fig.colorbar(sm, cax=cax, orientation='horizontal')
+            cbar.set_label('Percentage', fontsize=15)
+            cbar.ax.tick_params(labelsize=15)
+            plt.tight_layout()
+            plt.savefig(self.save_dir / f'split_ratio_map_{name}.png')
+
+
+def overlay_country_boundaries(ax):
+    world = gpd.read_file(gpd.datasets.get_path('naturalearth_lowres'))
+    countries_flt = world[world.geometry.apply(lambda x: x.bounds[1] > -60)]
+    countries_flt.plot(ax=ax, color='none', edgecolor='black', linewidth=0.5)
 
 @dataclass
 class MyConfig:
     index_dir: Path = Path('~/scratch/data/geo_index_table').expanduser()
-    mgrs_file: Path = Path('~/scratch/mgrs_with_nbest.parquet').expanduser()
+    mgrs_file: Path = Path('~/scratch/data/download_stats.parquet').expanduser()
     s2_grid_file: Path = Path('~/scratch/Sentinel-2_tilling_shp/sentinel_2_index_shapefile.shp').expanduser()
     test_ratio: float = 0.1
     val_ratio: float = 0.1
@@ -121,9 +220,12 @@ def main(cfg: DictConfig) -> None:
 
     t0 = time.time()
     splitter = DataSplitter(cfg.index_dir, cfg.test_ratio, cfg.val_ratio, cfg.cal_ratio, cfg.random_state, cfg.s2_grid_file, cfg.mgrs_file)
-    splitter.run_split()
+    # splitter.run_split(cfg.mgrs_file)
+    # splitter.count_for_split_per_zone()
+    splitter.visualize_split()
+
     print(f'time taken: {time.time() - t0}')
     client.close()
 
 if __name__ == "__main__":
-    main()
+    main()  
