@@ -31,34 +31,42 @@ class DataSplitter:
         self.save_dir.mkdir(exist_ok=True)
 
     def train_cal_val_test_split(self):
-        geo_index_df = dd.read_parquet(f'{self.index_dir}/*.parquet')
-        unique_tiles = geo_index_df['s2_tile'].unique().compute()
         s2_grid = gpd.read_file(self.s2_grid_file)
-        s2_grid = s2_grid.set_index('Name')
-        self.s2_grid = s2_grid.loc[unique_tiles]
+        self.s2_grid = s2_grid.set_index('Name')
+        exist = len(list(self.save_dir.glob('*_tiles.csv'))) == 4
+        if exist:
+            print('Splitting has been done.')
+            for name in self.splits +['train']:
+                tiles = pd.read_csv(self.save_dir / f'{name}_tiles.csv', header=None, sep=' ')
+                tiles = self.s2_grid.loc[tiles[0]]
+                setattr(self, f'{name}_tiles', tiles)
+        else:  
+            geo_index_df = dd.read_parquet(f'{self.index_dir}/*.parquet')
+            unique_tiles = geo_index_df['s2_tile'].unique().compute()
+            self.s2_grid = self.s2_grid.loc[unique_tiles]
 
-        n_test = int(len(unique_tiles) * self.test_ratio)
-        n_val = int(len(unique_tiles) * self.val_ratio)
-        n_cal = int(len(unique_tiles) * self.cal_ratio)
+            n_test = int(len(unique_tiles) * self.test_ratio)
+            n_val = int(len(unique_tiles) * self.val_ratio)
+            n_cal = int(len(unique_tiles) * self.cal_ratio)
 
-        test_tiles = unique_tiles.sample(n=n_test, random_state=self.random_state)
-        test_tiles.to_csv(self.save_dir / 'test_tiles.csv', header=None, index=None, sep=' ', mode='w')
-        self.test_tiles = self.s2_grid.loc[test_tiles]
-        
-        unique_tiles = unique_tiles.drop(test_tiles.index)
-        val_tiles = unique_tiles.sample(n=n_val, random_state=self.random_state)
-        val_tiles.to_csv(self.save_dir / 'val_tiles.csv', header=None, index=None, sep=' ', mode='w')
-        self.val_tiles = self.s2_grid.loc[val_tiles]
+            test_tiles = unique_tiles.sample(n=n_test, random_state=self.random_state)
+            test_tiles.to_csv(self.save_dir / 'test_tiles.csv', header=None, index=None, sep=' ', mode='w')
+            self.test_tiles = self.s2_grid.loc[test_tiles]
+            
+            unique_tiles = unique_tiles.drop(test_tiles.index)
+            val_tiles = unique_tiles.sample(n=n_val, random_state=self.random_state)
+            val_tiles.to_csv(self.save_dir / 'val_tiles.csv', header=None, index=None, sep=' ', mode='w')
+            self.val_tiles = self.s2_grid.loc[val_tiles]
 
-        unique_tiles = unique_tiles.drop(val_tiles.index)
-        cal_tiles = unique_tiles.sample(n=n_cal, random_state=self.random_state)
-        cal_tiles.to_csv(self.save_dir / 'cal_tiles.csv', header=None, index=None, sep=' ', mode='w')
-        self.cal_tiles = self.s2_grid.loc[cal_tiles]
+            unique_tiles = unique_tiles.drop(val_tiles.index)
+            cal_tiles = unique_tiles.sample(n=n_cal, random_state=self.random_state)
+            cal_tiles.to_csv(self.save_dir / 'cal_tiles.csv', header=None, index=None, sep=' ', mode='w')
+            self.cal_tiles = self.s2_grid.loc[cal_tiles]
 
-        self.train_tiles = unique_tiles.drop(cal_tiles.index)
-        self.train_tiles.to_csv(self.save_dir / 'train_tiles.csv', header=None, index=None, sep=' ', mode='w')
-        # self.train_tiles = self.s2_grid.loc[train_tiles]
-        # print()
+            self.train_tiles = unique_tiles.drop(cal_tiles.index)
+            self.train_tiles.to_csv(self.save_dir / 'train_tiles.csv', header=None, index=None, sep=' ', mode='w')
+            # self.train_tiles = self.s2_grid.loc[train_tiles]
+            # print()
 
 
     def split_zone(self, index_df, partition_info):
@@ -82,12 +90,15 @@ class DataSplitter:
     
 
     def run_split(self):
-        self.train_cal_val_test_split(self.s2_grid_file)
+        exist = len(list(self.save_dir.glob('*_index_table'))) == 4 #NOTE: didn't check files under the directory
+        if exist:
+            print('Splitting has been done.')
+            return
+        self.train_cal_val_test_split()
         self.mgrs_df = gpd.read_parquet(self.mgrs_file, columns=['MGRS_UTM', 'geometry'])
-        self.mgrs_df = self.mgrs_df.set_index('MGRS_UTM')
         self.mgrs_df.crs = 'EPSG:4326'
         for name in self.splits + ['train']:
-            directory = self.index_dir.parent / f'{name}_index_table'
+            directory = self.save_dir / f'{name}_index_table'
             directory.mkdir(exist_ok=True)
             self.__setattr__(f'{name}_index_table', directory)
 
@@ -101,6 +112,9 @@ class DataSplitter:
         Count the number of samples for each split in each MGRS zone
         Data splitting has been done.
         '''
+        if (self.save_dir / 'mgrs_stats.parquet').exists() and (self.save_dir / 'split_stats.txt').exists():
+            print('Counting has been done.')
+            return
         self.mgrs_df = gpd.read_parquet(self.mgrs_file)
         self.mgrs_df['total_downloaded'] = self.mgrs_df[[f'downloaded_{year}' for year in range(2019, 2023)]].sum(axis=1)
         splits = self.splits + ['train']
@@ -165,9 +179,9 @@ class DataSplitter:
         df.crs = 'EPSG:4326'
         cmap = 'coolwarm'
         for name in splits:
-            fig, ax = plt.subplots(1, 1, figsize=(30, 10))
+            fig, ax = plt.subplots(1, 1, figsize=(30, 12))
             # Plotting
-            df.plot(column='ratio_train', 
+            df.plot(column=f'ratio_{name}', 
                     cmap=cmap, 
                     ax=ax, 
                     legend=False, 
@@ -177,16 +191,20 @@ class DataSplitter:
                         "hatch": "///",
                         "label": "Missing values",
                     })
-
+            overlay_country_boundaries(ax)
             # Create a divider for the existing axes instance
             divider = make_axes_locatable(ax)
-            cax = divider.append_axes("bottom", size="5%", pad=0.1)  # Adjust pad to 
+            cax = divider.append_axes("bottom", size="5%", pad=0.3)  # Adjust pad to 
 
-            # Add colorbar
+            # Add colorbar 
+            # TODO: adjust the colorbar length
+            # Tried size, aspect, fraction, shrink, but none of them worked
             sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=0, vmax=1))
-            cbar = fig.colorbar(sm, cax=cax, orientation='horizontal')
+            cbar = fig.colorbar(sm, cax=cax, orientation='horizontal') 
             cbar.set_label('Percentage', fontsize=15)
             cbar.ax.tick_params(labelsize=15)
+            # Adjust the aspect ratio to change the length of the colorbar
+            # cax.set_aspect(0.005)  # Adjust this value to change the length of the colorbar
             plt.tight_layout()
             plt.savefig(self.save_dir / f'split_ratio_map_{name}.png')
 
@@ -220,8 +238,11 @@ def main(cfg: DictConfig) -> None:
 
     t0 = time.time()
     splitter = DataSplitter(cfg.index_dir, cfg.test_ratio, cfg.val_ratio, cfg.cal_ratio, cfg.random_state, cfg.s2_grid_file, cfg.mgrs_file)
-    # splitter.run_split(cfg.mgrs_file)
-    # splitter.count_for_split_per_zone()
+    print('Run split...')
+    splitter.run_split()
+    print('Count the number of train/val/cal/test samples per zone...')
+    splitter.count_for_split_per_zone()
+    print('Visualize...')
     splitter.visualize_split()
 
     print(f'time taken: {time.time() - t0}')
