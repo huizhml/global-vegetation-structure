@@ -30,7 +30,7 @@ class DataSplitter:
         self.save_dir = self.index_dir.parent / f'split_test{self.test_ratio}_cal{self.cal_ratio}_val{self.val_ratio}_seed{self.random_state}'
         self.save_dir.mkdir(exist_ok=True)
 
-    def train_cal_val_test_split(self):
+    def _train_cal_val_test_split(self):
         s2_grid = gpd.read_file(self.s2_grid_file)
         self.s2_grid = s2_grid.set_index('Name')
         exist = len(list(self.save_dir.glob('*_tiles.csv'))) == 4
@@ -69,7 +69,7 @@ class DataSplitter:
             # print()
 
 
-    def split_zone(self, index_df, partition_info):
+    def _split_zone_by_spatial_query(self, index_df, partition_info):
         partition_idx = partition_info["number"] # the index of the partition in the dataframe
         zone = os.path.basename(self.index_table_fps[partition_idx])[:3]
         index_df = index_df.reset_index(drop=True)
@@ -94,7 +94,7 @@ class DataSplitter:
         if exist:
             print('Splitting has been done.')
             return
-        self.train_cal_val_test_split()
+        self._train_cal_val_test_split()
         self.mgrs_df = gpd.read_parquet(self.mgrs_file, columns=['MGRS_UTM', 'geometry'])
         self.mgrs_df.crs = 'EPSG:4326'
         for name in self.splits + ['train']:
@@ -105,7 +105,7 @@ class DataSplitter:
         index_table_fps = [f'{self.index_dir}/{zone}' for zone in os.listdir(self.index_dir)]
         self.index_table_fps = sorted(index_table_fps, key=natural_sort_key)
         index_df = dgp.read_parquet(self.index_table_fps , gather_spatial_partitions=False, columns=['path', 's2_tile', 'in_partition_idx', 'geometry'])
-        index_df.map_partitions(self.split_zone, meta=index_df._meta).compute()
+        index_df.map_partitions(self._split_zone_by_spatial_query, meta=index_df._meta).compute()
 
     def count_for_split_per_zone(self):
         '''
