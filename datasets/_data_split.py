@@ -33,13 +33,13 @@ class DataSplitter:
     def _train_cal_val_test_split(self):
         s2_grid = gpd.read_file(self.s2_grid_file)
         self.s2_grid = s2_grid.set_index('Name')
-        exist = len(list(self.save_dir.glob('*_tiles.csv'))) == 4
+        exist = len(list(self.save_dir.glob('tiles_*.csv'))) == 4
         if exist:
             print('Splitting has been done.')
             for name in self.splits +['train']:
-                tiles = pd.read_csv(self.save_dir / f'{name}_tiles.csv', header=None, sep=' ')
+                tiles = pd.read_csv(self.save_dir / f'tiles_{name}.csv', header=None, sep=' ')
                 tiles = self.s2_grid.loc[tiles[0]]
-                setattr(self, f'{name}_tiles', tiles)
+                setattr(self, f'tiles_{name}', tiles)
         else:  
             geo_index_df = dd.read_parquet(f'{self.index_dir}/*.parquet')
             unique_tiles = geo_index_df['s2_tile'].unique().compute()
@@ -49,23 +49,23 @@ class DataSplitter:
             n_val = int(len(unique_tiles) * self.val_ratio)
             n_cal = int(len(unique_tiles) * self.cal_ratio)
 
-            test_tiles = unique_tiles.sample(n=n_test, random_state=self.random_state)
-            test_tiles.to_csv(self.save_dir / 'test_tiles.csv', header=None, index=None, sep=' ', mode='w')
-            self.test_tiles = self.s2_grid.loc[test_tiles]
+            tiles_test = unique_tiles.sample(n=n_test, random_state=self.random_state)
+            tiles_test.to_csv(self.save_dir / 'tiles_test.csv', header=None, index=None, sep=' ', mode='w')
+            self.tiles_test = self.s2_grid.loc[tiles_test]
             
-            unique_tiles = unique_tiles.drop(test_tiles.index)
-            val_tiles = unique_tiles.sample(n=n_val, random_state=self.random_state)
-            val_tiles.to_csv(self.save_dir / 'val_tiles.csv', header=None, index=None, sep=' ', mode='w')
-            self.val_tiles = self.s2_grid.loc[val_tiles]
+            unique_tiles = unique_tiles.drop(tiles_test.index)
+            tiles_val = unique_tiles.sample(n=n_val, random_state=self.random_state)
+            tiles_val.to_csv(self.save_dir / 'tiles_val.csv', header=None, index=None, sep=' ', mode='w')
+            self.tiles_val = self.s2_grid.loc[tiles_val]
 
-            unique_tiles = unique_tiles.drop(val_tiles.index)
-            cal_tiles = unique_tiles.sample(n=n_cal, random_state=self.random_state)
-            cal_tiles.to_csv(self.save_dir / 'cal_tiles.csv', header=None, index=None, sep=' ', mode='w')
-            self.cal_tiles = self.s2_grid.loc[cal_tiles]
+            unique_tiles = unique_tiles.drop(tiles_val.index)
+            tiles_cal = unique_tiles.sample(n=n_cal, random_state=self.random_state)
+            tiles_cal.to_csv(self.save_dir / 'tiles_cal.csv', header=None, index=None, sep=' ', mode='w')
+            self.tiles_cal = self.s2_grid.loc[tiles_cal]
 
-            self.train_tiles = unique_tiles.drop(cal_tiles.index)
-            self.train_tiles.to_csv(self.save_dir / 'train_tiles.csv', header=None, index=None, sep=' ', mode='w')
-            # self.train_tiles = self.s2_grid.loc[train_tiles]
+            self.tiles_train = unique_tiles.drop(tiles_cal.index)
+            self.tiles_train.to_csv(self.save_dir / 'tiles_train.csv', header=None, index=None, sep=' ', mode='w')
+            # self.tiles_train = self.s2_grid.loc[tiles_train]
             # print()
 
 
@@ -74,7 +74,7 @@ class DataSplitter:
         zone = os.path.basename(self.index_table_fps[partition_idx])[:3]
         index_df = index_df.reset_index(drop=True)
         for name in self.splits:
-            overlapped_tiles = getattr(self, f'{name}_tiles').sjoin(self.mgrs_df.loc[[zone]], how='left')
+            overlapped_tiles = getattr(self, f'tiles_{name}').sjoin(self.mgrs_df.loc[[zone]], how='left')
             overlapped_tiles = overlapped_tiles.dropna(subset=['index_right'])
             if not overlapped_tiles.empty:
                 overlapped_tiles = overlapped_tiles.drop(columns=['index_right'])
@@ -82,15 +82,15 @@ class DataSplitter:
                 split_index_df = split_index_df.dropna(subset='index_right')
                 split_index_df = split_index_df.rename(columns={'index_right': 'assigned_tile'})
                 split_index_df = split_index_df[~split_index_df.index.duplicated(keep='first')]
-                split_index_df.to_parquet(getattr(self, f'{name}_index_table') / f'{zone}.parquet')
+                split_index_df.to_parquet(getattr(self, f'index_table_{name}') / f'{zone}.parquet')
                 index_df = index_df.drop(split_index_df.index)
         
-        index_df.to_parquet(self.train_index_table / f'{zone}.parquet')
+        index_df.to_parquet(self.index_table_train / f'{zone}.parquet')
         print(f'{zone} done')
     
 
     def run_split(self):
-        exist = len(list(self.save_dir.glob('*_index_table'))) == 4 #NOTE: didn't check files under the directory
+        exist = len(list(self.save_dir.glob('index_table_*'))) >= 4 #NOTE: didn't check files under the directory
         if exist:
             print('Splitting has been done.')
             return
@@ -98,9 +98,9 @@ class DataSplitter:
         self.mgrs_df = gpd.read_parquet(self.mgrs_file, columns=['MGRS_UTM', 'geometry'])
         self.mgrs_df.crs = 'EPSG:4326'
         for name in self.splits + ['train']:
-            directory = self.save_dir / f'{name}_index_table'
+            directory = self.save_dir / f'index_table_{name}'
             directory.mkdir(exist_ok=True)
-            self.__setattr__(f'{name}_index_table', directory)
+            self.__setattr__(f'index_table_{name}', directory)
 
         index_table_fps = [f'{self.index_dir}/{zone}' for zone in os.listdir(self.index_dir)]
         self.index_table_fps = sorted(index_table_fps, key=natural_sort_key)
@@ -112,7 +112,7 @@ class DataSplitter:
         Count the number of samples for each split in each MGRS zone
         Data splitting has been done.
         '''
-        if (self.save_dir / 'mgrs_stats.parquet').exists() and (self.save_dir / 'split_stats.txt').exists():
+        if (self.save_dir / 'stats_mgrs.parquet').exists() and (self.save_dir / 'stats_splits.txt').exists():
             print('Counting has been done.')
             return
         self.mgrs_df = gpd.read_parquet(self.mgrs_file)
@@ -121,7 +121,7 @@ class DataSplitter:
         # for each split, e.g., test, reading index_df for each zone from test_index_table
         ntiles_per_split = {}
         for name in splits:
-            data_dir = self.save_dir / f'{name}_index_table'
+            data_dir = self.save_dir / f'index_table_{name}'
             split_index_df_fps = [f'{data_dir}/{zone}' for zone in os.listdir(data_dir)]
             split_index_df_fps = sorted(split_index_df_fps, key=natural_sort_key)
             split_index_df = dd.read_parquet(split_index_df_fps)
@@ -136,21 +136,25 @@ class DataSplitter:
             self.mgrs_df[f'ratio_{name}'] = self.mgrs_df[f'ratio_{name}'].replace(0, pd.NA)
         # self.mgrs_df = self.mgrs_df.fillna(value={f'count_{name}': 0 for name in splits})
         # sum_split = self.mgrs_df[[f'count_{name}' for name in splits]].sum(axis=1)
-        self.mgrs_df.to_parquet(self.save_dir / 'mgrs_stats.parquet')
+        self.mgrs_df.to_parquet(self.save_dir / 'stats_mgrs.parquet')
 
         # generate a summary
         stats = []
         for name in splits:
             n = self.mgrs_df[f'count_{name}'].sum()
-            tiles = pd.read_csv(self.save_dir / f'{name}_tiles.csv', header=None, sep=' ')
+            tiles = pd.read_csv(self.save_dir / f'tiles_{name}.csv', header=None, sep=' ')
             stats.append([n, len(tiles)])
 
         stats = pd.DataFrame(stats, index=splits, columns=['count', 'n_s2_cells'])
         stats['ratio'] = stats['count'] / stats['count'].sum()
         stats['n_image_tiles'] = pd.Series(ntiles_per_split)
-        stats.to_csv(self.save_dir / 'split_stats.txt', sep=' ')
+        stats.to_csv(self.save_dir / 'stats_splits.txt', sep=' ')
     
-    def visualize_split(self):
+    def visualize_split(self, update=False):
+        exists = len(list(self.save_dir.glob(f'split_ratio_map_*.png'))) == 4
+        if exists and not update:
+            print('Visualizing has been done.')
+            return
         import matplotlib.pyplot as plt
         from mpl_toolkits.axes_grid1 import make_axes_locatable
         # Visualize splitted tiles        
@@ -158,7 +162,7 @@ class DataSplitter:
         s2_grid = s2_grid.set_index('Name')
         splits = self.splits + ['train']
         for name in splits:
-            tiles = pd.read_csv(self.save_dir / f'{name}_tiles.csv', header=None, sep=' ')
+            tiles = pd.read_csv(self.save_dir / f'tiles_{name}.csv', header=None, sep=' ')
             tiles = tiles[0].tolist()
             s2_grid.loc[tiles, 'split'] = name
         s2_grid = s2_grid.dropna(subset=['split'])
@@ -174,7 +178,7 @@ class DataSplitter:
         plt.savefig(self.save_dir / 'splitted_s2_tiles.png')
 
         # Visualize the number of samples in each zone for each split
-        df = gpd.read_parquet(self.save_dir / 'mgrs_stats.parquet')
+        df = gpd.read_parquet(self.save_dir / 'stats_mgrs.parquet')
         df = df[df['total_downloaded']>0]
         df.crs = 'EPSG:4326'
         cmap = 'coolwarm'
@@ -209,6 +213,28 @@ class DataSplitter:
             plt.savefig(self.save_dir / f'split_ratio_map_{name}.png')
 
 
+    def sample_subset(self, frac=0.2):
+        save_dir = self.save_dir / 'index_table_subset'
+        save_dir.mkdir(exist_ok=True)
+        self.train_index_fps = [f'{self.save_dir}/index_table_train/{zone}' for zone in os.listdir(f'{self.save_dir}/index_table_train')]
+        self.train_index_fps = sorted(self.train_index_fps, key=natural_sort_key)
+        train_index_table = dgp.read_parquet(self.train_index_fps, gather_spatial_partitions=False)
+        subset_index_table = train_index_table.sample(frac=frac, random_state=self.random_state)
+   
+        def save_zone(x, partition_info=None):
+            zone = os.path.basename(self.train_index_fps[partition_info['number']])[:3]
+            x.to_parquet(self.save_dir / 'index_table_subset' / f'{zone}.parquet')
+            return len(x), x['s2_tile'].nunique()
+        
+        stats = subset_index_table.map_partitions(save_zone, meta=('i8', 'i8'))
+        stats = stats.compute()
+        size = sum([s[0] for s in stats])
+        n_tiles = sum([s[1] for s in stats])
+        with open(self.save_dir / 'stats_subset.txt', 'w') as f:
+            f.write(f'Number of samples: {size}\n')
+            f.write(f'Number of tiles: {n_tiles}\n')
+
+
 def overlay_country_boundaries(ax):
     world = gpd.read_file(gpd.datasets.get_path('naturalearth_lowres'))
     countries_flt = world[world.geometry.apply(lambda x: x.bounds[1] > -60)]
@@ -223,6 +249,7 @@ class MyConfig:
     val_ratio: float = 0.1
     cal_ratio: float = 0.1
     random_state: int = 42
+    subset_frac: float = 0.2 # the fraction of the training data to sample
 
 cs = ConfigStore.instance()
 cs.store(name="my_config", node=MyConfig)
@@ -244,6 +271,8 @@ def main(cfg: DictConfig) -> None:
     splitter.count_for_split_per_zone()
     print('Visualize...')
     splitter.visualize_split()
+    print('Sample subset...')
+    splitter.sample_subset(frac=cfg.subset_frac)
 
     print(f'time taken: {time.time() - t0}')
     client.close()
