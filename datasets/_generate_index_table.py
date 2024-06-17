@@ -6,6 +6,7 @@ import h5py
 import dask
 import dask.bag as db
 import pandas as pd
+import geopandas as gpd
 from pathlib import Path
 from dask.utils import natural_sort_key
 from datatree.io import _iter_nc_groups
@@ -68,14 +69,16 @@ class IndexTableGenerater:
                 for group in _iter_nc_groups(ncds):
                     if len(group.split('/')) == 3:
                         s2_ids = data[f'{group}/id'][:].astype('U')
-                        index_df.append([f'/{zone}{group}', s2_ids])
-        index_df = pd.DataFrame(index_df, columns=['path','s2_tile'])
-        index_df = index_df.explode('s2_tile')
+                        latlon = data[f'{group}/latlon'][:]
+                        index_df.append([f'/{zone}{group}', s2_ids,latlon[:,0],latlon[:,1]])
+        index_df = pd.DataFrame(index_df, columns=['path','s2_tile', 'lat', 'lon'])
+        index_df = index_df.explode(['s2_tile', 'lat', 'lon'])
         index_df['s2_tile'] = index_df['s2_tile'].str[33:38]
         index_df['in_partition_idx'] = index_df.groupby('path').cumcount()
+        index_gdf = gpd.GeoDataFrame(index_df, geometry=gpd.points_from_xy(index_df.lon, index_df.lat), crs='EPSG:4326')
 
         if save:
-            index_df.to_parquet(index_table_file)
+            index_gdf.to_parquet(index_table_file)
             print(f'index table saved to: ', index_table_file)
 
 
@@ -92,7 +95,7 @@ def main(cfg):
     print(client)
 
     t0 = time.time()
-    bestS2Finder = IndexTableGenerater()()
+    bestS2Finder = IndexTableGenerater(index_table_dir='~/data/geo_index_table')()
     
     logger.info(f'time taken: {time.time() - t0}')
     client.close()
