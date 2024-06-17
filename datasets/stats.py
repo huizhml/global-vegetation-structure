@@ -2,7 +2,8 @@ from pathlib import Path
 import hydra
 import h5py
 import json
-from dataclasses import dataclass
+from typing import Iterable
+from dataclasses import dataclass, field
 from hydra.core.config_store import ConfigStore
 from omegaconf import DictConfig
 import numpy as np
@@ -215,9 +216,9 @@ class Stats:
         df.to_parquet(f'{save_dir}/{zone}.parquet')
         return
     
-    def plot_histgram(self):
-        for split in ['test', 'cal', 'val', 'train']:
-            data = self.get_hist_counts(self.save_dir /f'hist_data_{split}.json', self.save_dir /f'{split}_index_table')
+    def plot_histgram(self, splits: Iterable=None):
+        for split in splits:
+            data = self.get_hist_counts(self.save_dir /f'hist_data_{split}.json', self.save_dir /f'index_table_{split}')
             for k, m in data.items():
                 name = HIST_PARAMS[k]['name']
                 bins = m['bins']
@@ -290,6 +291,7 @@ class Stats:
         with h5py.File(self.h5_dir/f'{zone}.h5',) as data:
             for name, group in index_df.groupby('path'):
                 idx = group['in_partition_idx'].to_list()
+                idx = sorted(idx)
                 for m in metrics:
                     slic = hist_params[m.name]['slices']
                     m.update(data[f'{name[4:]}/{m.name}'][(idx, *slic)])   
@@ -309,6 +311,7 @@ class MyConfig:
     # index_dir: str = '~/scratch/data/split_test0.1_cal0.1_val0.1_seed42/test_index_table'#
     h5_dir: str = '~/data/GEDI'
     save_dir: str = '~/scratch/data/split_test0.1_cal0.1_val0.1_seed42'
+    splits: list = field(default_factory=lambda: ['test', 'cal', 'val', 'train'])
 
 cs = ConfigStore.instance()
 cs.store(name="my_config", node=MyConfig)
@@ -328,8 +331,8 @@ def main(cfg: DictConfig) -> None:
     print(client)
 
     t0 = time.time()
-    stats = Stats(**cfg)
-    stats.plot_histgram()
+    stats = Stats(cfg.h5_dir, cfg.save_dir)
+    stats.plot_histgram(cfg.splits)
 
     print(f'time taken: {time.time() - t0}')
     client.close()
