@@ -2,6 +2,9 @@ from pathlib import Path
 import hydra
 import h5py
 import json
+from dataclasses import dataclass
+from hydra.core.config_store import ConfigStore
+from omegaconf import DictConfig
 import numpy as np
 import pandas as pd
 import geopandas as gpd
@@ -14,6 +17,7 @@ import dask
 import seaborn as sns
 import dask.bag as db
 import dask.array as da
+from dask.utils import natural_sort_key
 import xarray as xr
 import dask.dataframe as dd
 from datatree.io import _iter_nc_groups
@@ -25,11 +29,11 @@ os.environ['BOKEH_ALLOW_WS_ORIGIN'] = 'www.lumi.csc.fi'
 
 HIST_PARAMS = {
     # keys from the h5 data
-    'rhs':             {'bins': np.arange(0, 100, 2).tolist(), 'name': 'RH98', 'slices': (slice(None), 98)},
-    'delta_day':       {'bins': np.arange(0, 375, 10).tolist(), 'name': 'Delta Days', 'slices': (slice(None))},
-    'defective_cover': {'bins': np.arange(0, 0.9, 0.05).tolist(), 'name': 'Defective Cover', 'slices': (slice(None))},
-    'image':           {'bins': [0]+list(ESA_WC.values())+[110], 'name': 'ESA World Cover', 'slices': (slice(None), 13, 7, 7)},
-    'slope':           {'bins': np.arange(0, 92, 2).tolist(), 'name': 'Slope [COPERNICUS GLO-30 & SRTM]', 'slices': (slice(None), 7, 7)}
+    'rhs':             {'bins': np.arange(0, 100, 2).tolist(), 'name': 'RH98', 'slices': (98,)},
+    'delta_day':       {'bins': np.arange(0, 375, 10).tolist(), 'name': 'Delta Days', 'slices': ()},
+    'defective_cover': {'bins': np.arange(0, 0.9, 0.05).tolist(), 'name': 'Defective Cover', 'slices': ()},
+    'image':           {'bins': [0]+list(ESA_WC.values())+[110], 'name': 'ESA World Cover', 'slices': (13, 7, 7)},
+    'slope':           {'bins': np.arange(0, 92, 2).tolist(), 'name': 'Slope [COPERNICUS GLO-30 & SRTM]', 'slices': (7, 7)}
 }
 
 class AverageMeter:
@@ -49,8 +53,10 @@ class AverageMeter:
 
 
 class Stats:
-    def __init__(self, h5_dir:str='~/data/GEDI', mgrs_file:str='~/data/mgrs_zones.json'):
+    def __init__(self, h5_dir:str='~/data/GEDI', save_dir:str='~/scratch/data/split_test0.1_cal0.1_val0.1_seed42'):
         self.h5_dir = Path(h5_dir).expanduser()
+        # self.index_dir = Path(index_dir).expanduser()
+        self.save_dir = Path(save_dir).expanduser()
 
     def plot_sample_map(self, mgrs_file:str='~/scratch/sample_stats.parquet'):
         if os.path.exists(mgrs_file):
@@ -210,46 +216,47 @@ class Stats:
         return
     
     def plot_histgram(self):
-        data = self.get_hist_counts(self.h5_dir.parent /'hist_data.json')
-        plt.figure()
-        for k, m in data.items():
-            name = HIST_PARAMS[k]['name']
-            bins = m['bins']
-            counts = m['counts']
-            plt.figure()
-            if name == 'ESA World Cover':
-                x = ['no-data']+list(ESA_WC.keys())
-                width = 0.8
-            else:
-                x = bins[:-1]
-                width = 0.8*(bins[1] - bins[0])
-            plt.bar(x, counts, width=width, edgecolor='black', log=True)
-            plt.xlabel(name)
-            plt.ylabel('Number of samples')
-            if name == 'ESA World Cover':
-                plt.xticks(rotation=45, ha='right')
-                plt.tick_params(axis='x', labelsize=8)
-            plt.tight_layout()
-            plt.savefig(f'outputs/histogram_{name}.png')
+        for split in ['test', 'cal', 'val', 'train']:
+            data = self.get_hist_counts(self.save_dir /f'hist_data_{split}.json', self.save_dir /f'{split}_index_table')
+            for k, m in data.items():
+                name = HIST_PARAMS[k]['name']
+                bins = m['bins']
+                counts = m['counts']
+                plt.figure()
+                if name == 'ESA World Cover':
+                    x = ['no-data']+list(ESA_WC.keys())
+                    width = 0.8
+                else:
+                    x = bins[:-1]
+                    width = 0.8*(bins[1] - bins[0])
+                plt.bar(x, counts, width=width, edgecolor='black', log=True)
+                plt.xlabel(name)
+                plt.ylabel('Number of samples')
+                if name == 'ESA World Cover':
+                    plt.xticks(rotation=45, ha='right')
+                    plt.tick_params(axis='x', labelsize=8)
+                plt.tight_layout()
+                plt.savefig(self.save_dir/ f'histogram_{name}_{split}.png')
 
-    def get_hist_counts(self, file:Path):
+    def get_hist_counts(self, file:Path, index_dir:Path):
         if file.exists():
             with open(file, 'r') as f:
                 data = json.load(f)
             return data
         
-        import time
-        from dask.distributed import Client, LocalCluster
-        cluster = LocalCluster(n_workers=32)
-        client = Client(cluster)
-        print(client)
 
-        t0 = time.time()
-        h5_files = self.h5_dir.glob('*.h5')
-        zones = [f.stem for f in h5_files]
-        data = db.from_sequence(zones).map(self.agg_zone, HIST_PARAMS)
-        data = data.compute()
-        print(f'time taken: {time.time() - t0}')
+        index_df_files = [str(index_dir/f) for f in os.listdir(index_dir)]
+        self.index_df_files = sorted(index_df_files, key=natural_sort_key)
+        index_df = dd.read_parquet(self.index_df_files, columns=['path', 'in_partition_idx'])
+        meta = ('rhs', 'object')
+        data = index_df.map_partitions(self.agg_zone, HIST_PARAMS, meta=meta).compute()
+        
+        # Following was used for aggregating data for the whole dataset, updated one is able to handle subsets
+        # h5_files = self.h5_dir.glob('*.h5')
+        # zones = [f.stem for f in h5_files]
+        # data = db.from_sequence(zones).map(self.agg_zone, HIST_PARAMS)
+        # data = data.compute()
+
         # init result dict
         res = {}
         for name in HIST_PARAMS.keys():
@@ -269,28 +276,65 @@ class Stats:
             f.write(json_data)
         return res
 
-    def agg_zone(self, zone, hist_params):
+    def agg_zone(self, index_df, hist_params, partition_info:dict=None):
         """
         Walk through all groups in given zone.h5, 
         and aggregate data/cols specified by hist_params for histogram plot.
         """
+        part_idx = partition_info['number']
+        zone = os.path.basename(self.index_df_files[part_idx]).split('.')[0]
         metrics = []
         for name, params in hist_params.items():
             metric = AverageMeter(bins=params['bins'], name=name)
             metrics.append(metric)
-        with h5Dataset(self.h5_dir/f'{zone}.h5', mode='r') as ncds:
-            with h5py.File(self.h5_dir/f'{zone}.h5',) as data:
-                for group in _iter_nc_groups(ncds):
-                    if len(group.split('/')) == 3:
-                        for m in metrics:
-                            slic = hist_params[m.name]['slices']
-                            m.update(data[f'{group}/{m.name}'][slic])                                                
+        with h5py.File(self.h5_dir/f'{zone}.h5',) as data:
+            for name, group in index_df.groupby('path'):
+                idx = group['in_partition_idx'].to_list()
+                for m in metrics:
+                    slic = hist_params[m.name]['slices']
+                    m.update(data[f'{name[4:]}/{m.name}'][(idx, *slic)])   
+        
+        # Following was used for aggregating data for the whole dataset, updated one is able to handle subsets
+        # with h5Dataset(self.h5_dir/f'{zone}.h5', mode='r') as ncds:
+        #     with h5py.File(self.h5_dir/f'{zone}.h5',) as data:
+        #         for group in _iter_nc_groups(ncds):
+        #             if len(group.split('/')) == 3:
+        #                 for m in metrics:
+        #                     slic = hist_params[m.name]['slices']
+        #                     m.update(data[f'{group}/{m.name}'][slic])                                                
         return metrics
 
+@dataclass
+class MyConfig:
+    # index_dir: str = '~/scratch/data/split_test0.1_cal0.1_val0.1_seed42/test_index_table'#
+    h5_dir: str = '~/data/GEDI'
+    save_dir: str = '~/scratch/data/split_test0.1_cal0.1_val0.1_seed42'
+
+cs = ConfigStore.instance()
+cs.store(name="my_config", node=MyConfig)
+
+@hydra.main(config_name="my_config")
+def main(cfg: DictConfig) -> None:
+    # # str path to Path
+    # for value in cfg.values():
+    #     if isinstance(value, str) and (value.startswith('~/') or value.startswith('/')):
+    #         value = Path(value).expanduser()
+
+    from dask.distributed import Client, LocalCluster
+    import time
+    cluster = LocalCluster()
+    client = Client(cluster)
+
+    print(client)
+
+    t0 = time.time()
+    stats = Stats(**cfg)
+    stats.plot_histgram()
+
+    print(f'time taken: {time.time() - t0}')
+    client.close()
 
 
 if __name__ == '__main__':
-    stats = Stats()
-    # stats.boxplot(seed=3)
-    stats.plot_sample_map()
+    main()
     
