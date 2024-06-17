@@ -218,7 +218,7 @@ class Stats:
     
     def plot_histgram(self, splits: Iterable=None):
         for split in splits:
-            data = self.get_hist_counts(self.save_dir /f'hist_data_{split}.json', self.save_dir /f'index_table_{split}')
+            data = self._get_hist_counts(self.save_dir /f'hist_data_{split}.json', self.save_dir /f'index_table_{split}')
             for k, m in data.items():
                 name = HIST_PARAMS[k]['name']
                 bins = m['bins']
@@ -239,7 +239,7 @@ class Stats:
                 plt.tight_layout()
                 plt.savefig(self.save_dir/ f'histogram_{name}_{split}.png')
 
-    def get_hist_counts(self, file:Path, index_dir:Path):
+    def _get_hist_counts(self, file:Path, index_dir:Path):
         if file.exists():
             with open(file, 'r') as f:
                 data = json.load(f)
@@ -250,12 +250,12 @@ class Stats:
         self.index_df_files = sorted(index_df_files, key=natural_sort_key)
         index_df = dd.read_parquet(self.index_df_files, columns=['path', 'in_partition_idx'])
         meta = ('rhs', 'object')
-        data = index_df.map_partitions(self.agg_zone, HIST_PARAMS, meta=meta).compute()
+        data = index_df.map_partitions(self._agg_zone, HIST_PARAMS, meta=meta).compute()
         
         # Following was used for aggregating data for the whole dataset, updated one is able to handle subsets
         # h5_files = self.h5_dir.glob('*.h5')
         # zones = [f.stem for f in h5_files]
-        # data = db.from_sequence(zones).map(self.agg_zone, HIST_PARAMS)
+        # data = db.from_sequence(zones).map(self._agg_zone, HIST_PARAMS)
         # data = data.compute()
 
         # init result dict
@@ -277,7 +277,7 @@ class Stats:
             f.write(json_data)
         return res
 
-    def agg_zone(self, index_df, hist_params, partition_info:dict=None):
+    def _agg_zone(self, index_df, hist_params, partition_info:dict=None):
         """
         Walk through all groups in given zone.h5, 
         and aggregate data/cols specified by hist_params for histogram plot.
@@ -312,6 +312,7 @@ class MyConfig:
     h5_dir: str = '~/data/GEDI'
     save_dir: str = '~/scratch/data/split_test0.1_cal0.1_val0.1_seed42'
     splits: list = field(default_factory=lambda: ['test', 'cal', 'val', 'train'])
+    task: str = 'histogram'
 
 cs = ConfigStore.instance()
 cs.store(name="my_config", node=MyConfig)
@@ -332,7 +333,10 @@ def main(cfg: DictConfig) -> None:
 
     t0 = time.time()
     stats = Stats(cfg.h5_dir, cfg.save_dir)
-    stats.plot_histgram(cfg.splits)
+    if cfg.task == 'histogram':
+        stats.plot_histgram(cfg.splits)
+    elif cfg.task == 'boxplot':
+        stats.boxplot()
 
     print(f'time taken: {time.time() - t0}')
     client.close()
