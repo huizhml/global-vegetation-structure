@@ -14,7 +14,7 @@ import matplotlib.cbook as cbook
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from matplotlib.ticker import ScalarFormatter, MaxNLocator
 import matplotlib.colors as colors
-import dask
+from torch.utils.data import DataLoader
 import seaborn as sns
 import dask.bag as db
 import dask.array as da
@@ -154,27 +154,37 @@ class Stats:
         mgrs_df.to_parquet('~/scratch/sample_stats.parquet')
         return mgrs_df
         
+    def get_rh(self, group, zone):
+        group.sort_values('in_partition_idx', inplace=True)
+        idx = group['in_partition_idx'].to_list()
+        with h5py.File(self.h5_dir/f'{zone}.h5') as h5_file:
+            data = h5_file[f'{group.name[4:]}/rhs'][idx]
+        data = pd.DataFrame(data, columns=[f'rh_{i}' for i in range(101)], index=group.index)
+        group = pd.concat([group, data], axis=1)
+        return group
+    
+    def _agg_rhs_per_zone(self, index_df, partition_info:dict=None):
+        part_idx = partition_info['number']
+        zone = os.path.basename(self.index_df_files[part_idx]).split('.')[0]
+        # h5_file = h5py.File(self.h5_dir/f'{zone}.h5')
+        ddf = dd.from_pandas(index_df, npartitions=8)
 
-    def read_h5(self, index_df):
+        
+        meta = {'path': str, 'in_partition_idx': int, **{f'rh_{i}': float for i in range(101)}}
+        ddf = ddf.groupby('path').apply(self.get_rh, zone, meta=meta).compute()
+        
+        print('finish zone: ', zone)
+        # print(ddf)
+        ddf = ddf.reset_index(1).set_index('level_1')
+        ddf = ddf.drop(columns=['path', 'in_partition_idx'])
+        index_df = pd.concat([index_df, ddf], axis=1)
 
-        if not hasattr(self, 'h5_file'):
-            self.h5_file = h5py.File('~/flash/data/GVS.h5', 'r')
-        try:
-            index_df.name in self.h5_file
-        except:
-            print(index_df)
-        # #  TMP
-        # if not index_df.name in self.h5_file:
-        #     return
-
-        idx = index_df['in_partition_idx'].to_list()
-        idx = sorted(idx)
-        rhs = self.h5_file[f'{index_df.name}/rhs'][idx]
-        return rhs.tolist()
+        # h5_file.close()
+        return index_df
 
 
 
-    def boxplot(self, subset_size:int=1e4, repeat:int=10, seed:int=0):
+    def boxplot(self, splits: Iterable=None, h5_fp=None):
         """
         Using bootstrap method to plot the boxplot of the relative heights.
         Extracts the relative heights from the h5 files and saves them as parquet files.
@@ -183,26 +193,32 @@ class Stats:
         """
         import time
         from dask.distributed import Client, LocalCluster
-        cluster = LocalCluster(n_workers=8)
+        cluster = LocalCluster()
         client = Client(cluster)
         print(client)
+        for split in splits:
+            print(split)          
+            if exists := os.path.exists(f'{str(self.save_dir)}/rhs_{split}.csv'):
+                print('loading RHs from csv')
+                rhs = pd.read_csv(f'{str(self.save_dir)}/rhs_{split}.csv')
+                plt.figure(figsize=(24,6))
+                ax = sns.violinplot(data=rhs)
+            else:
+                data_dir = f'{str(self.save_dir)}/index_table_{split}'
+                index_df_files = [f"{data_dir}/{f}" for f in os.listdir(data_dir)]
+                self.index_df_files = sorted(index_df_files, key=natural_sort_key) #TODO: for testing
+                index_df = dd.read_parquet(self.index_df_files, columns=['path', 'in_partition_idx'])
 
-        index_df = dd.read_parquet(f"{str(self.h5_dir.parent)}/index_table/*.parquet")
-        index_df = index_df.compute()
-        index_df = index_df.sample(frac=0.01, random_state=seed)
-        # index_df = index_df.groupby('path')
-        index_df = dd.from_pandas(index_df, npartitions=32)
-        rhs = index_df.groupby('path').apply(self.read_h5,  meta=('rh', object)).compute()
-        # rhs = index_df.map_partitions(self.read_h5, meta=('rh', 'object')).compute()
-        rhs = rhs.dropna()
-        rhs = [json.loads(rh) for rh in rhs]
-        rhs = np.concatenate(rhs, axis=0)
-        rhs_df = pd.DataFrame(rhs, columns=[f'rh{i}' for i in range(101)])
-        rhs_df.to_csv(f'~/scratch/data/rhs_sample0.01_{seed}.csv')
-        plt.figure(figsize=(24,6))
-        ax = sns.boxenplot(data=rhs_df)
-        plt.savefig(f'outputs/boxenplot_sample0.01_{seed}.png')
-              
+                meta = {'path': str, 'in_partition_idx': int, **{f'rh_{i}': float for i in range(101)}}
+                rhs = index_df.map_partitions(self._agg_rhs_per_zone, meta=meta).compute()
+                rhs = rhs.dropna()
+                rhs = rhs.drop(columns=['path', 'in_partition_idx'])
+                fig, ax = plt.subplots(figsize=(60,10))
+                sns.violinplot(data=rhs, ax=ax)
+
+                violin_data = get_violin_stats(ax)
+                violin_data.to_csv(f'{str(self.save_dir)}/violin_data_{split}.csv', index=False)
+            plt.savefig(f'{self.save_dir}/RHs_violin_{split}.png')  
 
     def agg_rhs(self, zone, save_dir:Path):
         rhs = []
@@ -305,6 +321,29 @@ class Stats:
         #                     slic = hist_params[m.name]['slices']
         #                     m.update(data[f'{group}/{m.name}'][slic])                                                
         return metrics
+    
+def get_violin_stats(ax):
+    # Extract data from the violin plot
+    violin_data = []
+    for i, artist in enumerate(ax.findobj(lambda x: hasattr(x, 'get_paths'))):
+        for path in artist.get_paths():
+            vertices = path.vertices
+            for vert in vertices:
+                violin_data.append([i, vert[0], vert[1]])
+
+    # Convert the data to a DataFrame
+    df = pd.DataFrame(violin_data, columns=['violin', 'x', 'y'])
+    return df
+
+def plot_from_violin_stats(df):
+        # Create a new figure
+    fig, ax = plt.subplots()
+
+    # Plot each violin body using the saved data
+    for i in df['violin'].unique():
+        subset = df[df['violin'] == i]
+        ax.fill(subset['x'], subset['y'], alpha=0.3, label=f'Violin {i+1}')
+    return ax
 
 @dataclass
 class MyConfig:
@@ -324,22 +363,23 @@ def main(cfg: DictConfig) -> None:
     #     if isinstance(value, str) and (value.startswith('~/') or value.startswith('/')):
     #         value = Path(value).expanduser()
 
-    from dask.distributed import Client, LocalCluster
+    # from dask.distributed import Client, LocalCluster
     import time
-    cluster = LocalCluster()
-    client = Client(cluster)
+    # cluster = LocalCluster()
+    # client = Client(cluster)
 
-    print(client)
+    # print(client)
 
     t0 = time.time()
     stats = Stats(cfg.h5_dir, cfg.save_dir)
     if cfg.task == 'histogram':
         stats.plot_histgram(cfg.splits)
     elif cfg.task == 'boxplot':
-        stats.boxplot()
+        h5_fp = Path('~/flash/data/GVS.h5').expanduser()
+        stats.boxplot(cfg.splits, h5_fp=h5_fp)
 
     print(f'time taken: {time.time() - t0}')
-    client.close()
+    # client.close()
 
 
 if __name__ == '__main__':
