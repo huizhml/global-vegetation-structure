@@ -6,6 +6,8 @@ from torchvision.transforms import ToTensor
 import pandas as pd
 import numpy as np
 import h5py
+import os
+import dask.dataframe as dd
 
 import warnings
 from tables import DataTypeWarning
@@ -27,7 +29,10 @@ class S2Dataset(Dataset):
         self.transform = transform
         # self.h5_file = h5py.File(h5_file, mode='r')
         self.h5_file_path = h5_file
-        self.index_table = pd.read_csv(index_table)
+        if os.path.isdir(index_table):
+            self.index_table = dd.read_parquet(index_table, columns=['path', 'in_partition_idx']).compute()
+        else:
+            self.index_table = pd.read_csv(index_table)
 
 
     def __len__(self):
@@ -37,7 +42,7 @@ class S2Dataset(Dataset):
         if not hasattr(self, 'h5_file'):
             self.h5_file = h5py.File(self.h5_file_path, mode='r')
 
-        row = self.index_table.loc[idx]
+        row = self.index_table.iloc[idx]
         image = self.h5_file[f'{row.path}/image'][row.in_partition_idx]
         image = image.astype(np.int16)
         wc = image[13]

@@ -219,7 +219,7 @@ class DataSplitter:
         self.train_index_fps = [f'{self.save_dir}/index_table_train/{zone}' for zone in os.listdir(f'{self.save_dir}/index_table_train')]
         self.train_index_fps = sorted(self.train_index_fps, key=natural_sort_key)
         train_index_table = dgp.read_parquet(self.train_index_fps, gather_spatial_partitions=False)
-        subset_index_table = train_index_table.sample(frac=frac, random_state=self.random_state)
+        subset_index_table = train_index_table.sample(frac=frac, random_state=self.random_state).dropna()
    
         def save_zone(x, partition_info=None):
             zone = os.path.basename(self.train_index_fps[partition_info['number']])[:3]
