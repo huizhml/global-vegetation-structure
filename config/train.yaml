@@ -3,25 +3,25 @@ optimizer:
   class_path: torch.optim.AdamW
   init_args:
     lr: 0.0001
-lr_scheduler:
-  class_path: torch.optim.lr_scheduler.StepLR
-  init_args:
-    gamma: 0.2
-    step_size: 1000
+# lr_scheduler:
+#   class_path: torch.optim.lr_scheduler.StepLR
+#   init_args:
+#     gamma: 0.1
+#     step_size: 10
 
 data:
   class_path: datasets._pl_datamodule.PLDataModel
-  init_args:
-    cache_dir: cache
-    data_dir:  /tmp/ # ~/data # 
-    h5_dir: /tmp/GEDI
-    split_files_dir: ~/data/GEDI/split_files
-    index_table_file: ~/data/GEDI/index_table.parquet
-    merged_h5_file: merged_h5_test.h5
-    test_data_name: cal
-    use_zones: TROPIC_SIX # TEST_ZONES
-    batch_size: 512
-    num_workers: 16
+  init_args: 
+    h5_dir: ~/scratch/data/GEDI # raw h5 files
+    index_dir: ~/scratch/data/geo_index_table # only needed when creating splits
+    merged_h5_file: ~/flash/data/GVS.h5
+    use_subset: False
+    test_ratio: 0.1
+    cal_ratio: 0.1
+    val_ratio: 0.1
+    random_state: 42
+    batch_size: 128
+    num_workers: 8
     pin_memory: True
     shuffle: True
     drop_last: False
@@ -34,24 +34,22 @@ model:
     patch_size: 15
     norm_layer_up: torch.nn.BatchNorm2d
     up_block: models.modules.standard.DoubleConvSkip
-    last_activation:
-      class_path: torch.nn.Softplus
-      init_args:
-        beta: 1
-        threshold: 20
+    last_opt: torch.nn.Identity
     activation_layer: 
       class_path: torch.nn.ELU
       init_args:
         inplace: True
         alpha: 0.54
-    backbone_model:
+    encoder:
       class_path: models.modules.standard.StandardNet
       init_args:
-        depths: [64, 128]
+        depths: [64,128,256,512]
         initial_stride: 1
         norm_layer: torch.nn.BatchNorm2d
+        block: models.modules.standard.DoubleConvSkip
+        kernal_sizes: [3, 1]
     preprocess: models.preprocess.Standardize
-    loss: torch.nn.MSELoss
+    loss: models.losses.mse.MSELoss
     upsampling: nearest
     blur_final: False
     blur: False
@@ -60,22 +58,30 @@ model:
 
 trainer:
   accelerator: gpu
+  # strategy: auto
+  devices: auto
   default_root_dir: /tmp/wandb
-  devices: 1
+  val_check_interval: 100000
   max_epochs: 100
   num_sanity_val_steps: 0
-  # fast_dev_run: 2000
+  # fast_dev_run: 100
   # profiler: simple
-  enable_checkpointing: False
-  # callbacks:
-  #   - class_path: lightning.pytorch.callbacks.ModelCheckpoint
-  #     init_args:
-  #       monitor: 'f1.val'
-  #       filename: 'BestModel-{epoch:02d}-{f1.val:.2f}'
-  #       save_top_k: 1
-  #       mode: max
-  #       every_n_epochs: 10 #check every n epochs
-  #       save_last: True # save the last epoch? or just save the last best model?
+  # enable_checkpointing: False
+  callbacks:
+    - class_path: lightning.pytorch.callbacks.LearningRateMonitor
+      init_args:
+        logging_interval: step
+    - class_path: callbacks.boxplot.BoxplotLogger
+      init_args:
+        log_every: 10
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        monitor: 'val_loss'
+        filename: 'BestModel-{epoch:02d}-{val_loss:.2f}'
+        save_top_k: 1
+        mode: min
+        every_n_epochs: 10 #check every n epochs
+        save_last: True # save the last epoch? or just save the last best model?
 
   logger:
       class_path: callbacks.wandb_logger.WandbLogger
