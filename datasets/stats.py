@@ -154,24 +154,24 @@ class Stats:
         mgrs_df.to_parquet('~/scratch/sample_stats.parquet')
         return mgrs_df
         
-    def get_rh(self, group, zone):
+    def get_rh(self, group, zone, rh_id):
         group.sort_values('in_partition_idx', inplace=True)
         idx = group['in_partition_idx'].to_list()
         with h5py.File(self.h5_dir/f'{zone}.h5') as h5_file:
-            data = h5_file[f'{group.name[4:]}/rhs'][idx]
-        data = pd.DataFrame(data, columns=[f'rh_{i}' for i in range(101)], index=group.index)
+            data = h5_file[f'{group.name[4:]}/rhs'][idx, rh_id]
+        data = pd.DataFrame(data, columns=[f'rh_{rh_id}'], index=group.index)
         group = pd.concat([group, data], axis=1)
         return group
     
-    def _agg_rhs_per_zone(self, index_df, partition_info:dict=None):
+    def _agg_rhs_per_zone(self, index_df, rh_id, partition_info:dict=None):
         part_idx = partition_info['number']
         zone = os.path.basename(self.index_df_files[part_idx]).split('.')[0]
         # h5_file = h5py.File(self.h5_dir/f'{zone}.h5')
         ddf = dd.from_pandas(index_df, npartitions=8)
 
         
-        meta = {'path': str, 'in_partition_idx': int, **{f'rh_{i}': float for i in range(101)}}
-        ddf = ddf.groupby('path').apply(self.get_rh, zone, meta=meta).compute()
+        meta = {'path': str, 'in_partition_idx': int, f'rh_{rh_id}': float}
+        ddf = ddf.groupby('path').apply(self.get_rh, zone, rh_id, meta=meta).compute()
         
         print('finish zone: ', zone)
         # print(ddf)
@@ -209,16 +209,17 @@ class Stats:
                 self.index_df_files = sorted(index_df_files, key=natural_sort_key) #TODO: for testing
                 index_df = dd.read_parquet(self.index_df_files, columns=['path', 'in_partition_idx'])
 
-                meta = {'path': str, 'in_partition_idx': int, **{f'rh_{i}': float for i in range(101)}}
-                rhs = index_df.map_partitions(self._agg_rhs_per_zone, meta=meta).compute()
-                rhs = rhs.dropna()
-                rhs = rhs.drop(columns=['path', 'in_partition_idx'])
-                fig, ax = plt.subplots(figsize=(60,10))
-                sns.violinplot(data=rhs, ax=ax)
+                for i in range(101):
+                    meta = {'path': str, 'in_partition_idx': int, f'rh_{i}': float}
+                    rhs = index_df.map_partitions(self._agg_rhs_per_zone, rh_id=i, meta=meta).compute()
+                    rhs = rhs.dropna()
+                    rhs = rhs.drop(columns=['path', 'in_partition_idx'])
+                    fig, ax = plt.subplots()
+                    sns.violinplot(data=rhs, ax=ax)
 
-                violin_data = get_violin_stats(ax)
-                violin_data.to_csv(f'{str(self.save_dir)}/violin_data_{split}.csv', index=False)
-            plt.savefig(f'{self.save_dir}/RHs_violin_{split}.png')  
+                    violin_data = get_violin_stats(ax)
+                    violin_data.to_csv(f'{str(self.save_dir)}/violin_data_{split}_rh{i}.csv', index=False)
+                    plt.savefig(f'{self.save_dir}/RHs_violin_{split}_rh{i}.png')  
 
     def agg_rhs(self, zone, save_dir:Path):
         rhs = []
