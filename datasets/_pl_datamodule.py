@@ -6,12 +6,21 @@ import pandas as pd
 import torch
 import lightning as L
 import h5py
-from datatree.io import _iter_nc_groups
-from h5netcdf.legacyapi import Dataset as h5Dataset
+import dask.dataframe as dd
+
 
 from datasets.s2 import S2Dataset
 
 logger = logging.getLogger(__name__)
+
+def read_index_table(index_table_fp: Path):
+    if os.path.isdir(index_table_fp):
+        files = list(Path(index_table_fp).glob('*.parquet'))
+        index_table = dd.read_parquet(files, columns=['path', 'in_partition_idx']).compute()
+    else:
+        index_table = pd.read_parquet(index_table_fp)
+    index_table = index_table.reset_index(drop=True)
+    return index_table
 
 class PLDataModel(L.LightningDataModule):
     
@@ -52,6 +61,21 @@ class PLDataModel(L.LightningDataModule):
         self.shuffle = shuffle
         self.drop_last = drop_last
 
+    def setup(self, stage: str):
+        # Assign train/val datasets for use in dataloaders
+        if stage == "fit":
+            name = 'subset' if self.use_subset else 'train'
+            index_table_train = read_index_table(self.split_dir / f'index_table_{name}') #index_table_{name} geo_index_table
+            
+            self.train_dataset = S2Dataset(self.merged_h5_file, index_table=index_table_train)
+            
+            index_table_val = read_index_table(self.split_dir / 'index_table_val')
+            self.val_dataset = S2Dataset(self.merged_h5_file, index_table=index_table_val)
+
+        # Assign test dataset for use in dataloader(s)
+        if stage == "test":
+            index_table_test = read_index_table(self.split_dir / 'index_table_test')
+            self.test_dataset = S2Dataset(self.merged_h5_file, index_table=index_table_test)
 
     def _gen_index_table(self, index_dir):
         """
@@ -105,7 +129,6 @@ class PLDataModel(L.LightningDataModule):
         """
         
         if self.merged_h5_file.exists():
-            # TODO: check if existing merged file contains exactly the same zones
             logger.info('h5 files have been merged, skipping...')
             return
         
@@ -115,21 +138,16 @@ class PLDataModel(L.LightningDataModule):
                     
 
     def train_dataloader(self):
-        if not hasattr(self, 'train_dataset'):
-            name = 'subset' if self.use_subset else 'train'
-            self.train_dataset = S2Dataset(self.merged_h5_file, index_table=self.split_dir / f'index_table_{name}')
         return torch.utils.data.DataLoader(
             self.train_dataset,
             batch_size=self.batch_size,
-            shuffle=self.shuffle,
+            shuffle=self.shuffle, 
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
-            drop_last=self.drop_last,
+            drop_last=True,
         )
 
     def val_dataloader(self):
-        if not hasattr(self, 'val_dataset'):
-            self.val_dataset = S2Dataset(self.merged_h5_file, index_table=self.split_dir / 'index_table_val')
         return torch.utils.data.DataLoader(
             self.val_dataset,
             batch_size=self.batch_size,
@@ -140,8 +158,6 @@ class PLDataModel(L.LightningDataModule):
         )
 
     def test_dataloader(self):
-        if not hasattr(self, 'test_dataset'):
-            self.test_dataset = S2Dataset(self.merged_h5_file, index_table=self.split_dir / f'index_table_test')
         return torch.utils.data.DataLoader(
             self.test_dataset,
             batch_size=self.batch_size,
@@ -157,12 +173,25 @@ if __name__ == '__main__':
     @hydra.main(config_name='train', config_path='../config', version_base='1.2')
     def main(cfg):
         datamodel = PLDataModel(**cfg.data.init_args)
+        datamodel.setup('fit')
         # import ipdb; ipdb.set_trace()
-        for img, label, wc, slope in datamodel.train_dataloader():
-            print(img.shape)
+        dataloader = datamodel.train_dataloader()
+        n = len(datamodel.train_dataset)
+        print('starting')
+        import time
+        t0 = time.time()
+        # for i in range(n):
+        #     data = datamodel.train_dataset[i]
+        #     print(i)
+        # print('----------------------------------------------------------')
+        
+        for i, (img, label, wc, slope) in enumerate(datamodel.train_dataloader()):
+            print(i)
         print('----------------------------------------------------------')
-        for img, label, wc, slope in datamodel.train_dataloader():
-            continue
+        print('time taken: ', time.time()-t0)
+        print(len(datamodel.train_dataset))
+        # for img, label, wc, slope in datamodel.train_dataloader():
+        #     continue
 
     main()
     
