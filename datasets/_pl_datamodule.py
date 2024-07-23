@@ -5,34 +5,24 @@ from typing import List, Union
 import pandas as pd
 import torch
 import lightning as L
-import h5py
-import dask.dataframe as dd
+from ffcv.loader import Loader, OrderOption
+from ffcv.transforms import ToTensor, ToDevice, ToTorchImage, Cutout
+from ffcv.fields.decoders import IntDecoder, RandomResizedCropRGBImageDecoder
+from datasets.transforms import Standardize, SlopeWCMask
 
 
 from datasets.s2 import S2Dataset
 
 logger = logging.getLogger(__name__)
 
-def read_index_table(index_table_fp: Path):
-    if os.path.isdir(index_table_fp):
-        files = list(Path(index_table_fp).glob('*.parquet'))
-        index_table = dd.read_parquet(files, columns=['path', 'in_partition_idx']).compute()
-    else:
-        index_table = pd.read_parquet(index_table_fp)
-    index_table = index_table.reset_index(drop=True)
-    return index_table
 
 class PLDataModel(L.LightningDataModule):
     
     def __init__(self, 
-        h5_dir: str=None,
-        index_dir: str=None,
-        merged_h5_file: str=None,
-        use_subset: bool=False,
-        test_ratio: float=0.1,
-        cal_ratio: float=0.1,
-        val_ratio: float=0.1,
-        random_state: int=42,
+        train_fp: str=None,
+        val_fp: str=None,
+        distributed: bool=False,
+        batches_ahead: int=3,
         batch_size: int=64,
         num_workers: int=8,
         pin_memory: bool=True,
@@ -41,131 +31,35 @@ class PLDataModel(L.LightningDataModule):
         **kwargs
         ):
         super().__init__()
-        h5_dir = Path(h5_dir).expanduser()
-        index_dir = Path(index_dir).expanduser()
-        self.split_dir = h5_dir.parent/f'split_test{test_ratio}_cal{cal_ratio}_val{val_ratio}_seed{random_state}'
-        self.merged_h5_file = Path(merged_h5_file).expanduser()
-
-        self.use_subset = use_subset
-        self.test_ratio = test_ratio
-        self.cal_ratio = cal_ratio
-        self.val_ratio = val_ratio
-        self.random_state = random_state
-
-        self._merge_h5_files(h5_dir)
-        self.train_cal_test_split(index_dir)
+        self.train_fp = Path(train_fp).expanduser()
+        self.val_fp = Path(val_fp).expanduser()
+        if not self.train_fp.exists() or not self.val_fp.exists():
+            raise FileNotFoundError(f'{self.train_fp} does not exist. Please run python -m datasets._convert_to_beton.')
+        
         
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.pin_memory = pin_memory
         self.shuffle = shuffle
         self.drop_last = drop_last
-
-    def setup(self, stage: str):
-        # Assign train/val datasets for use in dataloaders
-        if stage == "fit":
-            name = 'subset' if self.use_subset else 'train'
-            index_table_train = read_index_table(self.split_dir / f'index_table_{name}') #index_table_{name} geo_index_table
-            
-            self.train_dataset = S2Dataset(self.merged_h5_file, index_table=index_table_train)
-            
-            index_table_val = read_index_table(self.split_dir / 'index_table_val')
-            self.val_dataset = S2Dataset(self.merged_h5_file, index_table=index_table_val)
-
-        # Assign test dataset for use in dataloader(s)
-        if stage == "test":
-            index_table_test = read_index_table(self.split_dir / 'index_table_test')
-            self.test_dataset = S2Dataset(self.merged_h5_file, index_table=index_table_test)
-
-    def _gen_index_table(self, index_dir):
-        """
-        Go through all groups in the HDF5 file and generate index table for the whole dataset.
-
-        Args:
-            index_dir (str): The overall index table for all zones.
-
-        Returns:
-            None
-        """
-        if len(os.listdir(index_dir)) >= 435:
-            logger.info('index table exists, skipping...')
-            return
-        logger.info('Generating index tables for all zones...')
-        os.system(f'python -m datasets._generate_index_table')
-
-    def train_cal_test_split(self, index_dir):
-        """
-        Split the index table into train, cal, and test datasets.
-
-        Args:
-            index_dir (str): The path to the index table.
-
-        Returns:
-            None
-        """
-        # Make sure the train dataset doesn't include any images from the cal and test splits
-        index_table_exists = True
-        for split in ['train', 'val', 'cal', 'test']:
-            if not len(os.listdir(self.split_dir/f'index_table_{split}')) > 1:
-                index_table_exists = False
-                break
-        if index_table_exists:
-            logger.info('index tables for train, val, cal, test sets exist, skipping...')
-            return
-
-        logger.info('Check if the full dataset index table exists...')
-        self._gen_index_table(index_dir)
-        logger.info('Splitting index tables for train, cal, test datasets...')
-        os.system(f'python -m datasets._data_split test_ratio={self.test_ratio} cal_ratio={self.cal_ratio} val_ratio={self.val_ratio} random_state={self.random_state}')
-
-    
-    def _merge_h5_files(self, h5_dir):
-        """
-        Merges the HDF5 files for all zones into a single HDF5 file.
-
-        Parameters:
-        h5_dir (Path): The directory containing the HDF5 files.
-
-        """
-        
-        if self.merged_h5_file.exists():
-            logger.info('h5 files have been merged, skipping...')
-            return
-        
-        logger.info('Merging h5 files...')
-        from datasets._merge_h5s import merge_all_zones
-        merge_all_zones(h5_dir, self.merged_h5_file)
+        self.distributed = distributed
+        self.batches_ahead = batches_ahead
                     
 
     def train_dataloader(self):
-        return torch.utils.data.DataLoader(
-            self.train_dataset,
-            batch_size=self.batch_size,
-            shuffle=self.shuffle, 
-            num_workers=self.num_workers,
-            pin_memory=self.pin_memory,
-            drop_last=True,
-        )
+        return Loader(self.train_fp, batch_size=self.batch_size, num_workers=self.num_workers,
+                distributed=self.distributed, batches_ahead=self.batches_ahead,
+                order=OrderOption.QUASI_RANDOM, os_cache=False)
 
     def val_dataloader(self):
-        return torch.utils.data.DataLoader(
-            self.val_dataset,
-            batch_size=self.batch_size,
-            shuffle=False,
-            num_workers=self.num_workers,
-            pin_memory=self.pin_memory,
-            drop_last=self.drop_last,
-        )
+        return Loader(self.val_fp, batch_size=self.batch_size, num_workers=self.num_workers,
+                distributed=self.distributed, batches_ahead=self.batches_ahead,
+                order=OrderOption.SEQUENTIAL, os_cache=False)
 
     def test_dataloader(self):
-        return torch.utils.data.DataLoader(
-            self.test_dataset,
-            batch_size=self.batch_size,
-            shuffle=False,
-            num_workers=self.num_workers,
-            pin_memory=self.pin_memory,
-            drop_last=self.drop_last,
-        )
+        return Loader(self.test_fp, batch_size=self.batch_size, num_workers=self.num_workers,
+                distributed=self.distributed, batches_ahead=self.batches_ahead,
+                order=OrderOption.SEQUENTIAL, os_cache=False)
     
 
 if __name__ == '__main__':

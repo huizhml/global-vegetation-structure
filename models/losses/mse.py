@@ -8,7 +8,7 @@ class MSELoss(nn.MSELoss):
         super().__init__(size_average, reduce, reduction)
 
 
-    def forward(self, y_hat, y) -> Tensor:
+    def forward(self, y_hat, y, *args) -> Tensor:
         mse = super().forward(y_hat, y)
         rmse = torch.sqrt(mse)
         return {

@@ -11,7 +11,8 @@ logging.getLogger()
 
 import os
 os.environ['USE_PYGEOS'] = '0'
-# os.environ['NUMEXPR_MAX_THREADS'] = '32'
+os.system("taskset -c -p 0-95 %d" % os.getpid())
+os.environ['NUMEXPR_MAX_THREADS'] = '64'
 
 def namespace_to_dict(namespace):
     return {
@@ -36,8 +37,8 @@ class MyLightningCLI(LightningCLI):
 
     def add_arguments_to_parser(self, parser) -> None:
         # parser.add_argument("--notification_email", default="huzh@di.ku.dk")
-        parser.link_arguments('model.init_args.in_channels', 'model.init_args.backbone_model.init_args.in_channels')
-        parser.link_arguments('model.init_args.activation_layer', 'model.init_args.backbone_model.init_args.activation_layer')
+        parser.link_arguments('model.init_args.in_channels', 'model.init_args.encoder.init_args.in_channels')
+        parser.link_arguments('model.init_args.activation_layer', 'model.init_args.encoder.init_args.activation_layer')
     
 
     # def after_fit(self):
@@ -45,7 +46,13 @@ class MyLightningCLI(LightningCLI):
 
 
 def cli_main():
-    cli = MyLightningCLI(model_class=pl.LightningModule, datamodule_class=pl.LightningDataModule, subclass_mode_model=True,subclass_mode_data=True, save_config_callback=LoggerSaveConfigCallback)
+    cli = MyLightningCLI(model_class=pl.LightningModule, 
+                         datamodule_class=pl.LightningDataModule, 
+                         subclass_mode_model=True,
+                         subclass_mode_data=True, 
+                         save_config_callback=LoggerSaveConfigCallback,
+                        #  parser_kwargs={"parser_mode": "omegaconf"},
+                         ) # omegaconf: allow variable interpolation
     # cli.trainer.fit(cli.model, datamodule=cli.datamodule)
     # test on best model
     # cli.trainer.test(cli.model, datamodule=cli.datamodule)

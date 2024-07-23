@@ -16,10 +16,10 @@ class UNet(L.LightningModule):
                 norm_layer_up: str,
                 up_block: str,
                 activation_layer: nn.Module,
-                delta_rh_rectifier: nn.Module,
-                backbone_model: nn.Module,
-                preprocess: nn.Module,
+                last_opt: nn.Module,
+                encoder: nn.Module,
                 loss: nn.Module,
+                mask_module: nn.Module,
                 upsampling: str = "pixelshuffle",
                 blur_final: bool = False,
                 blur: bool = False,
@@ -27,8 +27,6 @@ class UNet(L.LightningModule):
                 self_attention: bool = False,
                  *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        # self.save_hyperparameters(ignore=['activation_layer', 'last_activation', 'backbone_model', 'preprocess', 'loss'])
-        self.backbone_model = backbone_model
 
         if isinstance(patch_size, int):
             patch_size = (patch_size, patch_size)
@@ -43,24 +41,26 @@ class UNet(L.LightningModule):
         self.activation_layer = activation_layer
         self.up_block = get_class(up_block)
         self.out_channels = out_channels
+        self.last_opt = last_opt
+        self.apply_mask = mask_module
 
-        self.init_decoder(delta_rh_rectifier)
+        self.encoder = encoder
+        self.init_decoder()
 
-        self.preprocess = preprocess
         self.loss = loss
-        if isinstance(delta_rh_rectifier.activation, nn.Sequential):
+        if isinstance(last_opt, nn.Identity):
             self.yhat_trasform = lambda x: x
         else:
             self.yhat_trasform =  lambda x: x.cumsum(dim=1)
         torch.set_float32_matmul_precision('high')
 
-    def init_decoder(self, delta_rh_rectifier):
-        self.backbone_model.eval()
+    def init_decoder(self):
+        self.encoder.eval()
 
         # create dummy features to test network integrity
         img = torch.rand(2, self.in_channels, *self.patch_size).detach()
-        # iterate through backbone_model to dynamically measure sizes
-        x, outs = self.backbone_model(img)
+        # iterate through encoder to dynamically measure sizes
+        x, outs = self.encoder(img)
         self.scale_factors = []
         ps = img.shape[2]  # assumes same reduction over height and width
         for out in outs:
@@ -114,12 +114,11 @@ class UNet(L.LightningModule):
 
         self.last_conv = nn.Conv2d(x.size(1), self.out_channels, 1).eval()
         x = self.last_conv(x)
-        self.last_opt = nn.Sequential() if self.out_channels == 1 else delta_rh_rectifier
         self.last_opt(x)
 
     def forward(self, img):
         x = img
-        x, outs = self.backbone_model(x)
+        x, outs = self.encoder(x)
 
         outs = outs[::-1]
 
@@ -132,11 +131,11 @@ class UNet(L.LightningModule):
 
     def reset_parameters(self):
         def init_weights(m):
-            self.backbone_model.init_weights(m)
+            self.encoder.init_weights(m)
             if isinstance(m, CustomPixelShuffle_ICNR):
                 m[0][0].weight.data.copy_(icnr_init(m[0][0].weight.data))
 
-        if self.backbone in ["swin-b", "swin-s"]:  # skip pretrained backbone_model
+        if self.backbone in ["swin-b", "swin-s"]:  # skip pretrained encoder
             self.up_layers.apply(init_weights)
             self.pre_final_conv.apply(init_weights)
             self.last_conv.apply(init_weights)
@@ -144,31 +143,31 @@ class UNet(L.LightningModule):
             self.apply(init_weights)
 
     def reset_head(self):
-        self.last_conv.apply(self.backbone_model.init_weights)
+        self.last_conv.apply(self.encoder.init_weights)
 
-    def training_step(self, sample, batch_idx) -> torch.Tensor | Mapping[str, Any] | None:
-        x, y, mask = self.preprocess(*sample, self.device)
-        y_hat = self.forward(x.float())
-        y_hat = self.yhat_trasform(y_hat[...,7,7])
-        y_hat = y_hat[mask]
-        y = y[mask]
-        losses = self.loss(y_hat, y)
+    def training_step(self, sample, batch_idx):
+        x, y, mask = self.apply_mask(*sample)
+        output = self.forward(x.float())
+        output = output[mask][..., 7,7] # drop patches with high slope
+        y = y[mask].float()
+        y_hat = output[:, :101]
+        var = output[:, 101:]
+        y_hat = self.yhat_trasform(y_hat) # for outputing delta RHs
+        losses = self.loss(y_hat, y, var)
         for name, loss in losses.items():
             self.log(f'train_{name}', loss, on_epoch=True, on_step=False)
-        
         return {'loss': losses['loss'], 'pred': y_hat, 'target': y}
 
-    def validation_step(self, sample, batch_idx) -> torch.Tensor | Mapping[str, Any] | None:
-        x, y, mask = self.preprocess(*sample, self.device)
-        y_hat = self.forward(x.float())
-        y_hat = self.yhat_trasform(y_hat[...,7,7])
-        y_hat = y_hat[mask]
-        y = y[mask]
-        losses = self.loss(y_hat, y)
+    def validation_step(self, sample, batch_idx):
+        x, y, mask = self.apply_mask(*sample)
+        output = self.forward(x.float())
+        output = output[mask][...,7,7] 
+        y = y[mask] # drop patches with high slope
+        y_hat = output[:, :101]
+        var = output[:, 101:]
+        y_hat = self.yhat_trasform(y_hat) # for outputing delta RHs
+        losses = self.loss(y_hat, y, var)
         for name, loss in losses.items():
-            self.log(f'train_{name}', loss, on_epoch=True, on_step=False)
+            self.log(f'val_{name}', loss, on_epoch=True, on_step=False)
         
         return {'loss': losses['loss'], 'pred': y_hat, 'target': y}
-
-
-

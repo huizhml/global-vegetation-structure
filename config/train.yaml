@@ -12,18 +12,18 @@ optimizer:
 data:
   class_path: datasets._pl_datamodule.PLDataModel
   init_args: 
-    h5_dir: ~/scratch/data/GEDI # raw h5 files
-    index_dir: ~/scratch/data/geo_index_table # only needed when creating splits
-    merged_h5_file: ~/flash/data/GVS.h5
-    use_subset: False
-    test_ratio: 0.1
-    cal_ratio: 0.1
-    val_ratio: 0.1
-    random_state: 42
-    batch_size: 128
-    num_workers: 8
+    train_fp: ~/flash/data/val.beton
+    val_fp: ~/flash/data/val.beton
+    # test_ratio: 0.1
+    # cal_ratio: 0.1
+    # val_ratio: 0.1
+    # random_state: 42
+    distributed: True
+    batches_ahead: 3
+    batch_size: 64 # per device
+    num_workers: 4 # per device
     pin_memory: True
-    shuffle: True
+    shuffle: False
     drop_last: False
 
 model:
@@ -48,7 +48,7 @@ model:
         norm_layer: torch.nn.BatchNorm2d
         block: models.modules.standard.DoubleConvSkip
         kernal_sizes: [3, 1]
-    preprocess: models.preprocess.Standardize
+    mask_module: datasets.transforms.SlopeWCMask
     loss: models.losses.mse.MSELoss
     upsampling: nearest
     blur_final: False
@@ -61,11 +61,12 @@ trainer:
   # strategy: auto
   devices: auto
   default_root_dir: /tmp/wandb
-  val_check_interval: 100000
+  # val_check_interval: 100000
   max_epochs: 100
   num_sanity_val_steps: 0
   # fast_dev_run: 100
-  # profiler: simple
+  # profiler: advanced
+  sync_batchnorm: True
   # enable_checkpointing: False
   callbacks:
     - class_path: lightning.pytorch.callbacks.LearningRateMonitor
@@ -82,6 +83,7 @@ trainer:
         mode: min
         every_n_epochs: 10 #check every n epochs
         save_last: True # save the last epoch? or just save the last best model?
+    # - class_path: callbacks.index_shuffle.IndexShuffler
 
   logger:
       class_path: callbacks.wandb_logger.WandbLogger
