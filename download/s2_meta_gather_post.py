@@ -38,7 +38,13 @@ stac_endpoint = 'https://planetarycomputer.microsoft.com/api/stac/v1'
 api = pystac_client.Client.open(stac_endpoint, modifier=planetary_computer.sign_inplace)
 
 class S2MetaGather(DaskDownloader):
-
+    """
+    There are some duplicated Sentinel-2 items in the meta data table, while only one is valid.
+    At the time of writing, I was not aware of this issue.
+    Therefore, there is this class for a second pass of metadata gathering.
+    The second pass will gather metadata for failed partitions when trying to find the best Sentinel-2 image.
+    For duplicated items, only the one with older generation time will be kept.
+    """
     def __init__(self,
                  rewrite: bool = False,
                  root_dir: str = None,
@@ -150,7 +156,7 @@ class S2MetaGather(DaskDownloader):
         gedi_df['leaf_off_doy'] = gedi_df['leaf_off_doy'].mask(reverse, gedi_df['leaf_off_doy'] + 365)
 
         leaf_on_date = dd.to_datetime(gedi_df['leaf_on_doy'], unit='D', origin=self.year_start)
-        leaf_off_date = dd.to_datetime(gedi_df['leaf_on_doy'], unit='D', origin=self.year_start)
+        leaf_off_date = dd.to_datetime(gedi_df['leaf_off_doy'], unit='D', origin=self.year_start)
 
         gedi_df['start'] = dd.to_datetime(gedi_df['date']) - self.query_days
         gedi_df['end'] = dd.to_datetime(gedi_df['date']) + self.query_days

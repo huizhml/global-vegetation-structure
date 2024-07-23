@@ -146,7 +146,7 @@ class S2MetaGather(DaskDownloader):
         gedi_df['leaf_off_doy'] = gedi_df['leaf_off_doy'].mask(reverse, gedi_df['leaf_off_doy'] + 365)
 
         leaf_on_date = dd.to_datetime(gedi_df['leaf_on_doy'], unit='D', origin=self.year_start)
-        leaf_off_date = dd.to_datetime(gedi_df['leaf_on_doy'], unit='D', origin=self.year_start)
+        leaf_off_date = dd.to_datetime(gedi_df['leaf_off_doy'], unit='D', origin=self.year_start)
 
         gedi_df['start'] = dd.to_datetime(gedi_df['date']) - self.query_days
         gedi_df['end'] = dd.to_datetime(gedi_df['date']) + self.query_days
