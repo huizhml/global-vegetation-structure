@@ -1,3 +1,8 @@
+defaults:  
+  - _self_  
+  - override hydra/hydra_logging: disabled  
+  # - override hydra/job_logging: none
+
 task: download # download, visualize
 
 init:
@@ -10,8 +15,11 @@ init:
 
 
 hydra:
+  output_subdir: null #prevent saving the files into .hydra
+  job_logging:
+    root:
+      handlers: [console]
   job:
     chdir: False
   run:
-    dir: ./logs/${init.data_dir}_${now:%Y-%m-%d_%H-%M-%S}
-
+    dir: .

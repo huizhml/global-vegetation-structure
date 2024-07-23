@@ -39,9 +39,6 @@ STD = np.array([439.42572021484375,
         # 0.3675101101398468
         ])
 
-    @torch.no_grad()
-    def forward(self, x) -> Tensor:
-        return normalize(x, MEAN, STD)
     
 class SlopeWCMask(nn.Module):
     def __init__(self, slope_th: float = 20):

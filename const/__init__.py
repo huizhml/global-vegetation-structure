@@ -11,3 +11,5 @@ ESA_WC = {
     'Mangroves': 95,
     'Moss and lichen': 100,
 }
+
+palette = ['#150b37', '#3b0964', '#61136e', '#85216b', '#a92e5e', '#cc4248', '#e75e2e', '#f78410', '#fcae12', '#f5db4c'] # 0: '#010005',  '#fcffa4'

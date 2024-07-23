@@ -33,8 +33,7 @@ The codebase is organized as follows:
 - `download/`: This directory contains scripts for downloading data from various sources.
     - `gedi.py`: This script downloads data from Source 1.
     - `s2.py`: This script downloads data from Source 2.
-- `analyze/`: This directory contains scripts for performing basic analyses on the processed data.
-    - `analyze.py`: This script performs the analyses and generates output files.
+- 
 
 Each script is designed to be run independently, but `run.py` can be used to run the entire pipeline from start to finish.
 
@@ -46,8 +45,3 @@ To download GEDI data
 python -m download.gedi task=download 
 ```
 
-1. Open a terminal in the root directory of the project.
-2. Run the following command:
-
-```bash
-python analyze.py

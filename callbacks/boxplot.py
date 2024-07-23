@@ -16,21 +16,32 @@ class Visualizer:
         self.state = []
         self.xlabel = xlabel
         self.ylabel = ylabel
-
+    
     def update(self, pred: Tensor, y: Tensor) -> None:
         v = self.func(pred, y)
         self.state.append(v)
 
+    def grouped_cat(self) -> None:
+        boxes = []
+        for i in range(len(self.state[0])):
+            boxes.append(torch.cat([arr[i] for arr in self.state], dim=0).cpu().numpy())
+        return boxes
+
     def reset(self):
         self.state.clear()
 
-    def plot(self, title:str=None):
-        v = torch.cat(self.state, dim=0).cpu().numpy()
+    def plot(self, title:str=None, **kwargs: Any):
+        if self.name == 'residuals_rh98':
+            v = self.grouped_cat()
+            w = len(v)
+        else:
+            v = torch.cat(self.state, dim=0).cpu().numpy()
+            w = v.shape[1]
         fig = plt.figure(figsize=(30, 6))
-        plt.boxplot(v, showfliers=False)
+        plt.boxplot(v, whis=[0, 100])
         plt.xlabel(self.xlabel)
         plt.ylabel(self.ylabel)
-        w = v.shape[1]
+        
         plt.xticks(np.arange(1,w+1), np.arange(w))
         plt.title(title)
         return fig
@@ -45,6 +56,18 @@ def residuals(pred: Tensor, y: Tensor) -> Tensor:
 def delta_rh(pred: Tensor, y: Tensor) -> Tensor:
     return pred[:, 1:] - pred[:, :-1]
 
+def relative_height(pred: Tensor, y: Tensor) -> Tensor:
+    return pred
+
+def residuals_rh98(pred: Tensor, y: Tensor) -> Tensor:
+    bins = torch.tensor(np.arange(0,90,10), device=pred.device)
+    rh98 = y[:, 98]
+    res = pred[:, 98] - rh98
+    bin_places = (rh98.unsqueeze(1) >= bins).long().sum(1)
+    binned_res = [res[bin_places == i] for i in range(1, len(bins)+1)]
+    return binned_res
+
+
 METRICS = {
     'mae': {
         'func': mae,
@@ -58,6 +81,16 @@ METRICS = {
         'func': delta_rh,
         'xlabel': 'delta_RH1-delta_RH100',
         'ylabel': 'Delta RH (m)'
+    },
+    'relative_height': {
+        'func': relative_height,
+        'xlabel': 'RH0-RH100',
+        'ylabel': 'Relative Height (m)'
+    },
+    'residuals_rh98': {
+        'func': residuals_rh98,
+        'xlabel': 'Residuals (m)',
+        'ylabel': 'RH98 (x10m)'
     }
 }
 
@@ -65,7 +98,7 @@ class BoxplotLogger(Callback):
 
     def __init__(self,
                  log_every: Union[int, List]=None,
-                 log_metrics: Optional[List[str]]=['residuals', 'delta_rh'],
+                 log_metrics: Optional[List[str]]=['residuals', 'delta_rh', 'relative_height', 'residuals_rh98'],
                  **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.log_every = log_every
@@ -75,7 +108,7 @@ class BoxplotLogger(Callback):
             self.metrics.append(Visualizer(name=metric, **METRICS[metric]))
 
     @torch.no_grad()
-    def on_train_batch_end(self, trainer: Trainer, pl_module: LightningModule, outputs: Tensor | Mapping[str, Any] | None, batch: Any, batch_idx: int) -> None:
+    def on_train_batch_end(self, trainer: Trainer, pl_module: LightningModule, outputs, batch: Any, batch_idx: int) -> None:
         current_epoch = trainer.current_epoch
         if check_if_log(current_epoch, self.log_every):
             for metric in self.metrics:
@@ -92,7 +125,7 @@ class BoxplotLogger(Callback):
         return super().on_train_epoch_end(trainer, pl_module)
     
     @torch.no_grad()
-    def on_validation_batch_end(self, trainer: Trainer, pl_module: LightningModule, outputs: Tensor | Mapping[str, Any] | None, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> None:
+    def on_validation_batch_end(self, trainer: Trainer, pl_module: LightningModule, outputs, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> None:
         current_epoch = trainer.current_epoch
         if check_if_log(current_epoch, self.log_every):
             for metric in self.metrics:
@@ -105,6 +138,7 @@ class BoxplotLogger(Callback):
             for metric in self.metrics:
                 fig = metric.plot(f'{metric.name} [val]')
                 wandb.log({f'{metric.name}.val': wandb.Image(fig)})
+                plt.close(fig)
                 metric.reset()
         return super().on_validation_epoch_end(trainer, pl_module)
 

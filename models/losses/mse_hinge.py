@@ -19,7 +19,7 @@ class MSEHinge(nn.Module):
         self.hinge_loss_fn = hinge_loss
         self.alpha = alpha
 
-    def forward(self, y_hat, y) -> Tensor:
+    def forward(self, y_hat, y, *args) -> Tensor:
         mse_loss = self.mse_loss_fn(y_hat, y)
         rmse = torch.sqrt(mse_loss)
         hinge_loss = self.hinge_loss_fn(y_hat[:-1]- y_hat[1:])

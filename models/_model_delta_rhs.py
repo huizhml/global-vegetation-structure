@@ -3,9 +3,9 @@ import torch.nn as nn
 
 
 class DeltaRHRectifier(nn.Module):
-    def __init__(self, last_activation, rh_idx:int=0):
+    def __init__(self, activation, rh_idx:int=0):
         super(DeltaRHRectifier, self).__init__()
-        self.activation = last_activation
+        self.activation = activation
         self.rh_idx = rh_idx
 
     def forward(self, x):
