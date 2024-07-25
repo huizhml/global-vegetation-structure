@@ -1,4 +1,5 @@
 import numpy as np
+import ipdb
 import torch
 import torch.nn as nn
 from torch import Tensor
@@ -49,13 +50,15 @@ class SlopeWCMask(nn.Module):
     def forward(self, x, y, wc, slope, latlon) -> Tensor:
         # NOTE: zero out the central pixel if it is in classes: 'Built-up', 'Snow and ice', 'Permanent water bodies'
         zero_cls = torch.tensor([ESA_WC['Built-up'], ESA_WC['Snow and ice'], ESA_WC['Permanent water bodies']], device=x.device)
-        label_mask = torch.where(torch.isin(wc[..., 7,7], zero_cls), 0, 1)
-        y = y * label_mask.unsqueeze(1)
+        # wc = wc[..., 7, 7]
+        label_mask = torch.where(torch.isin(wc, zero_cls), 0, 1)
+        y = y * label_mask
         # NOTE: if the central pixel is in the exclude class and the slope is greater than the threshold, the loss mask is 0
         exclude_cls = torch.tensor([ESA_WC['Grassland'], ESA_WC['Bare / sparse vegetation'], ESA_WC['Moss and lichen']], device=x.device)
-        loss_mask_wc = torch.where(torch.isin(wc[..., 7,7], exclude_cls), 1, 0)
-        loss_mask_slope = torch.where(slope[:, 7,7] > self.slope_th, 1, 0)
+        loss_mask_wc = torch.where(torch.isin(wc, exclude_cls), 1, 0)
+        # slope = slope[..., 7, 7]
+        loss_mask_slope = torch.where(slope > self.slope_th, 1, 0)
         loss_mask = loss_mask_wc * loss_mask_slope
         loss_mask = 1 - loss_mask
         loss_mask = loss_mask.type(torch.bool)
-        return normalize(x, MEAN, STD), y, loss_mask
+        return normalize(x, MEAN, STD), y, loss_mask.squeeze()

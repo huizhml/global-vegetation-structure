@@ -1,7 +1,7 @@
 from typing import List, Iterable
 from pathlib import Path
 from ffcv.writer import DatasetWriter
-from ffcv.fields import NDArrayField
+from ffcv.fields import NDArrayField, IntField, FloatField
 from datasets.s2 import S2Dataset
 import pandas as pd
 import numpy as np
@@ -39,8 +39,8 @@ def main(cfg: DictConfig):
             # Tune options to optimize dataset size, throughput at train-time
             'image': NDArrayField(dtype=np.dtype("int16"), shape=input_shape),
             'rhs': NDArrayField(dtype=np.dtype("float32"), shape=(101,)),
-            'wc': NDArrayField(dtype=np.dtype("int16"), shape=(15,15)),
-            'slope': NDArrayField(dtype=np.dtype("float32"), shape=(15,15)),
+            'wc': IntField(),
+            'slope': FloatField(),
             'latlon': NDArrayField(dtype=np.dtype("float64"), shape=(2,)),
         })
 

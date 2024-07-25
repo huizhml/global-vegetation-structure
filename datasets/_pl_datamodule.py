@@ -2,13 +2,13 @@ import os
 import logging
 from pathlib import Path
 from typing import List, Union
+import random
 import pandas as pd
 import torch
 import lightning as L
 from ffcv.loader import Loader, OrderOption
 from ffcv.transforms import ToTensor, ToDevice, ToTorchImage, Cutout
 from ffcv.fields.decoders import IntDecoder, RandomResizedCropRGBImageDecoder
-from datasets.transforms import Standardize, SlopeWCMask
 
 
 from datasets.s2 import S2Dataset
@@ -35,7 +35,8 @@ class PLDataModel(L.LightningDataModule):
         self.val_fp = Path(val_fp).expanduser()
         if not self.train_fp.exists() or not self.val_fp.exists():
             raise FileNotFoundError(f'{self.train_fp} does not exist. Please run python -m datasets._convert_to_beton.')
-        
+        if self.train_fp.is_dir():
+            self.train_fp = list(self.train_fp.glob('train*.beton'))
         
         self.batch_size = batch_size
         self.num_workers = num_workers
@@ -47,9 +48,15 @@ class PLDataModel(L.LightningDataModule):
                     
 
     def train_dataloader(self):
-        return Loader(self.train_fp, batch_size=self.batch_size, num_workers=self.num_workers,
+        idx = self.trainer.current_epoch % 10# train each subset 20 epochs and then switch TODO: hyperparameter 10: n
+        if idx == 0:
+            random.shuffle(self.train_fp)
+        train_fp = self.train_fp[idx] if isinstance(self.train_fp, list) else self.train_fp
+        # TODO: rsync subset to /tmp
+        print('loading from ', train_fp)
+        return Loader(train_fp, batch_size=self.batch_size, num_workers=self.num_workers,
                 distributed=self.distributed, batches_ahead=self.batches_ahead,
-                order=OrderOption.QUASI_RANDOM, os_cache=False)
+                order=OrderOption.SEQUENTIAL, os_cache=True)# TODO: check if random sample from mem is faster than random sample from disk
 
     def val_dataloader(self):
         return Loader(self.val_fp, batch_size=self.batch_size, num_workers=self.num_workers,

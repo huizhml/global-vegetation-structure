@@ -18,10 +18,9 @@ data:
     # cal_ratio: 0.1
     # val_ratio: 0.1
     # random_state: 42
-    distributed: True
     batches_ahead: 3
-    batch_size: 64 # per device
-    num_workers: 4 # per device
+    batch_size: 512 # per device
+    num_workers: 32 # per device
     pin_memory: True
     shuffle: False
     drop_last: False

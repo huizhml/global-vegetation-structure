@@ -1,10 +1,11 @@
+import os
 from typing import List, Iterable
 from pathlib import Path
 from ffcv.writer import DatasetWriter
-from ffcv.fields import NDArrayField
+from ffcv.fields import NDArrayField, IntField, FloatField
 from datasets.s2 import S2Dataset
 import random
-import pandas as pd
+import geopandas as gpd
 import numpy as np
 import dask_geopandas as dgp
 from dataclasses import dataclass, field
@@ -16,13 +17,24 @@ from omegaconf import DictConfig
 @dataclass
 class MyConfig:
     index_table: str = '~/data/geo_index_table'
+    train_index_dir: str = '~/data/index_table_train_subsets'
     h5_file: str = '~/scratch/data/GVS.h5'
     out_dir: str = '~/flash/data'
-    splits: int= 10
+    nsplit: int= 10
     seed: int = 42
 
 cs = ConfigStore.instance()
 cs.store(name="config", node=MyConfig)
+
+def split_index_table(nsplit, index_dir, index_table_fp):
+    index_table = dgp.read_parquet(index_table_fp, gather_spatial_partitions=False).sample(frac=1).compute()
+    N = len(index_table)
+    n = N // nsplit
+    for split in range(nsplit):
+        index_ = index_table.iloc[n*split:n*(split+1)]
+        if split == nsplit - 1:
+            index_ = index_table.iloc[n*split:]
+        index_.to_parquet(index_dir / f'train{split}.parquet')
 
 @hydra.main(config_name='config')
 def main(cfg: DictConfig):
@@ -30,16 +42,18 @@ def main(cfg: DictConfig):
     np.random.seed(cfg.seed)
     h5_file = Path(cfg.h5_file).expanduser()
     split_dir = Path(cfg.index_table).expanduser()
+    index_dir = Path(cfg.train_index_dir).expanduser()
+    index_dir.mkdir(exist_ok=True, parents=True)
     input_shape = (12, 15, 15)
-    index_table = split_dir/f'*.parquet'
-    index_table = dgp.read_parquet(index_table, gather_spatial_partitions=False).sample(frac=1).compute()
-    N = len(index_table)
-    n = N // cfg.splits
-    for split in range(cfg.splits):
+    if not index_dir.exists() or not len(list(index_dir.glob('*.parquet'))) == cfg.nsplit:
+        split_index_table(cfg.nsplit, index_dir, split_dir/f'*.parquet')
+    
+    for split in range(cfg.nsplit):
         out_file = Path(cfg.out_dir).expanduser() / f'train{split}.beton'
-        index_ = index_table.iloc[n*split:n*(split+1)]
-        if split == cfg.splits - 1:
-            index_ = index_table.iloc[n*split:]
+        if out_file.exists():
+            print("Skipping", out_file)
+            continue
+        index_ = gpd.read_parquet(index_dir / f'train{split}.parquet')
         dataset = S2Dataset(h5_file, index_)
         
         # Pass a type for each data field
@@ -48,8 +62,8 @@ def main(cfg: DictConfig):
             # Tune options to optimize dataset size, throughput at train-time
             'image': NDArrayField(dtype=np.dtype("int16"), shape=input_shape),
             'rhs': NDArrayField(dtype=np.dtype("float32"), shape=(101,)),
-            'wc': NDArrayField(dtype=np.dtype("int16"), shape=(15,15)),
-            'slope': NDArrayField(dtype=np.dtype("float32"), shape=(15,15)),
+            'wc': IntField(),
+            'slope': FloatField(),
             'latlon': NDArrayField(dtype=np.dtype("float64"), shape=(2,)),
         })
 
