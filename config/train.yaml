@@ -61,10 +61,15 @@ trainer:
   devices: auto
   default_root_dir: /tmp/wandb
   # val_check_interval: 100000
+  # check_val_every_n_epoch: 10
   max_epochs: 100
   num_sanity_val_steps: 0
   # fast_dev_run: 100
   # profiler: advanced
+  # profiler:
+  #   class_path: lightning.pytorch.profilers.PyTorchProfiler
+  #   init_args:
+  #     sort_by_key: self_cpu_memory_usage
   sync_batchnorm: True
   # enable_checkpointing: False
   callbacks:

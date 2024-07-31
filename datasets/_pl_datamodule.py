@@ -1,4 +1,5 @@
 import os
+import time
 import logging
 from pathlib import Path
 from typing import List, Union
@@ -36,7 +37,7 @@ class PLDataModel(L.LightningDataModule):
         if not self.train_fp.exists() or not self.val_fp.exists():
             raise FileNotFoundError(f'{self.train_fp} does not exist. Please run python -m datasets._convert_to_beton.')
         if self.train_fp.is_dir():
-            self.train_fp = list(self.train_fp.glob('train*.beton'))
+            self.train_fp = sorted(list(self.train_fp.glob('train*.beton')))
         
         self.batch_size = batch_size
         self.num_workers = num_workers
@@ -48,16 +49,20 @@ class PLDataModel(L.LightningDataModule):
                     
 
     def train_dataloader(self):
-        idx = self.trainer.current_epoch % 10# train each subset 20 epochs and then switch TODO: hyperparameter 10: n
-        if idx == 0:
-            random.shuffle(self.train_fp)
-        train_fp = self.train_fp[idx] if isinstance(self.train_fp, list) else self.train_fp
-        # TODO: rsync subset to /tmp
+        if isinstance(self.train_fp, list):
+            idx = self.trainer.current_epoch // self.trainer.reload_dataloaders_every_n_epochs # train each subset 5 epochs and then switch
+            train_fp = self.train_fp[idx] if isinstance(self.train_fp, list) else self.train_fp
+        else:
+            train_fp = self.train_fp
         print('loading from ', train_fp)
-        return Loader(train_fp, batch_size=self.batch_size, num_workers=self.num_workers,
-                distributed=self.distributed, batches_ahead=self.batches_ahead,
-                order=OrderOption.SEQUENTIAL, os_cache=True)# TODO: check if random sample from mem is faster than random sample from disk
 
+        t0 = time.time()
+        loader = Loader(train_fp, batch_size=self.batch_size, num_workers=self.num_workers,
+                distributed=self.distributed, batches_ahead=self.batches_ahead,
+                order=OrderOption.QUASI_RANDOM, os_cache=False)
+        print('time taken: ', time.time()-t0)
+        return loader
+    
     def val_dataloader(self):
         return Loader(self.val_fp, batch_size=self.batch_size, num_workers=self.num_workers,
                 distributed=self.distributed, batches_ahead=self.batches_ahead,
