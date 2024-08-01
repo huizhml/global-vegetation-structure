@@ -3,7 +3,8 @@ import time
 import hydra
 from pathlib import Path
 import dask
-import hvplot.dask
+import dask.bag as db
+import h5py
 import pandas as pd
 import dask.dataframe as dd
 from dask.utils import natural_sort_key
@@ -14,6 +15,8 @@ from hydra.core.config_store import ConfigStore
 from omegaconf import DictConfig
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
+
+from datasets._merge_h5s import dst_conf, append_to_dataset
 
 
 class DataSplitter:
@@ -234,6 +237,40 @@ class DataSplitter:
             f.write(f'Number of samples: {size}\n')
             f.write(f'Number of tiles: {n_tiles}\n')
 
+    def split_h5(self, h5_dir, split_dir):
+        
+        split_dir = Path(split_dir).expanduser()
+        h5_dir = Path(h5_dir).expanduser()
+
+        for name in ['train', 'cal', 'val', 'test']:
+            (split_dir / f'{name}_h5s').mkdir(exist_ok=True)
+        h5_files = h5_dir.glob('*.h5')
+        bg = db.from_sequence(h5_files, npartitions=16)
+        bg.map(self._split_h5_per_zone, split_dir).compute()
+
+    def _split_h5_per_zone(self, h5_in_fp, split_dir):
+        zone = h5_in_fp.stem
+        print('>>> Processing', h5_in_fp)
+        with h5py.File(h5_in_fp, 'r') as f:
+            for name in ['train', 'cal', 'val', 'test']:
+                h5_file = split_dir / f'{name}_h5s/{zone}.h5'
+                index_fp = split_dir / f'index_table_{name}' / f'{zone}.parquet'
+                if h5_file.exists() or not index_fp.exists():
+                    continue
+                df = gpd.read_parquet(split_dir / f'index_table_{name}' / f'{zone}.parquet')
+                with h5py.File(h5_file, 'w') as f_out:
+                    for path in df['path'].unique():
+                        idx = df[df['path']==path]['in_partition_idx'].unique()
+                        for name, config in dst_conf.items():
+                            data = f[f'{path[4:]}/{name}'][idx]
+                            f_out.create_dataset(f'{path[4:]}/{name}', 
+                                                    shape=data.shape, 
+                                                    chunks=(1,) +config['shape'], 
+                                                    dtype=config['dtype'],
+                                                    compression="gzip", #lzf
+                                                    compression_opts=7, 
+                                                    data=data)
+
 
 def overlay_country_boundaries(ax):
     world = gpd.read_file(gpd.datasets.get_path('naturalearth_lowres'))
@@ -271,8 +308,10 @@ def main(cfg: DictConfig) -> None:
     splitter.count_for_split_per_zone()
     print('Visualize...')
     splitter.visualize_split()
-    print('Sample subset...')
-    splitter.sample_subset(frac=cfg.subset_frac)
+    print('Split h5 files...')
+    splitter.split_h5('~/data/GEDI/', splitter.save_dir)
+    # print('Sample subset...')
+    # splitter.sample_subset(frac=cfg.subset_frac)
 
     print(f'time taken: {time.time() - t0}')
     client.close()
