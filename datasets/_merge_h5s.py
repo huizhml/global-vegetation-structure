@@ -1,8 +1,11 @@
 from pathlib import Path
-import seaborn as sns
 import h5py
+from dataclasses import dataclass, field
+import hydra
+from hydra.core.config_store import ConfigStore
+from omegaconf import DictConfig
 
-def merge_all_zones(h5_dir:str='~/data/GEDI', merged_h5_file:str='~/data/GVS.h5'):
+def merge_all_zones(h5_dir:str='~/data/GEDI', merged_h5_file:str='~/data/GVS.h5', **kwargs):
     """
     Merge all zones in h5_dir into a single h5 file.
     """
@@ -67,12 +70,12 @@ def append_to_dataset(dataset, data):
     dataset.resize(len(dataset) + len(data), axis=0)
     dataset[-len(data):] = data
 
-def merge_partitions(zone='02K', h5_dir='~/data/GEDI'):
+def merge_partitions(zone='02K', h5_dir='~/data/GEDI', h5_out_dir: str=None, **kwargs):
     """
     Merge all zones in h5_dir into a single h5 file.
     """
     h5_dir = Path(h5_dir).expanduser()
-    out_h5 = Path(f'~/flash/data/{zone}.h5').expanduser()
+    out_h5 = Path(f'{h5_out_dir}/{zone}.h5').expanduser()
 
     with h5py.File(out_h5, 'w') as h5_out:
         datasets = []
@@ -96,6 +99,25 @@ def merge_partitions(zone='02K', h5_dir='~/data/GEDI'):
                         append_to_dataset(dst, src)
 
 
+@dataclass
+class MyConfig:
+    h5_dir: str = '~/data/split_test0.1_cal0.1_val0.1_seed42/train_h5s'
+    merged_h5_file: str = '~/flash/data/train.h5'
+    h5_out_dir: str = '~/flash/data/h5s_no_partitions'
+    zone: str = '37N'
+    functions: list = field(default_factory=lambda: ['merge_all_zones'])
+
+cs = ConfigStore.instance()
+cs.store(name="config", node=MyConfig)
+
+
+@hydra.main(config_name='config', version_base='1.2')
+def main(cfg: DictConfig):
+    functions = cfg.functions
+    for func in functions:
+        if func in globals():
+            globals()[func](**cfg)
+
 if __name__ == '__main__':
-    # merge_all_zones(merged_h5_file='~/flash/data/GVS.h5')
-    merge_partitions(zone='37N')
+    main()
+    
