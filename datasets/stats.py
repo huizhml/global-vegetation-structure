@@ -19,7 +19,6 @@ import seaborn as sns
 import dask.bag as db
 import dask.array as da
 from dask.utils import natural_sort_key
-import xarray as xr
 import dask.dataframe as dd
 from datatree.io import _iter_nc_groups
 from h5netcdf.legacyapi import Dataset as h5Dataset
@@ -58,6 +57,7 @@ class Stats:
         self.h5_dir = Path(h5_dir).expanduser()
         # self.index_dir = Path(index_dir).expanduser()
         self.save_dir = Path(save_dir).expanduser()
+        self.save_dir.mkdir(parents=True, exist_ok=True)
 
     def plot_sample_map(self, mgrs_file:str='~/scratch/sample_stats.parquet'):
         if os.path.exists(mgrs_file):
@@ -154,9 +154,10 @@ class Stats:
         mgrs_df.to_parquet('~/scratch/sample_stats.parquet')
         return mgrs_df
         
-    def get_rh(self, group, zone, rh_id):
+    def _get_rh(self, group, rh_id):
         group.sort_values('in_partition_idx', inplace=True)
         idx = group['in_partition_idx'].to_list()
+        zone = group.name[1:4]
         with h5py.File(self.h5_dir/f'{zone}.h5') as h5_file:
             data = h5_file[f'{group.name[4:]}/rhs'][idx, rh_id]
         data = pd.DataFrame(data, columns=[f'rh_{rh_id}'], index=group.index)
@@ -165,15 +166,14 @@ class Stats:
     
     def _agg_rhs_per_zone(self, index_df, rh_id, partition_info:dict=None):
         part_idx = partition_info['number']
-        zone = os.path.basename(self.index_df_files[part_idx]).split('.')[0]
         # h5_file = h5py.File(self.h5_dir/f'{zone}.h5')
+        index_df = index_df.reset_index(drop=True)
         ddf = dd.from_pandas(index_df, npartitions=8)
 
         
         meta = {'path': str, 'in_partition_idx': int, f'rh_{rh_id}': float}
-        ddf = ddf.groupby('path').apply(self.get_rh, zone, rh_id, meta=meta).compute()
-        
-        print('finish zone: ', zone)
+        ddf = ddf.groupby('path').apply(self._get_rh, rh_id, meta=meta).compute()
+        print('finish partition: ', part_idx)
         # print(ddf)
         ddf = ddf.reset_index(1).set_index('level_1')
         ddf = ddf.drop(columns=['path', 'in_partition_idx'])
@@ -182,9 +182,44 @@ class Stats:
         # h5_file.close()
         return index_df
 
+    def plot_boxplots(self, splits: Iterable=None, **kwargs):
+        """
+        Using bootstrap method to plot the boxplot of the relative heights.
+        Extracts the relative heights from the h5 files and saves them as parquet files.
+        Then plots the boxplot/violin plot of the relative heights.
 
+        """
+        import time
+        from dask.distributed import Client, LocalCluster
+        cluster = LocalCluster()
+        client = Client(cluster)
+        print(client)
+        for split in splits:
+            print(split)          
+            if exists := os.path.exists(f'{str(self.save_dir)}/boxplot_stats_rhs_{split}.json'):
+                print('loading RHs from json')
+                with open(f'boxplot_stats_rhs_{split}.json', 'r') as f:
+                    stats = json.load(f)
+            else:
+                data_dir = f'{str(self.save_dir)}/index_table_{split}'
+                index_df_files = [f"{data_dir}/{f}" for f in os.listdir(data_dir)]
+                self.index_df_files = sorted(index_df_files, key=natural_sort_key)
+                index_df = dd.read_parquet(self.index_df_files, columns=['path', 'in_partition_idx'], aggregate_files=False)
 
-    def boxplot(self, splits: Iterable=None, h5_fp=None):
+                stats = []
+                for i in range(101):
+                    meta = {'path': str, 'in_partition_idx': int, f'rh_{i}': float}
+                    rhs = index_df.map_partitions(self._agg_rhs_per_zone, rh_id=i, meta=meta).compute()
+                    rhs = rhs.dropna()
+                    rhs = rhs.drop(columns=['path', 'in_partition_idx'])
+                    stats.extend(cbook.boxplot_stats(rhs, labels=[f'rh_{i}']))
+                with open(f'boxplot_stats_rhs_{split}.json', 'w') as f:
+                    json.dump(stats, f)
+            fig, ax = plt.subplots()
+            ax.bxp(stats, patch_artist=True, boxprops={'facecolor': 'bisque'})
+            plt.savefig(f'{self.save_dir}/RHs_boxplot_{split}.png')
+
+    def plot_violins(self, splits: Iterable=None, **kwargs):
         """
         Using bootstrap method to plot the boxplot of the relative heights.
         Extracts the relative heights from the h5 files and saves them as parquet files.
@@ -206,10 +241,10 @@ class Stats:
             else:
                 data_dir = f'{str(self.save_dir)}/index_table_{split}'
                 index_df_files = [f"{data_dir}/{f}" for f in os.listdir(data_dir)]
-                self.index_df_files = sorted(index_df_files, key=natural_sort_key) #TODO: for testing
+                self.index_df_files = sorted(index_df_files, key=natural_sort_key)
                 index_df = dd.read_parquet(self.index_df_files, columns=['path', 'in_partition_idx'])
 
-                for i in range(101):
+                for i in range(101): # not enough RAM for aggragating 101 RHs all at once
                     meta = {'path': str, 'in_partition_idx': int, f'rh_{i}': float}
                     rhs = index_df.map_partitions(self._agg_rhs_per_zone, rh_id=i, meta=meta).compute()
                     rhs = rhs.dropna()
@@ -337,13 +372,19 @@ def get_violin_stats(ax):
     return df
 
 def plot_from_violin_stats(df):
-        # Create a new figure
     fig, ax = plt.subplots()
 
     # Plot each violin body using the saved data
     for i in df['violin'].unique():
         subset = df[df['violin'] == i]
-        ax.fill(subset['x'], subset['y'], alpha=0.3, label=f'Violin {i+1}')
+        ax.fill(subset['x'], subset['y'], alpha=0.8, color=sns.color_palette("deep")[0], edgecolor="black", linewidth=1)
+
+    # Match the Seaborn axis and grid style
+    sns.despine(left=True)
+    ax.set_axisbelow(True)
+    ax.yaxis.grid(True, color='gray', linestyle='dashed', linewidth=0.5)
+    ax.xaxis.grid(False)
+
     return ax
 
 @dataclass
@@ -373,11 +414,9 @@ def main(cfg: DictConfig) -> None:
 
     t0 = time.time()
     stats = Stats(cfg.h5_dir, cfg.save_dir)
-    if cfg.task == 'histogram':
-        stats.plot_histgram(cfg.splits)
-    elif cfg.task == 'boxplot':
-        h5_fp = Path('~/flash/data/GVS.h5').expanduser()
-        stats.boxplot(cfg.splits, h5_fp=h5_fp)
+    if hasattr(stats, cfg.task):
+        getattr(stats, cfg.task)(cfg.splits)
+
 
     print(f'time taken: {time.time() - t0}')
     # client.close()
