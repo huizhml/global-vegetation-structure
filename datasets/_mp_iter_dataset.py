@@ -13,7 +13,7 @@ from tqdm import tqdm
 
 
 @contextmanager
-def get_semaphore(semaphore: Semaphore, block: bool = True, timeout: float = None):
+def get_semaphore(semaphore: Semaphore, block: bool = True, timeout: float = None): # type: ignore
     held = semaphore.acquire(block=block, timeout=timeout)
     try:
         yield held
@@ -78,8 +78,8 @@ def get_node_key(node, idx, group):
 
 
 # Worker process to fill the queue with random samples
-def worker(file_list: List[str], queue_list: List[Queue], semaphore_list: List[Semaphore],
-           done_event: Event, seed: int, tree_list: List[List], num_tree_samples_list: List[int]):
+def worker(file_list: List[str], queue_list: List[Queue], semaphore_list: List[Semaphore], # type: ignore
+           done_event: Event, seed: int, tree_list: List[List], num_tree_samples_list: List[int]): # type: ignore
     rs = np.random.RandomState(seed=seed)
     with open_files(file_list) as f_list:
         while not done_event.is_set():  # only until we get the done event
@@ -188,7 +188,7 @@ class IterH5Dataset(IterableDataset):
 
         self.processes = []
         self.queues = []
-        self.done_event: Event = Event()
+        self.done_event: Event = Event() # type: ignore
         if seed is None:
             # use current time as seed
             seed = time.time()

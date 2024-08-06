@@ -1,5 +1,6 @@
 import logging
 import wandb
+wandb.require('core')
 import argparse
 import lightning.pytorch as pl
 from lightning.pytorch.cli import LightningCLI, SaveConfigCallback

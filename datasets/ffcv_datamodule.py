@@ -52,10 +52,13 @@ class FFCVDataModel(L.LightningDataModule):
         return loader
 
 
-    # def val_dataloader(self):
-    #     return Loader(self.val_fp, batch_size=self.batch_size, num_workers=self.num_workers,
-    #             distributed=self.distributed, batches_ahead=self.batches_ahead,
-    #             order=OrderOption.SEQUENTIAL, os_cache=self.os_cache)
+    def val_dataloader(self):
+        t0 = time.time()
+        loader = Loader(self.val_fp, batch_size=self.batch_size, num_workers=self.num_workers,
+                distributed=self.distributed, batches_ahead=self.batches_ahead,
+                order=OrderOption.SEQUENTIAL, os_cache=self.os_cache)
+        print('time taken for val dataloader: ', time.time()-t0)
+        return loader
 
     # def test_dataloader(self):
     #     return Loader(self.test_fp, batch_size=self.batch_size, num_workers=self.num_workers,

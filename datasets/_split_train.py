@@ -3,7 +3,7 @@ from typing import List, Iterable
 from pathlib import Path
 from ffcv.writer import DatasetWriter
 from ffcv.fields import NDArrayField, IntField, FloatField
-from datasets.s2 import S2Dataset
+from datasets._h5_dataset import S2Dataset
 import random
 import geopandas as gpd
 import numpy as np
@@ -72,7 +72,7 @@ def main(cfg: DictConfig):
             print("Skipping", out_file)
             continue
 
-        index_ = gpd.read_parquet(index_dir / f'train{split}.parquet')
+        index_ = gpd.read_parquet(splited_idx_dir / f'train{split}.parquet')
         dataset = S2Dataset(h5_file, index_)
         write_beton(out_file, dataset, shuffle_indices=cfg.shuffle_indices)
     

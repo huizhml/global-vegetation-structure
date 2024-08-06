@@ -2,7 +2,7 @@ from typing import List, Iterable
 from pathlib import Path
 from ffcv.writer import DatasetWriter
 from ffcv.fields import NDArrayField, IntField, FloatField
-from datasets.s2 import S2Dataset
+from datasets._h5_dataset import S2Dataset
 import pandas as pd
 import numpy as np
 import dask.dataframe as dd
