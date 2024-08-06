@@ -10,20 +10,16 @@ optimizer:
 #     step_size: 10
 
 data:
-  class_path: datasets._pl_datamodule.PLDataModel
+  class_path: datasets.iter_datamodule.MPIterDataModel
   init_args: 
-    train_fp: ~/flash/data/val.beton
-    val_fp: ~/flash/data/val.beton
-    # test_ratio: 0.1
-    # cal_ratio: 0.1
-    # val_ratio: 0.1
-    # random_state: 42
+    train_fp: ~/flash/data/train_h5s
+    val_fp: ~/flash/data/val_h5s
+    train_index_folder: ~/data/index_trees_train
+    val_index_folder: ~/data/index_trees_val
+    num_jobs: 56
+    num_samples: 2e10
     batches_ahead: 3
-    batch_size: 512 # per device
-    num_workers: 32 # per device
-    pin_memory: True
-    shuffle: False
-    drop_last: False
+    batch_size: 1024 # per device
 
 model:
   class_path: models.pl_model.UNet

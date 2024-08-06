@@ -1,7 +1,8 @@
 from typing import List
 import torch.nn as nn
 from models.modules.base import BaseModule
-from models.modules.util import ConvNormActivation, get_class
+from models.modules.util import ConvNormActivation
+from utils import get_class
 
 __all__ = ['StandardNet', 'standard']
 

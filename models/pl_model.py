@@ -1,10 +1,11 @@
 import torch
 import torch.nn as nn
-from typing import Any, Mapping
+from typing import Any
 import lightning as L
 
 from .modules.unet_blocks import UnetBlockDeep, CatResBlock, PassBlock, get_upscaler
-from .modules.util import CustomPixelShuffle_ICNR, icnr_init, get_class
+from .modules.util import CustomPixelShuffle_ICNR, icnr_init
+from utils import get_class
 
 class UNet(L.LightningModule):
 
@@ -155,7 +156,7 @@ class UNet(L.LightningModule):
         y_hat = self.yhat_trasform(y_hat) # for outputing delta RHs
         losses = self.loss(y_hat, y, var)
         for name, loss in losses.items():
-            self.log(f'train_{name}', loss, on_epoch=True, on_step=False)
+            self.log(f'train_{name}', loss, on_epoch=True, on_step=False, sync_dist=True)
         return {'loss': losses['loss'], 'pred': y_hat, 'target': y}
 
     def validation_step(self, sample, batch_idx):
@@ -168,6 +169,6 @@ class UNet(L.LightningModule):
         y_hat = self.yhat_trasform(y_hat) # for outputing delta RHs
         losses = self.loss(y_hat, y, var)
         for name, loss in losses.items():
-            self.log(f'val_{name}', loss, on_epoch=True, on_step=False)
+            self.log(f'val_{name}', loss, on_epoch=True, on_step=False, sync_dist=True)
         
         return {'loss': losses['loss'], 'pred': y_hat, 'target': y}

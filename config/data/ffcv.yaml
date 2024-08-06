@@ -1,0 +1,10 @@
+class_path: datasets.ffcv_datamodule.FFCVDataModel
+init_args: 
+  train_fp: ~/flash/data/
+  val_fp: ~/flash/data/
+  num_workers: 2
+  batches_ahead: 3
+  batch_size: 1024 # per device
+  order: QUASI_RANDOM
+  os_cache: False
+  distributed: False

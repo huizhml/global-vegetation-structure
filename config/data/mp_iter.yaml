@@ -1,0 +1,10 @@
+class_path: datasets.iter_datamodule.MPIterDataModel
+init_args: 
+  train_fp: ~/data/split_test0.1_cal0.1_val0.1_seed42/train_h5s
+  val_fp: ~/flash/data/val_h5s
+  train_index_folder: ~/data/index_trees_train
+  val_index_folder: ~/data/index_trees_val
+  num_jobs: 112
+  num_samples: 2e10
+  batches_ahead: 3
+  batch_size: 8192 # per device

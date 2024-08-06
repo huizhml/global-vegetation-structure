@@ -25,11 +25,7 @@ class Mish(nn.Module):
     def forward(self, x):
         return mish(x)
 
-def get_class(name):
-    class_module, class_name = name.rsplit(".", 1)
-    module = __import__(class_module, fromlist=[class_name])
-    args_class = getattr(module, class_name)
-    return args_class
+
 
 
 def get_act(name, inplace=True):
