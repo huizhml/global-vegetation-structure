@@ -31,7 +31,7 @@ class S2Dataset(Dataset):
         
         row = self.index_table.iloc[idx]
         image = self.h5_file[f'{row.path}/image'][row.in_partition_idx]
-        image = image.astype(np.int16)
+        # image = image.astype(np.int16)
         wc = image[13, 7, 7]
         image = image[:12]
         label = self.h5_file[f'{row.path}/rhs'][row.in_partition_idx]
