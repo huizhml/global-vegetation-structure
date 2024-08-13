@@ -130,7 +130,24 @@ class Stats:
                 plt.tight_layout()
                 plt.savefig(f'outputs/{titles[r]}_{year}.png', dpi=300, bbox_inches='tight', transparent=False)
 
+    def _check_s2_values(self, h5_file):
+        print('checking file: ', h5_file)
+        with h5Dataset(h5_file, mode='r') as ncds:
+            with h5py.File(h5_file) as data:
+                for group in _iter_nc_groups(ncds):
+                    if len(group.split('/')) == 3:
+                        img = data[f'{group}/image'][:]
+                        if (img<0).any():
+                            print(group)
+                            print(img.min())
 
+    def check_s2_values(self, h5_dir:str='~/data/GEDI'):
+        h5_dir = Path(h5_dir).expanduser()
+        h5_files = h5_dir.glob('*.h5')
+        h5_db = db.from_sequence(h5_files, npartitions=16)
+        h5_db.map(self._check_s2_values).compute()
+
+    
     def sample_stats(self, index_table:str='~/scratch/data/index_table', mgrs_file:str='~/scratch/mgrs_with_nbest_v2.parquet'):
         from dask.distributed import Client, LocalCluster
         cluster = LocalCluster()
@@ -168,27 +185,28 @@ class Stats:
         part_idx = partition_info['number']
         # h5_file = h5py.File(self.h5_dir/f'{zone}.h5')
         index_df = index_df.reset_index(drop=True)
-        ddf = dd.from_pandas(index_df, npartitions=8)
-
+        # ddf = dd.from_pandas(index_df, npartitions=8)
         
         meta = {'path': str, 'in_partition_idx': int, f'rh_{rh_id}': float}
-        ddf = ddf.groupby('path').apply(self._get_rh, rh_id, meta=meta).compute()
+        ddf = index_df.groupby('path').apply(self._get_rh, rh_id, include_groups=False)
+        # ddf = ddf.groupby('path').apply(self._get_rh, rh_id, meta=meta).compute()
         print('finish partition: ', part_idx)
         # print(ddf)
         ddf = ddf.reset_index(1).set_index('level_1')
-        ddf = ddf.drop(columns=['path', 'in_partition_idx'])
+        ddf = ddf.drop(columns=['in_partition_idx'])
         index_df = pd.concat([index_df, ddf], axis=1)
 
         # h5_file.close()
         return index_df
 
-    def plot_boxplots(self, splits: Iterable=None, **kwargs):
+    def plot_boxplots(self, splits: Iterable=None, boxplot_dir: str=None, **kwargs):
         """
         Using bootstrap method to plot the boxplot of the relative heights.
         Extracts the relative heights from the h5 files and saves them as parquet files.
         Then plots the boxplot/violin plot of the relative heights.
 
         """
+        boxplot_dir = Path(boxplot_dir).expanduser()
         import time
         from dask.distributed import Client, LocalCluster
         cluster = LocalCluster()
@@ -213,11 +231,24 @@ class Stats:
                     rhs = rhs.dropna()
                     rhs = rhs.drop(columns=['path', 'in_partition_idx'])
                     stats.extend(cbook.boxplot_stats(rhs, labels=[f'rh_{i}']))
-                with open(f'boxplot_stats_rhs_{split}.json', 'w') as f:
-                    json.dump(stats, f)
+                    print(f'finish rh_{i}\n', stats)
+                    file = boxplot_dir/f'boxplot_stats_rhs_{split}.json'
+                    if file.exists():
+                        with open(file, 'r+') as f:
+                            old = json.load(f)
+                            old.extend(stats)
+                            # Move the file pointer to the beginning
+                            f.seek(0)
+                            # Write the new data, overwriting the old content
+                            json.dump(old, f, indent=4, default=convert_to_serializable)
+                            # Truncate the file to remove any leftover old content
+                            f.truncate()
+                    else:
+                        with open(file, 'w') as f:
+                            json.dump(stats, f, indent=4, default=convert_to_serializable)
             fig, ax = plt.subplots()
             ax.bxp(stats, patch_artist=True, boxprops={'facecolor': 'bisque'})
-            plt.savefig(f'{self.save_dir}/RHs_boxplot_{split}.png')
+            plt.savefig(f'{boxplot_dir}/RHs_boxplot_{split}.png')
 
     def plot_violins(self, splits: Iterable=None, **kwargs):
         """
@@ -357,7 +388,14 @@ class Stats:
         #                     slic = hist_params[m.name]['slices']
         #                     m.update(data[f'{group}/{m.name}'][slic])                                                
         return metrics
-    
+
+def convert_to_serializable(obj):
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()  # Convert the numpy array to a list
+    if isinstance(obj, np.float32):
+        return float(obj)  # Convert float32 to Python float
+    raise TypeError(f"Object of type {type(obj)} is not JSON serializable") 
+
 def get_violin_stats(ax):
     # Extract data from the violin plot
     violin_data = []
@@ -398,24 +436,15 @@ class MyConfig:
 cs = ConfigStore.instance()
 cs.store(name="my_config", node=MyConfig)
 
-@hydra.main(config_name="my_config")
+@hydra.main(config_name="my_config", version_base="1.2")
 def main(cfg: DictConfig) -> None:
-    # # str path to Path
-    # for value in cfg.values():
-    #     if isinstance(value, str) and (value.startswith('~/') or value.startswith('/')):
-    #         value = Path(value).expanduser()
-
-    # from dask.distributed import Client, LocalCluster
+    print(cfg)
     import time
-    # cluster = LocalCluster()
-    # client = Client(cluster)
-
-    # print(client)
-
     t0 = time.time()
     stats = Stats(cfg.h5_dir, cfg.save_dir)
+    # stats.check_s2_values(cfg.h5_dir)
     if hasattr(stats, cfg.task):
-        getattr(stats, cfg.task)(cfg.splits)
+        getattr(stats, cfg.task)(**cfg)
 
 
     print(f'time taken: {time.time() - t0}')
