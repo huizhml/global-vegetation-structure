@@ -3,6 +3,9 @@ import logging
 from pathlib import Path
 import lightning as L
 from ffcv.loader import Loader, OrderOption
+from tqdm import tqdm
+
+from datasets.stats import AverageMeter
 
 logger = logging.getLogger(__name__)
 
@@ -37,15 +40,10 @@ class FFCVDataModel(L.LightningDataModule):
                     
 
     def train_dataloader(self):
-        if isinstance(self.train_fp, list):
-            idx = self.trainer.current_epoch // self.trainer.reload_dataloaders_every_n_epochs # train each subset 5 epochs and then switch
-            train_fp = self.train_fp[idx] if isinstance(self.train_fp, list) else self.train_fp
-        else:
-            train_fp = self.train_fp
-        print('loading from ', train_fp)
+        print('loading from ', self.train_fp)
 
         t0 = time.time()
-        loader = Loader(train_fp, batch_size=self.batch_size, num_workers=self.num_workers,
+        loader = Loader(self.train_fp, batch_size=self.batch_size, num_workers=self.num_workers,
                 distributed=self.distributed, batches_ahead=self.batches_ahead,
                 order=self.order, os_cache=self.os_cache)
         print('time taken: ', time.time()-t0)
@@ -65,31 +63,58 @@ class FFCVDataModel(L.LightningDataModule):
     #             distributed=self.distributed, batches_ahead=self.batches_ahead,
     #             order=OrderOption.SEQUENTIAL, os_cache=self.os_cache)
     
+class RunningStats:
+    def __init__(self):
+        self.n = 0
+        self.sum = 0.0
+
+    def update(self, x):
+        self.n += x.shape[0]
+        self.sum += x.sum(axis=(0, 2, 3))
+
+    def mean(self):
+        return self.sum / self.n / 225
+    
+    def std(self):
+        return (self.sum  / (self.n*225 - 1)).sqrt()
+
+    def count(self):
+        return self.n
+    
+    def clear(self):
+        self.n = 0
+        self.sum = 0.0
+
+    def __repr__(self):
+        return f'mean: {self.mean()}, std: {self.std()}, count: {self.count()}'
+
+def get_mean_std(dataloader):
+    stats = RunningStats()
+    for i, batch in tqdm(enumerate(dataloader)):
+        if (batch[0]<0).any():
+            print('negative values found')
+            print(i)
+            print(batch[0].min())
+            print(batch[-1])
+            import ipdb; ipdb.set_trace()
+        stats.update(batch[0]/1e4)
+    mean = stats.mean() 
+    print('mean: ', mean * 1e4)
+    stats.clear()
+
+    for batch in tqdm(dataloader):
+        mse = (batch[0]/1e4 - mean[None, :, None, None]) ** 2
+        stats.update(mse)
+    print('std: ', stats.std()*1e4)
 
 if __name__ == '__main__':
     import hydra
     @hydra.main(config_name='train', config_path='../config', version_base='1.2')
     def main(cfg):
         datamodel = FFCVDataModel(**cfg.data.init_args)
-        datamodel.setup('fit')
         # import ipdb; ipdb.set_trace()
         dataloader = datamodel.train_dataloader()
-        n = len(datamodel.train_dataset)
-        print('starting')
-        import time
-        t0 = time.time()
-        # for i in range(n):
-        #     data = datamodel.train_dataset[i]
-        #     print(i)
-        # print('----------------------------------------------------------')
-        
-        for i, (img, label, wc, slope) in enumerate(datamodel.train_dataloader()):
-            print(i)
-        print('----------------------------------------------------------')
-        print('time taken: ', time.time()-t0)
-        print(len(datamodel.train_dataset))
-        # for img, label, wc, slope in datamodel.train_dataloader():
-        #     continue
+        get_mean_std(dataloader)
 
     main()
     
