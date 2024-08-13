@@ -1,10 +1,16 @@
+from multiprocessing import Process, Queue, Value
+import ctypes
 import os
+from time import sleep
 from typing import List, Iterable
 from pathlib import Path
+from ffcv.memory_allocator import MemoryAllocator
 from ffcv.writer import DatasetWriter
 from ffcv.fields import NDArrayField, IntField, FloatField
+from tqdm import tqdm
 from datasets._h5_dataset import S2Dataset
 import random
+import pandas as pd
 import geopandas as gpd
 import numpy as np
 import dask_geopandas as dgp
@@ -13,18 +19,73 @@ import hydra
 from hydra.core.config_store import ConfigStore
 from omegaconf import DictConfig
 
+class MyDatasetWriter(DatasetWriter):
 
-@dataclass
-class MyConfig:
-    index_table: str = '~/data/split_test0.1_cal0.1_val0.1_seed42/index_table_train'
-    h5_file: str = '~/scratch/data/GVS.h5'
-    out_dir: str = '~/flash/data'
-    nsplit: int= 10
-    seed: int = 42
-    shuffle_indices: bool = False
+    def _write_common(self, num_samples, queue_content, work_fn, extra_worker_args):
+        self.num_samples = num_samples
 
-cs = ConfigStore.instance()
-cs.store(name="config", node=MyConfig)
+        self.prepare()
+        allocation_list = []
+
+        # Makes a memmap to the metadata for the samples
+
+        # We publish all the work that has to be done into a queue
+        workqueue: Queue = Queue()
+        for todo in queue_content:
+            workqueue.put(todo)
+
+        # This will contain all the memory allocations each worker
+        # produced. This will go at the end of the file
+        allocations_queue: Queue = Queue()
+
+        # We add a token for each worker to warn them that there
+        # is no more work to be done
+        for _ in range(self.num_workers):
+            workqueue.put(None)
+
+        # Define counters we need to orchestrate the workers
+        done_number = Value(ctypes.c_uint64, 0)
+        allocator = MemoryAllocator(self.fname,
+                                    self.data_region_start,
+                                    self.page_size)
+
+        # Arguments that have to be passed to the workers
+        worker_args = (workqueue, self.metadata_sm,
+                       self.metadata_type, self.fields,
+                       allocator, done_number,
+                       allocations_queue, *extra_worker_args)
+
+        # Create the workers
+        processes = [Process(target=work_fn, args=worker_args)
+                     for _ in range(self.num_workers)]
+        # start the workers
+        for p in processes: p.start()
+        # Wait for all the workers to be done
+
+        # Display progress
+        progress = tqdm(total=self.num_samples)
+        previous = 0
+        while previous != self.num_samples:
+            val = done_number.value
+            diff = val - previous
+            if diff > 0:
+                progress.update(diff)
+            previous = val
+            sleep(0.1)
+        progress.close()
+
+        # Wait for all the workers to be done and get their allocations
+        for p in processes:
+            content = allocations_queue.get()
+            allocation_list.extend(content)
+
+        self.finalize(allocation_list)
+        self.metadata_sm.close()
+        try:
+            self.metadata_sm.unlink()
+        except FileNotFoundError:
+            print("file not found")
+
 
 def split_index_table(nsplit, out_dir, index_table_fp):
     index_table = dgp.read_parquet(index_table_fp, gather_spatial_partitions=False).sample(frac=1).compute()
@@ -40,7 +101,7 @@ def write_beton(out_file, dataset, shuffle_indices=False):
     
     # Pass a type for each data field
     print("Writing dataset to", out_file)
-    writer = DatasetWriter(out_file, {
+    writer = MyDatasetWriter(out_file, {
         # Tune options to optimize dataset size, throughput at train-time
         'image': NDArrayField(dtype=np.dtype("int16"), shape=(12, 15, 15)),
         'rhs': NDArrayField(dtype=np.dtype("float32"), shape=(101,)),
@@ -52,8 +113,22 @@ def write_beton(out_file, dataset, shuffle_indices=False):
     # Write dataset
     writer.from_indexed_dataset(dataset, shuffle_indices=shuffle_indices)
 
-@hydra.main(config_name='config')
+@dataclass
+class MyConfig:
+    index_table: str = '~/data/split_test0.1_cal0.1_val0.1_seed42/index_table_train'
+    h5_file: str = '~/scratch/data/GVS.h5'
+    out_dir: str = '~/scratch/data'
+    nsplit: int= 10
+    split_idx: int = 0
+    seed: int = 42
+    shuffle_indices: bool = False
+
+cs = ConfigStore.instance()
+cs.store(name="config", node=MyConfig)
+
+@hydra.main(config_name='config', version_base="1.2")
 def main(cfg: DictConfig):
+    print(cfg)
     random.seed(cfg.seed)
     np.random.seed(cfg.seed)
     h5_file = Path(cfg.h5_file).expanduser()
@@ -66,16 +141,21 @@ def main(cfg: DictConfig):
         print('Re-splitting index table')
         split_index_table(cfg.nsplit, splited_idx_dir, index_dir/f'*.parquet')
     
-    for split in range(cfg.nsplit):
-        out_file = out_dir / f'train{split}.beton'
-        if out_file.exists():
-            print("Skipping", out_file)
-            continue
 
-        index_ = gpd.read_parquet(splited_idx_dir / f'train{split}.parquet')
-        dataset = S2Dataset(h5_file, index_)
-        write_beton(out_file, dataset, shuffle_indices=cfg.shuffle_indices)
-    
+    out_file = out_dir / f'train{cfg.split_idx}.beton'
+    if out_file.exists():
+        print("Skipping", out_file)
+        return
+
+
+    index_ = pd.read_parquet(splited_idx_dir / f'train{cfg.split_idx}.parquet', columns=['path', 'in_partition_idx'])
+    if cfg.get('debug', False):
+        index_ = index_.iloc[:100]
+    print('index table', len(index_))
+    dataset = S2Dataset(h5_file, index_)
+    write_beton(out_file, dataset, shuffle_indices=cfg.shuffle_indices)
+
 
 if __name__ == '__main__':
+    print('Running main')
     main()
