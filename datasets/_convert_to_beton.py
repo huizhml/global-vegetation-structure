@@ -17,7 +17,7 @@ class MyConfig:
     split_dir: str = '~/data/split_test0.1_cal0.1_val0.1_seed42'
     h5_file: str = '~/scratch/data/GVS.h5'
     out_dir: str = '~/flash/data'
-    splits: list = field(default_factory=lambda: ['train'])
+    splits: list = field(default_factory=lambda: ['test'])
 
 cs = ConfigStore.instance()
 cs.store(name="config", node=MyConfig)
@@ -37,7 +37,7 @@ def main(cfg: DictConfig):
         print("Writing dataset to", out_file)
         writer = DatasetWriter(out_file, {
             # Tune options to optimize dataset size, throughput at train-time
-            'image': NDArrayField(dtype=np.dtype("int16"), shape=input_shape),
+            'image': NDArrayField(dtype=np.dtype("uint16"), shape=input_shape),
             'rhs': NDArrayField(dtype=np.dtype("float32"), shape=(101,)),
             'wc': IntField(),
             'slope': FloatField(),
