@@ -222,21 +222,27 @@ class Stats:
                 data_dir = f'{str(self.save_dir)}/index_table_{split}'
                 index_df_files = [f"{data_dir}/{f}" for f in os.listdir(data_dir)]
                 self.index_df_files = sorted(index_df_files, key=natural_sort_key)
+                if kwargs.get('debug', False):
+                    self.index_df_files = self.index_df_files[:2]
                 index_df = dd.read_parquet(self.index_df_files, columns=['path', 'in_partition_idx'], aggregate_files=False)
 
-                stats = []
                 for i in range(101):
                     meta = {'path': str, 'in_partition_idx': int, f'rh_{i}': float}
                     rhs = index_df.map_partitions(self._agg_rhs_per_zone, rh_id=i, meta=meta).compute()
                     rhs = rhs.dropna()
                     rhs = rhs.drop(columns=['path', 'in_partition_idx'])
-                    stats.extend(cbook.boxplot_stats(rhs, labels=[f'rh_{i}']))
+                    # too many outliers, only keep the size of the outliers
+                    stats = cbook.boxplot_stats(rhs, labels=[f'rh_{i}'])
+                    stats = stats[0]
+                    stats['fliers'] = len(stats['fliers'])
+
                     print(f'finish rh_{i}\n', stats)
-                    file = boxplot_dir/f'boxplot_stats_rhs_{split}.json'
+                    breakpoint()
+                    file = boxplot_dir/f'boxplot_stats_rhs_{split}_.json'
                     if file.exists():
                         with open(file, 'r+') as f:
                             old = json.load(f)
-                            old.extend(stats)
+                            old.append(stats)
                             # Move the file pointer to the beginning
                             f.seek(0)
                             # Write the new data, overwriting the old content
