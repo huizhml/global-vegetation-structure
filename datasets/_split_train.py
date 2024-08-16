@@ -6,6 +6,7 @@ from typing import List, Iterable
 from pathlib import Path
 from ffcv.memory_allocator import MemoryAllocator
 from ffcv.writer import DatasetWriter
+from ffcv.loader import Loader, OrderOption
 from ffcv.fields import NDArrayField, IntField, FloatField
 from tqdm import tqdm
 from datasets._h5_dataset import S2Dataset
@@ -89,6 +90,7 @@ class MyDatasetWriter(DatasetWriter):
 
 def split_index_table(nsplit, out_dir, index_table_fp):
     index_table = dgp.read_parquet(index_table_fp, gather_spatial_partitions=False).sample(frac=1).compute()
+    index_table = index_table.sample(frac=1)
     N = len(index_table)
     n = N // nsplit
     for split in range(nsplit):
@@ -113,6 +115,60 @@ def write_beton(out_file, dataset, shuffle_indices=False):
     # Write dataset
     writer.from_indexed_dataset(dataset, shuffle_indices=shuffle_indices)
 
+def visualize_subset_distribution(index_table_fp):
+    import datashader as ds
+    import datashader.transfer_functions as tf
+    from datashader.utils import lnglat_to_meters
+    import matplotlib.pyplot as plt
+    import fsspec
+
+    print('Visualizing subset distribution, ', index_table_fp)
+    index_table = gpd.read_parquet(index_table_fp)
+    # Convert to a format suitable for Datashader
+    index_table = index_table.to_crs(epsg=3857)  # Convert to Web Mercator for better alignment
+    index_table['x'], index_table['y'] = index_table.geometry.x, index_table.geometry.y
+    # Create a Canvas object for rasterization
+    x_range = (-20037508.342789244, 20037508.342789244)
+    y_range = (-20037508.342789244, 20037508.342789244)
+    canvas = ds.Canvas(plot_width=1000, plot_height=1000, x_range=x_range, y_range=y_range)
+    # Rasterize the points
+    print('Rasterizing')
+    agg = canvas.points(index_table, 'x', 'y')
+    # Convert to an image
+    print('Converting to image')
+    img = tf.shade(agg, cmap=['lightblue', 'darkblue'])
+    # Display the image
+    print('Displaying')
+    pil_img = img.to_pil()
+
+    # countries_shp = Path('~/data/ne_110m_admin_0_countries/ne_110m_admin_0_countries.shp').expanduser()
+    # world = gpd.read_file(countries_shp)
+    # # Convert to a format suitable for Datashader
+    # world = world.to_crs(epsg=3857)  # Convert to Web Mercator for better alignment
+    # # Plot using Matplotlib
+    # fig, ax = plt.subplots(figsize=(30, 30))
+    # # Display the Datashader image
+    # print('Displaying image')
+    # ax.imshow(pil_img, extent=x_range + y_range)
+    # # Plot the world boundaries
+    # print('Plotting world boundaries')
+    # world.boundary.plot(ax=ax, linewidth=1, color='black')
+    # Save the combined image
+    print('Saving')
+    # plt.savefig(f'/users/zhanghui/data/distribution_{index_table_fp.stem}.png', dpi=300, bbox_inches='tight')
+    pil_img.save(f'outputs/distribution_{index_table_fp.stem}.png')
+
+
+def check_s2_value(train_fp: Path):
+    print('Checking values for ', train_fp)
+    loader = Loader(train_fp, batch_size=512, num_workers=16, order=OrderOption.SEQUENTIAL, os_cache=False)
+    for i, batch in tqdm(enumerate(loader)):
+        if batch[0].min() < 0:
+            print('negative values found')
+            print(i)
+            print(batch[0].min())
+            return
+        
 @dataclass
 class MyConfig:
     index_table: str = '~/data/split_test0.1_cal0.1_val0.1_seed42/index_table_train'
@@ -141,20 +197,17 @@ def main(cfg: DictConfig):
         print('Re-splitting index table')
         split_index_table(cfg.nsplit, splited_idx_dir, index_dir/f'*.parquet')
     
-
     out_file = out_dir / f'train{cfg.split_idx}.beton'
-    if out_file.exists():
-        print("Skipping", out_file)
-        return
-
-
-    index_ = pd.read_parquet(splited_idx_dir / f'train{cfg.split_idx}.parquet', columns=['path', 'in_partition_idx'])
-    if cfg.get('debug', False):
-        index_ = index_.iloc[:100]
-    print('index table', len(index_))
-    dataset = S2Dataset(h5_file, index_)
-    write_beton(out_file, dataset, shuffle_indices=cfg.shuffle_indices)
-
+    if not out_file.exists():
+        index_ = pd.read_parquet(splited_idx_dir / f'train{cfg.split_idx}.parquet', columns=['path', 'in_partition_idx'])
+        visualize_subset_distribution(splited_idx_dir / f'train{cfg.split_idx}.parquet')
+        if cfg.get('debug', False):
+            index_ = index_.iloc[:100]
+        print('index table', len(index_))
+        index_ = index_.sort_values('path')
+        dataset = S2Dataset(h5_file, index_)
+        write_beton(out_file, dataset, shuffle_indices=cfg.shuffle_indices)
+    check_s2_value(out_file)
 
 if __name__ == '__main__':
     print('Running main')
