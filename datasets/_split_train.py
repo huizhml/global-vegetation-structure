@@ -196,11 +196,11 @@ def main(cfg: DictConfig):
     if len(list(splited_idx_dir.glob('*.parquet'))) != cfg.nsplit:
         print('Re-splitting index table')
         split_index_table(cfg.nsplit, splited_idx_dir, index_dir/f'*.parquet')
+        visualize_subset_distribution(splited_idx_dir / f'train{cfg.split_idx}.parquet')
     
     out_file = out_dir / f'train{cfg.split_idx}.beton'
     if not out_file.exists():
         index_ = pd.read_parquet(splited_idx_dir / f'train{cfg.split_idx}.parquet', columns=['path', 'in_partition_idx'])
-        visualize_subset_distribution(splited_idx_dir / f'train{cfg.split_idx}.parquet')
         if cfg.get('debug', False):
             index_ = index_.iloc[:100]
         print('index table', len(index_))

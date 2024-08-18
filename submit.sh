@@ -3,7 +3,7 @@
 #SBATCH --partition=small
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=320GB
-#SBATCH --time=3-00:00:00
+#SBATCH --time=2-00:00:00
 #SBATCH --job-name=submit
 #SBATCH --output=./logs/%x-%A_%a.out
 #SBATCH --error=./logs/%x-%A_%a.err
@@ -31,7 +31,7 @@ nsplit=10
 debug=${2:-False}
 idx=$SLURM_ARRAY_TASK_ID
 echo split training data into $nsplit subsets, using FFCV
-python -m datasets._split_train nsplit=$nsplit split_idx=$idx shuffle_indices=True +debug=$debug;;
+python -m datasets._split_train nsplit=$nsplit split_idx=$idx shuffle_indices=False +debug=$debug;;
 
 3)
 echo aggregate RHs boxplot stats and visualize

@@ -237,7 +237,6 @@ class Stats:
                     stats['fliers'] = len(stats['fliers'])
 
                     print(f'finish rh_{i}\n', stats)
-                    breakpoint()
                     file = boxplot_dir/f'boxplot_stats_rhs_{split}_.json'
                     if file.exists():
                         with open(file, 'r+') as f:
@@ -251,7 +250,7 @@ class Stats:
                             f.truncate()
                     else:
                         with open(file, 'w') as f:
-                            json.dump(stats, f, indent=4, default=convert_to_serializable)
+                            json.dump([stats], f, indent=4, default=convert_to_serializable)
             fig, ax = plt.subplots()
             ax.bxp(stats, patch_artist=True, boxprops={'facecolor': 'bisque'})
             plt.savefig(f'{boxplot_dir}/RHs_boxplot_{split}.png')

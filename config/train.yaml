@@ -10,16 +10,16 @@ optimizer:
 #     step_size: 10
 
 data:
-  class_path: datasets.iter_datamodule.MPIterDataModel
+  class_path: datasets.ffcv_datamodule.FFCVDataModel
   init_args: 
-    train_fp: ~/flash/data/train_h5s
-    val_fp: ~/flash/data/val_h5s
-    train_index_folder: ~/data/index_trees_train
-    val_index_folder: ~/data/index_trees_val
-    num_jobs: 56
-    num_samples: 2e10
-    batches_ahead: 3
+    train_fp: ~/flash/data/val.beton
+    val_fp: ~/flash/data/val.beton
+    num_workers: 32
+    batches_ahead: 6
     batch_size: 1024 # per device
+    order: QUASI_RANDOM
+    os_cache: False
+    distributed: False
 
 model:
   class_path: models.pl_model.UNet
@@ -38,11 +38,11 @@ model:
     encoder:
       class_path: models.modules.standard.StandardNet
       init_args:
-        depths: [64,128,256,512]
+        depths: [512]
         initial_stride: 1
         norm_layer: torch.nn.BatchNorm2d
         block: models.modules.standard.DoubleConvSkip
-        kernal_sizes: [3, 1]
+        kernal_sizes: [1, 3, 1]
     mask_module: datasets.transforms.SlopeWCMask
     loss: models.losses.mse.MSELoss
     upsampling: nearest
@@ -60,9 +60,9 @@ trainer:
   # check_val_every_n_epoch: 10
   max_epochs: 100
   num_sanity_val_steps: 0
-  # fast_dev_run: 100
+  fast_dev_run: 10000
   # profiler: advanced
-  # profiler:
+  profiler: simple
   #   class_path: lightning.pytorch.profilers.PyTorchProfiler
   #   init_args:
   #     sort_by_key: self_cpu_memory_usage

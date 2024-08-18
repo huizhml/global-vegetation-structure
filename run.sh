@@ -76,23 +76,47 @@ singularity exec $SIF bash -c '$WITH_CONDA_VENV ;
             ';;
 2)
 echo running job 2 ;
-singularity exec $SIF bash -c '$WITH_CONDA_VENV ;
-            python run.py fit -c config/train.yaml -c config/train_model_rh.yaml \
-                --optimizer.class_path adabelief_pytorch.AdaBelief \
-                --optimizer.init_args.lr 1e-4 --optimizer.weight_decay 0.06 \
-                --trainer.logger.init_args.name model_rh_mse_hinge \
-                --model.init_args.loss models.losses.mse_hinge.MSEHinge
-            ';;
+echo using training subsets.;
+python run.py fit -c config/train.yaml --trainer.reload_dataloaders_every_n_epochs 2 \
+        --data.init_args.train_fp ~/flash/data
+
+echo using training subsets and multiple gpus.;
+python run.py fit -c config/train.yaml --trainer.reload_dataloaders_every_n_epochs 2 \
+        --data.init_args.train_fp ~/flash/data \
+        --data.init_args.distributed True \
+        --data.init_args.batch_size 64 --data.init_args.num_workers 4
+
 3)
 echo running job 3 ;
-singularity exec $SIF bash -c '$WITH_CONDA_VENV ;
-            python run.py fit -c config/train.yaml -c config/train_model_rh.yaml \
-                --optimizer.class_path adabelief_pytorch.AdaBelief \
-                --optimizer.init_args.lr 1e-4 --optimizer.weight_decay 0.06 \
-                --trainer.logger.init_args.name model_rh_mse
-            ';;
+echo using multiple GPUs;
+python run.py fit -c config/train.yaml --data.init_args.distributed True \
+        --data.init_args.batch_size 64 --data.init_args.num_workers 4 \
+
+
+# singularity exec $SIF bash -c '$WITH_CONDA_VENV ;
+#             python run.py fit -c config/train.yaml -c config/train_model_rh.yaml \
+#                 --optimizer.class_path adabelief_pytorch.AdaBelief \
+#                 --optimizer.init_args.lr 1e-4 --optimizer.weight_decay 0.06 \
+#                 --trainer.logger.init_args.name model_rh_mse
+#             ';;
 4)
 echo running job 4 ;
+train_fp=$1
+if ["$train_fp" == "~/flash/data/debug1.beton"]; then
+    echo debug AdaptiveRobustLoss;
+    python run.py fit -c config/train.yaml --data.init_args.train_fp $train_fp \
+        --data.init_args.val_fp $train_fp \
+        --data.init_args.batch_size 100 \
+        --model.init_args.loss models.losses.robust_loss.AdaptiveLossFunction \
+        --model.init_args.loss.init_args.num_dims 101
+else
+    echo train using AdaptiveRobustLoss;
+    python run.py fit -c config/train.yaml --data.init_args.train_fp ~/flash/data/train_h5s \
+        --model.init_args.loss models.losses.robust_loss.RobustLoss \
+        --model.init_args.loss.init_args.num_dms 101
+fi
+
+
 singularity exec $SIF bash -c '$WITH_CONDA_VENV ;
             python run.py fit -c config/train.yaml -c config/train_model_rh.yaml \
                 --optimizer.class_path adabelief_pytorch.AdaBelief \
@@ -110,7 +134,10 @@ singularity exec $SIF bash -c '$WITH_CONDA_VENV ;
                 --trainer.logger.init_args.name model_rh_GNL_hetero \
                 --model.init_args.loss models.losses.gaussian_nl.GNLLoss \
                 --model.init_args.out_channels 202
-            ';;      
+            ';;
+6) 
+echo running job 6;
+python run.py fit -c config/train.yaml ;;
 *)
 echo runnning nothing ;;
 esac
