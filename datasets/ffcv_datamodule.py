@@ -88,33 +88,54 @@ class RunningStats:
     def __repr__(self):
         return f'mean: {self.mean()}, std: {self.std()}, count: {self.count()}'
 
-def get_mean_std(dataloader):
+def get_mean_std(train_fps:str):
+    '''
+    Args:
+    -----
+    @train_fps: list of paths to training subsets
+    '''
+    import os
+    import glob
     stats = RunningStats()
-    for i, batch in tqdm(enumerate(dataloader)):
-        if (batch[0]<0).any():
-            print('negative values found')
-            print(i)
-            print(batch[0].min())
-            print(batch[-1])
-            import ipdb; ipdb.set_trace()
-        stats.update(batch[0]/1e4)
-    mean = stats.mean() 
-    print('mean: ', mean * 1e4)
+    train_fps = glob.glob(os.path.expanduser(train_fps))
+    for train_fp in train_fps:
+        print('loading from ', train_fp)
+        dataloader = Loader(train_fp, batch_size=4096, num_workers=4,
+                distributed=False, batches_ahead=3,
+                order=OrderOption.SEQUENTIAL, os_cache=False)
+        
+        for i, batch in tqdm(enumerate(dataloader)):
+            if (batch[0].float()>=65535).any():
+                print('negative values found, ', train_fp)
+                print(i)
+                print(batch[0].max())
+                print(batch[-1])
+                raise ValueError
+                # import ipdb; ipdb.set_trace()
+            stats.update(batch[0]/1e4)
+        print('mean: ', stats.mean() * 1e4)
+    avg = stats.mean() 
+    print('mean: ', avg * 1e4)
     stats.clear()
 
-    for batch in tqdm(dataloader):
-        mse = (batch[0]/1e4 - mean[None, :, None, None]) ** 2
-        stats.update(mse)
-    print('std: ', stats.std()*1e4)
+    for train_fp in train_fps:
+        print('loading from ', train_fp)
+        dataloader = Loader(train_fp, batch_size=4096, num_workers=4,
+                distributed=False, batches_ahead=3,
+                order=OrderOption.SEQUENTIAL, os_cache=False)
+        for batch in tqdm(dataloader):
+            mse = (batch[0]/1e4 - avg[None, :, None, None]) ** 2
+            stats.update(mse)
+        print('std: ', stats.std()*1e4)
 
 if __name__ == '__main__':
     import hydra
     @hydra.main(config_name='train', config_path='../config', version_base='1.2')
     def main(cfg):
-        datamodel = FFCVDataModel(**cfg.data.init_args)
+        # datamodel = FFCVDataModel(**cfg.data.init_args)
         # import ipdb; ipdb.set_trace()
-        dataloader = datamodel.train_dataloader()
-        get_mean_std(dataloader)
+        # dataloader = datamodel.train_dataloader()
+        get_mean_std(cfg.data.init_args.train_fp)
 
     main()
     
