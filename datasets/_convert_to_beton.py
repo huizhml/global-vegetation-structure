@@ -31,6 +31,10 @@ def main(cfg: DictConfig):
         index_table = split_dir/f'index_table_{split}/*.parquet'
         out_file = Path(cfg.out_dir).expanduser() / f'{split}.beton'
         index_table = dd.read_parquet(index_table).compute()
+        if split == 'val' and cfg.get('subset', False):
+            print("Subsetting validation set")
+            index_table = index_table.sample(frac=0.1)
+            index_table = index_table.sort_values('path')
         dataset = S2Dataset(h5_file, index_table)
         
         # Pass a type for each data field
