@@ -2,9 +2,10 @@ from typing import List
 import torch
 import torch.nn as nn
 from torch import Tensor
+from models.losses.base import Loss
 
 def multi_quantile_loss(preds, target, quantiles):
-
+# TOVERIFY
     # Convert quantiles to a tensor if it's a list
     if isinstance(quantiles, list):
         quantiles_tensor = torch.tensor(quantiles, device=preds.device).view(1, -1)
@@ -23,9 +24,9 @@ def multi_quantile_loss(preds, target, quantiles):
     return loss
 
 
-class GNLLoss(nn.Module):
+class QuantileLoss(Loss):
 
-    def __init__(self, *, quantiles: List[float] = False):
+    def __init__(self, *, quantiles: List[float] = False) -> None:
         super().__init__()
         if isinstance(quantiles, list):
             assert all(0 < q < 1 for q in quantiles), "Quantiles should be in (0, 1) range"
@@ -34,11 +35,7 @@ class GNLLoss(nn.Module):
         self.quantiles = quantiles
 
     def forward(self, y_hat, y) -> Tensor:
+        losses = super().forward(y_hat, y)
         loss = multi_quantile_loss(y_hat, y, self.quantiles)
-        var = torch.exp(var)
-        rmse = torch.sqrt(torch.mean((y_hat-y)**2))
-        loss = super().forward(y_hat, y, var)
-        return {
-            'loss': loss,
-            'rmse': rmse,
-        }
+        losses['loss'] = loss
+        return losses

@@ -8,9 +8,10 @@ import torch.nn as nn
 from robust_loss_pytorch import distribution
 from robust_loss_pytorch import util
 from robust_loss_pytorch import wavelet
+from models.losses.base import Loss
 
 
-class AdaptiveLossFunction(nn.Module):
+class AdaptiveLossFunction(Loss):
   """The adaptive loss function on a matrix. Modified from robust_loss_pytorch
 
   This class behaves differently from general.lossfun() and
@@ -32,7 +33,7 @@ class AdaptiveLossFunction(nn.Module):
 
   def __init__(self,
                num_dims,
-               float_dtype=torch.float32,
+               float_dtype='torch.float32',
                device:str='cuda:0',
                alpha_lo=0.001,
                alpha_hi=1.999,
@@ -98,9 +99,9 @@ class AdaptiveLossFunction(nn.Module):
           scale_init, scale_lo))
 
     self.num_dims = num_dims
-    if float_dtype == np.float32:
+    if 'float32' in float_dtype:
       float_dtype = torch.float32
-    if float_dtype == np.float64:
+    elif 'float64' in float_dtype:
       float_dtype = torch.float64
     self.float_dtype = float_dtype
     self.device = device
@@ -179,6 +180,6 @@ class AdaptiveLossFunction(nn.Module):
     assert x.shape[1] == self.num_dims
     assert x.dtype == self.float_dtype
     loss = self.distribution.nllfun(x, self.alpha(), self.scale(), **kwargs)
-    return {
-      "loss": torch.mean(loss)
-    }
+    losses = super().forward(output, target)
+    losses['loss'] = torch.mean(loss)
+    return losses
