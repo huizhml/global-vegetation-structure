@@ -237,39 +237,42 @@ class DataSplitter:
             f.write(f'Number of samples: {size}\n')
             f.write(f'Number of tiles: {n_tiles}\n')
 
-    def split_h5(self, h5_dir, split_dir):
-        
-        split_dir = Path(split_dir).expanduser()
-        h5_dir = Path(h5_dir).expanduser()
+def split_h5(h5_dir, index_dir, save_dir):
+    
+    index_dir = Path(index_dir).expanduser()
+    h5_dir = Path(h5_dir).expanduser()
+    save_dir = Path(save_dir).expanduser()
 
-        for name in ['train', 'cal', 'val', 'test']:
-            (split_dir / f'{name}_h5s').mkdir(exist_ok=True)
-        h5_files = h5_dir.glob('*.h5')
-        bg = db.from_sequence(h5_files, npartitions=16)
-        bg.map(self._split_h5_per_zone, split_dir).compute()
+    for name in ['train', 'cal', 'val', 'test']:
+        (save_dir / f'{name}_h5s').mkdir(exist_ok=True)
+    h5_files = h5_dir.glob('*.h5')
+    bg = db.from_sequence(h5_files, npartitions=16)
+    bg.map(_split_h5_per_zone, save_dir, index_dir).compute()
 
-    def _split_h5_per_zone(self, h5_in_fp, split_dir):
-        zone = h5_in_fp.stem
-        print('>>> Processing', h5_in_fp)
-        with h5py.File(h5_in_fp, 'r') as f:
-            for name in ['train', 'cal', 'val', 'test']:
-                h5_file = split_dir / f'{name}_h5s/{zone}.h5'
-                index_fp = split_dir / f'index_table_{name}' / f'{zone}.parquet'
-                if h5_file.exists() or not index_fp.exists():
-                    continue
-                df = gpd.read_parquet(split_dir / f'index_table_{name}' / f'{zone}.parquet')
-                with h5py.File(h5_file, 'w') as f_out:
-                    for path in df['path'].unique():
-                        idx = df[df['path']==path]['in_partition_idx'].unique()
-                        for name, config in dst_conf.items():
-                            data = f[f'{path[4:]}/{name}'][idx]
-                            f_out.create_dataset(f'{path[4:]}/{name}', 
-                                                    shape=data.shape, 
-                                                    chunks=(1,) +config['shape'], 
-                                                    dtype=config['dtype'],
-                                                    compression="gzip", #lzf
-                                                    compression_opts=7, 
-                                                    data=data)
+def _split_h5_per_zone(h5_in_fp, save_dir, index_dir):
+    zone = h5_in_fp.stem
+    print('>>> Processing', h5_in_fp)
+    with h5py.File(h5_in_fp, 'r') as f:
+        for name in ['train', 'val', 'cal', 'test']:
+            h5_file = save_dir / f'{name}_h5s/{zone}.h5'
+            index_fp = index_dir / f'index_table_{name}' / f'{zone}.parquet'
+            print(h5_file, index_fp)
+            print(index_fp.exists(), h5_file.exists())
+            if h5_file.exists() or not index_fp.exists():
+                continue
+            df = gpd.read_parquet(index_fp)
+            with h5py.File(h5_file, 'w') as f_out:
+                for path in df['path'].unique():
+                    idx = df[df['path']==path]['in_partition_idx'].unique()
+                    for name, config in dst_conf.items():
+                        data = f[f'{path[4:]}/{name}'][idx]
+                        f_out.create_dataset(f'{path[4:]}/{name}', 
+                                                shape=data.shape, 
+                                                chunks=(1,) +config['shape'], 
+                                                dtype=config['dtype'],
+                                                compression="gzip", #lzf
+                                                compression_opts=7, 
+                                                data=data)
 
 
 def overlay_country_boundaries(ax):
@@ -309,7 +312,10 @@ def main(cfg: DictConfig) -> None:
     print('Visualize...')
     splitter.visualize_split()
     print('Split h5 files...')
-    splitter.split_h5('~/data/GEDI/', splitter.save_dir)
+    h5_dir = cfg.get('h5_dir', '~/data/GEDI/GEDI_S2_h5s_original')
+    index_dir = cfg.get('index_dir', '~/data/GEDI/split_test0.1_cal0.1_val0.1_seed42')
+    save_dir = cfg.get('save_dir', '~/data/GEDI')
+    split_h5(h5_dir, index_dir, save_dir)
     # print('Sample subset...')
     # splitter.sample_subset(frac=cfg.subset_frac)
 
