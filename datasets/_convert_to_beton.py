@@ -46,6 +46,8 @@ def main(cfg: DictConfig):
             'wc': IntField(),
             'slope': FloatField(),
             'latlon': NDArrayField(dtype=np.dtype("float64"), shape=(2,)),
+            'attrs': NDArrayField(dtype=np.dtype("float64"), shape=(30,)),
+
         })
 
         # Write dataset

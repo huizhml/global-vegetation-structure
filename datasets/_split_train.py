@@ -19,6 +19,13 @@ from dataclasses import dataclass, field
 import hydra
 from hydra.core.config_store import ConfigStore
 from omegaconf import DictConfig
+import h5py
+import dask
+import dask.bag as db
+import dask.dataframe as dd
+
+from datasets._merge_h5s import dst_conf
+
 
 class MyDatasetWriter(DatasetWriter):
 
@@ -89,7 +96,11 @@ class MyDatasetWriter(DatasetWriter):
 
 
 def split_index_table(nsplit, out_dir, index_table_fp):
-    index_table = dgp.read_parquet(index_table_fp, gather_spatial_partitions=False).sample(frac=1).compute()
+    index_table = dgp.read_parquet(index_table_fp, gather_spatial_partitions=False).compute()
+    # Reindex in_partition_idx, it's not continuous, use it with train.h5 will cause the index out of range error
+    # we use train.h5, the orignal whole data is too large
+    index_table = index_table.sort_values(['path', 'in_partition_idx'])
+    index_table['in_partition_idx'] = index_table.groupby('path').cumcount()    
     index_table = index_table.sample(frac=1)
     N = len(index_table)
     n = N // nsplit
@@ -98,6 +109,69 @@ def split_index_table(nsplit, out_dir, index_table_fp):
         if split == nsplit - 1:
             index_ = index_table.iloc[n*split:]
         index_.to_parquet(out_dir / f'train{split}.parquet')
+
+def split_h5(h5_dir, index_table_fps, save_dir): 
+    import glob
+    from dask.distributed import Client, LocalCluster
+    from dask import config
+    cluster = LocalCluster()
+    client = Client(cluster)
+    print(client)
+
+    index_table_fps = glob.glob(index_table_fps)
+    h5_dir = Path(h5_dir).expanduser()
+    save_dir = Path(save_dir).expanduser()
+
+    bg = db.from_sequence(index_table_fps, npartitions=10)
+    bg.map(_split_h5_per_subsest, save_dir, h5_dir).compute()
+
+def _split_h5_per_subsest(index_table_fp, save_dir, h5_dir):
+    print(index_table_fp)
+    index_table_fp = Path(index_table_fp).expanduser()
+    index_table = gpd.read_parquet(index_table_fp)
+    index_table = index_table.sort_values(['path', 'in_partition_idx'])
+    # index_table['in_partition_idx'] = index_table.groupby('path').cumcount()
+    with h5py.File(h5_dir, 'r') as f:
+        with h5py.File(save_dir / f'{index_table_fp.stem}.h5', 'w') as out:
+            for path in index_table.path.unique():
+                # path = path[4:]
+                idx = index_table[index_table['path']==path]['in_partition_idx'].unique()
+                for name, config in dst_conf.items():
+                    if f'{path}/{name}' in f:
+                        continue
+                    data = f[f'{path}/{name}'][idx]
+                    out.create_dataset(f'{path}/{name}', 
+                                            shape=data.shape, 
+                                            chunks=(1,) +config['shape'], 
+                                            dtype=config['dtype'],
+                                            compression="gzip", #lzf
+                                            compression_opts=7, 
+                                            data=data)
+    # index_table['zone'] = index_table['path'].str.split('/').str[0]
+    # index_table = dd.from_pandas(index_table, npartitions=16)
+    # index_table.groupby('zone').apply(_split_h5_per_zone, index_table_fp.stem, save_dir, h5_dir, meta=('x', 'i8')).compute()
+
+
+                    
+def _split_h5_per_zone(index_table, subset, h5_dir, save_dir):
+    zone = index_table['zone'].iloc[0]
+    (save_dir/subset).mkdir(exist_ok=True, parents=True)
+    h5_file = h5_dir / f'{zone}.h5'
+    with h5py.File(h5_file, 'r') as f:
+        with h5py.File(save_dir / subset / f'{zone}.h5', 'w') as out:
+            for path in index_table.path.unique():
+                path = path[4:]
+                idx = index_table[index_table['path']==path]['in_partition_idx'].unique()
+                for name, config in dst_conf.items():
+                    data = f[f'{path}/{name}'][idx]
+                    out.create_dataset(f'{path}/{name}', 
+                                            shape=data.shape, 
+                                            chunks=(1,) +config['shape'], 
+                                            dtype=config['dtype'],
+                                            compression="gzip", #lzf
+                                            compression_opts=7, 
+                                            data=data)
+
 
 def write_beton(out_file, dataset, shuffle_indices=False):
     
@@ -110,6 +184,7 @@ def write_beton(out_file, dataset, shuffle_indices=False):
         'wc': IntField(),
         'slope': FloatField(),
         'latlon': NDArrayField(dtype=np.dtype("float64"), shape=(2,)),
+        'attrs': NDArrayField(dtype=np.dtype("float64"), shape=(30,)),
     })
 
     # Write dataset
@@ -198,16 +273,18 @@ def main(cfg: DictConfig):
         split_index_table(cfg.nsplit, splited_idx_dir, index_dir/f'*.parquet')
         visualize_subset_distribution(splited_idx_dir / f'train{cfg.split_idx}.parquet')
     
-    out_file = out_dir / f'train{cfg.split_idx}.beton'
+    split_h5(h5_file, str(splited_idx_dir / f'train*.parquet'), out_dir)
+    out_file = out_dir / f'train{cfg.split_idx}_attrs.beton'
     if not out_file.exists():
-        index_ = pd.read_parquet(splited_idx_dir / f'train{cfg.split_idx}.parquet', columns=['path', 'in_partition_idx'])
+        index_ = gpd.read_parquet(splited_idx_dir / f'train{cfg.split_idx}.parquet')
         if cfg.get('debug', False):
             index_ = index_.iloc[:100]
         print('index table', len(index_))
-        index_ = index_.sort_values('path')
+        index_ = index_.sort_values(['path', 'in_partition_idx'])
+        index_['in_partition_idx'] = index_.groupby('path').cumcount()
         dataset = S2Dataset(h5_file, index_)
         write_beton(out_file, dataset, shuffle_indices=cfg.shuffle_indices)
-    check_s2_value(out_file)
+    # check_s2_value(out_file)
 
 if __name__ == '__main__':
     print('Running main')

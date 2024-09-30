@@ -38,11 +38,12 @@ class S2Dataset(Dataset):
         slope = self.h5_file[f'{row.path}/slope'][row.in_partition_idx, 7, 7]
         slope = slope.astype(np.float32)
         latlon = self.h5_file[f'{row.path}/latlon'][row.in_partition_idx]
+        attrs = self.h5_file[f'{row.path}/gedi_attrs'][row.in_partition_idx]
         # image = image.astype('float')
         if self.transform:
             image = self.transform(image)
         # self.h5_file.close()
-        return image, label, wc, slope, latlon
+        return image, label, wc, slope, latlon, attrs
     
     def __del__(self):
         if hasattr(self, 'h5_file'):
