@@ -137,8 +137,8 @@ def _split_h5_per_subsest(index_table_fp, save_dir, h5_dir):
                 # path = path[4:]
                 idx = index_table[index_table['path']==path]['in_partition_idx'].unique()
                 for name, config in dst_conf.items():
-                    if f'{path}/{name}' in f:
-                        continue
+                    # if f'{path}/{name}' in f:
+                    #     continue
                     data = f[f'{path}/{name}'][idx]
                     out.create_dataset(f'{path}/{name}', 
                                             shape=data.shape, 
@@ -248,7 +248,7 @@ def check_s2_value(train_fp: Path):
 class MyConfig:
     index_table: str = '~/data/split_test0.1_cal0.1_val0.1_seed42/index_table_train'
     h5_file: str = '~/scratch/data/GVS.h5'
-    out_dir: str = '~/scratch/data'
+    out_dir: str = '~/scratch/data' # parent dir for train_subsets and index_table_train_subsets
     nsplit: int= 10
     split_idx: int = 0
     seed: int = 42
@@ -273,8 +273,9 @@ def main(cfg: DictConfig):
         split_index_table(cfg.nsplit, splited_idx_dir, index_dir/f'*.parquet')
         visualize_subset_distribution(splited_idx_dir / f'train{cfg.split_idx}.parquet')
     
-    split_h5(h5_file, str(splited_idx_dir / f'train*.parquet'), out_dir)
-    out_file = out_dir / f'train{cfg.split_idx}_attrs.beton'
+    # split_h5(h5_file, str(splited_idx_dir / f'train*.parquet'), out_dir)
+    out_beton_name = 'debug' if cfg.get('debug', False) else 'train'
+    out_file = out_dir / f'train_subsets/{out_beton_name}{cfg.split_idx}_attrs.beton'
     if not out_file.exists():
         index_ = gpd.read_parquet(splited_idx_dir / f'train{cfg.split_idx}.parquet')
         if cfg.get('debug', False):
