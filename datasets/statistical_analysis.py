@@ -15,7 +15,7 @@ import time
 import glob
 import joblib
 from ffcv.loader import Loader, OrderOption
-
+from const import ESA_WC
 
 BIOMES = [
     # Don't change the order, index is the corresponding BIOME number
@@ -43,15 +43,29 @@ def filters():
 
     return
 
+def get_patches(data, batch, data_idx, exclude_idx=None):
+    for i, idx in enumerate(data_idx):
+        if exclude_idx is None:
+            data[i].append(batch[idx])
+        else:
+            data[i].append(np.delete(batch[idx], exclude_idx, axis=0))
+    return data
 
-def prepare_data(fp, slope_th: int = None, sens_th: float = None):
+
+
+def prepare_data(fp, idx:List[int]=None, slope_th: int = None, sens_th: float = None):
+    '''
+    Parameters
+    -----------
+    * idx: the index of each data in a batch, [image, rhs, wc, slope, latlon, gedi_attrs]
+    '''
     data_name = Path(fp).stem
     batch_size = 4096 if 'train' in data_name else 100
     dataloader = Loader(fp, batch_size=batch_size, num_workers=4,
                         distributed=False, batches_ahead=3,
                         order=OrderOption.SEQUENTIAL, os_cache=False)
-    rhs = []
-    latlon = []
+    idx = idx or [1] # get rhs by default
+    data = [[] for _ in idx]
     if slope_th:
         for batch in tqdm(dataloader):
             zero_idx, _ = torch.where(torch.isin(batch[2], torch.tensor([50, 70, 80])))
@@ -60,43 +74,51 @@ def prepare_data(fp, slope_th: int = None, sens_th: float = None):
             exclude = excl * steep
             exclude_idx, _ = torch.where(exclude)
             exclude_idx = torch.cat([zero_idx, exclude_idx])
-            rhs.append(np.delete(batch[1], exclude_idx, axis=0))
-            latlon.append(np.delete(batch[4], exclude_idx, axis=0))
+            data = get_patches(data, batch, idx, exclude_idx)
     elif sens_th is not None:
         sens_th = sens_th/100
         for batch in tqdm(dataloader):
             sens = batch[-1][:, 24:25]
             exclude_idx, _ = torch.where(sens < sens_th)
-            rhs.append(np.delete(batch[1], exclude_idx, axis=0))
-            latlon.append(np.delete(batch[4], exclude_idx, axis=0))
+            data = get_patches(data, batch, idx, exclude_idx)
     else:
         for batch in tqdm(dataloader):
-            rhs.append(batch[1])
-            latlon.append(batch[4])
-
-    return np.concatenate(rhs), latlon
+            data = get_patches(data, batch, idx)
+    for i, d in enumerate(data):
+        data[i] = np.concatenate(d)
+    return data
 
 
 def find_sensitivity_beam_cor(data_fps):
     '''
-    Does high sensitivity mean full beam coverage? no -- tested on one train subset
-    * Full power beam also have low sensitivity (0.95) min: 0.5
-    * Coverage beam also have high sensitivity (>0.95) max: 0.99+
     Find the sensitivity and beam correlation
+    1. Does high sensitivity mean full beam coverage? no -- tested on one train subset
+        * Full power beam also have low sensitivity (0.95) min: 0.5
+        * Coverage beam also have high sensitivity (>0.95) max: 0.99+
+    2. If there's a correlation between sensitivity and beam type for high vegetation
+
+    
+
     '''
+    from sklearn.metrics import confusion_matrix
     print(data_fps)
     for fp in data_fps:
         loader = Loader(fp, batch_size=4096, num_workers=4,
                         distributed=False, batches_ahead=3,
                         order=OrderOption.SEQUENTIAL, os_cache=False)
+        contingency = np.zeros((3, 2, 2))
         for batch in tqdm(loader):
-            sensitivity = batch[-1][:, 24]
-            full_beams = batch[-1][:, 0] < 5
-            full_beam_sens = sensitivity[full_beams]
-            print(full_beam_sens.min(), full_beam_sens.max(), full_beam_sens.mean())
-            if full_beam_sens.max() > 0.95:
-                print('Coverage beam also have high sensitivity (>0.95)')
-                break
+            for th in [10, 30, 50]:
+                filter1 = batch[2] > th # high vegetation
+                low_sens = batch[-1][filter1, 24] < 0.95
+                full_beam = batch[-1][filter1, 0] < 5
+                contingency[0] += confusion_matrix(low_sens, full_beam)
+        t_sum = contingency.sum(axis=2, dtype=np.float64)
+        p_sum = contingency.sum(axis=1, dtype=np.float64)
+
+
+        phi_coeff = (contingency[0, 0, 0] * contingency[0, 1, 1] - contingency[0, 0, 1] * contingency[0, 1, 0]) / \
+                    np.sqrt(np.prod(contingency[0, 0]) * np.prod(contingency[0, 1]))
 
 
 def find_sensitivity_biome_cor(data_fps):
@@ -194,7 +216,7 @@ class PCAAnalysis:
         N = np.zeros(1)
         for fp in self.data_fps:
             print('loading data from ', fp)
-            rhs, _ = prepare_data(fp, self.slope, self.sens)
+            rhs, = prepare_data(fp, self.slope, self.sens)
             m = np.mean(rhs, axis=0, dtype=self.dtype)
             n = rhs.shape[0]
             N_old = N
@@ -215,7 +237,7 @@ class PCAAnalysis:
         N = 0
         for fp in self.data_fps:
             print('loading data from ', fp)
-            rhs, _ = prepare_data(fp, self.slope, self.sens)
+            rhs, = prepare_data(fp, self.slope, self.sens)
             rhs = rhs.astype(self.dtype)
             if verify:
                 self.mean = np.mean(rhs, axis=0, dtype=self.dtype)
@@ -363,13 +385,15 @@ class PCAAnalysis:
             c = stats.pearsonr(projected_pc1, rhs[:, i])
             corr.append(c)
             print(f'corr between PC1 and RH{i}: {corr[i]}')
+        np.savetxt(self.output_dir / f'pearson_corr_PC1_RHs_{data_name}_sens{self.sens}.csv', corr, delimiter=',')
         plt.figure()
         plt.plot(corr, '-o', markersize=4)
+        plt.xticks(ticks=np.arange(0, 101, 10), labels=np.arange(0, 101, 10))
         plt.legend()
         plt.grid()
         plt.xlabel('Relative Height')
         plt.ylabel('Pearson correlation between PC1 and RH')
-        plt.savefig(self.output_dir / f'pearson_corr_PC1_RHs_{data_name}.png')
+        plt.savefig(self.output_dir / f'pearson_corr_PC1_RHs_{data_name}_sens{self.sens}.png')
 
     def run_biome_effect_size_analysis(self):
         print('Run biome effect size analysis')
@@ -389,7 +413,7 @@ class PCAAnalysis:
         biome_n = pd.Series(index=range(1, len(BIOMES)+1), data=0)
         for fp in self.data_fps:
             data_name = Path(fp).stem
-            rhs, latlon = prepare_data(fp, self.slope, self.sens)
+            rhs, latlon = prepare_data(fp, [1, 4], self.slope, self.sens)
             rhs = rhs.astype(self.dtype)
             print(rhs.shape)
             rhs_projected = self.pca.transform(rhs)
@@ -423,6 +447,30 @@ class PCAAnalysis:
         std_all_biomes = np.sqrt(var_all_biomes - mean_df.sum()**2/N/(N-1)) # per col mean
         cohend_matrix = np.abs(
             mean_per_biome.values.T[:, :, None] - mean_per_biome.values.T[:, None, :]) / std_all_biomes.values[:, None, None]
+        biome_n.to_csv(self.output_dir / f'biome_n_{data_name}{sens}.csv')
+        mean_per_biome.to_csv(self.output_dir / f'biome_mean_{data_name}{sens}.csv')
+        std_all_biomes.to_csv(self.output_dir / f'biome_effect_size_std_{data_name}{sens}.csv')
+        np.save(self.output_dir / f'biome_effect_size_matrix_{data_name}{sens}.npy', cohend_matrix)
+        self.plot_cohend_matrix(cohend_matrix, data_name, sens, group_method='Biome')
+
+        # For Pearson correlation between PC1 and RH0-100
+        mean_pc1 = mean_df['PC1'].sum()/N
+        Nvar_pc1 = var_df['PC1'].sum() - mean_pc1**2 * N
+        mean_rh = mean_df[rh_cols].sum()/N
+        Nvar_rh = var_df[rh_cols].sum() - mean_rh**2 * N
+        r_square = (mean_rh_x_pc1 - mean_pc1 * mean_rh * N) / np.sqrt(Nvar_rh * Nvar_pc1)
+
+        r_square.to_csv(self.output_dir / f'pearson_corr_PC1_RHs_{data_name}{sens}.csv')
+        plt.figure(figsize=(12, 12))
+        plt.plot(r_square, '-o', markersize=4)
+        plt.legend()
+        plt.grid()
+        plt.xlabel('Relative Height')
+        plt.ylabel('R square between PC1 and RH')
+        plt.savefig(self.output_dir / f'pearson_corr_PC1_RHs_{data_name}{sens}.png')
+
+    def plot_cohend_matrix(self, cohend_matrix, data_name: str = None, sens: str = None, group_method: str = 'Biome'):
+        cohend_matrix_dict = {}
         cohend_matrix_dict['max_idx_all'] = cohend_matrix.argmax(axis=0)
         cohend_matrix_dict['max_value_all'] = cohend_matrix.max(axis=0)
         cohend_matrix_dict['max_idx_pcs'] = cohend_matrix[:101].argmax(axis=0)
@@ -431,11 +479,8 @@ class PCAAnalysis:
         cohend_matrix_dict['max_value_rhs'] = cohend_matrix[101:].max(axis=0)
         print('Unique max(d(PC)): ', np.unique(cohend_matrix_dict['max_idx_pcs']))
         print('Unique max(d(RH)): ', np.unique(cohend_matrix_dict['max_idx_rhs']))
-        biome_n.to_csv(self.output_dir / f'biome_n_{data_name}{sens}.csv')
-        mean_per_biome.to_csv(self.output_dir / f'biome_mean_{data_name}{sens}.csv')
-        std_all_biomes.to_csv(self.output_dir / f'biome_effect_size_std_{data_name}{sens}.csv')
-        np.save(self.output_dir / f'biome_effect_size_matrix_{data_name}{sens}.npy', cohend_matrix)
 
+        labels = BIOMES if group_method == 'Biome' else ESA_WC.keys()
         for name in ['all', 'pcs', 'rhs']:
             plt.figure(figsize=(12, 12))
             value = cohend_matrix_dict[f'max_value_{name}']
@@ -450,63 +495,95 @@ class PCAAnalysis:
             elif 'pcs' in name:
                 annot = annot + 1
             sns.heatmap(value, cmap=cmap, annot=annot, annot_kws={'fontsize': 10}, fmt='d', vmin=vmin, vmax=vmax,
-                        xticklabels=BIOMES, yticklabels=BIOMES)
-            title = f'Biome effect size: most evident values of {name.upper()} across all biomes'
+                        xticklabels=labels, yticklabels=labels)
+            title = f'{group_method} effect size: most evident values of {name.upper()} across all {group_method.lower()}s'
             plt.title(title)
             plt.tight_layout()
             plt.show()
-            plt.savefig(self.output_dir / f'biome_effect_size_matrix_{data_name}{sens}_max_{name}.png')
+            plt.savefig(self.output_dir / f'{group_method.lower}_effect_size_matrix_{data_name}{sens}_max_{name}.png')
 
         # Biome effect size matrix for PC1, PC2, PC3, RH98, RH100
         names = ['PC1', 'PC2', 'PC3', 'RH98', 'RH100']
         for i, idx in enumerate([0, 1, 2, -3, -1]):  # PC1, PC2, PC3, RH98, RH100
             plt.figure(figsize=(10, 10))
             plt.imshow(cohend_matrix[idx], cmap='Blues', vmin=0, vmax=2)
-            plt.xticks(np.arange(len(BIOMES)), labels=BIOMES, rotation=90)
-            plt.yticks(np.arange(len(BIOMES)), labels=BIOMES)
+            plt.xticks(np.arange(len(labels)), labels=labels, rotation=90)
+            plt.yticks(np.arange(len(labels)), labels=labels)
             plt.colorbar()
-            plt.title(f'Biome effect size matrix for {names[i]}')
+            plt.title(f'{group_method} effect size matrix for {names[i]}')
             plt.tight_layout()
-            plt.savefig(self.output_dir / f'biome_effect_size_matrix_{data_name}{sens}_{names[i]}.png')
-
-        # For Pearson correlation between PC1 and RH0-100
-        mean_pc1 = mean_df['PC1'].sum()/N
-        Nvar_pc1 = var_df['PC1'].sum() - mean_pc1**2 * N
-        mean_rh = mean_df[rh_cols].sum()/N
-        Nvar_rh = var_df[rh_cols].sum() - mean_rh**2 * N
-        r_square = (mean_rh_x_pc1 - mean_pc1 * mean_rh * N) / np.sqrt(Nvar_rh * Nvar_pc1)
-
-        plt.figure()
-        plt.plot(r_square, '-o', markersize=4)
-        plt.legend()
-        plt.grid()
-        plt.xlabel('Relative Height')
-        plt.ylabel('R square between PC1 and RH')
-        plt.savefig(self.output_dir / f'pearson_corr_PC1_RHs_{data_name}{sens}.png')
+            plt.savefig(self.output_dir / f'{group_method.lower()}_effect_size_matrix_{data_name}{sens}_{names[i]}.png')
 
         # relative Cohen's d betweem RH98 and PC1-3
         for col in range(3):
             d_mat = np.maximum(cohend_matrix[col] - cohend_matrix[-3], 0)
             plt.figure(figsize=(10, 10))
             plt.imshow(d_mat, cmap='Blues', vmin=0, vmax=1)
-            plt.xticks(np.arange(len(BIOMES)), labels=BIOMES, rotation=90)
-            plt.yticks(np.arange(len(BIOMES)), labels=BIOMES)
+            plt.xticks(np.arange(len(labels)), labels=labels, rotation=90)
+            plt.yticks(np.arange(len(labels)), labels=labels)
             plt.colorbar()
-            plt.title(f'Biome effect size matrix for max(0, |d(PC{col+1}| - |d(RH98)|)')
+            plt.title(f'{group_method} effect size matrix for max(0, |d(PC{col+1}| - |d(RH98)|)')
             plt.tight_layout()
-            plt.savefig(self.output_dir / f'biome_effect_size_matrix_{data_name}{sens}_PC{col+1}-RH98.png')
+            plt.savefig(self.output_dir / f'{group_method.lower()}_effect_size_matrix_{data_name}{sens}_PC{col+1}-RH98.png')
 
         # relative Cohen's d betweem PC1 and PC2-3
         for col in range(1, 3):
             d_mat = np.maximum(cohend_matrix[col] - cohend_matrix[0], 0)
             plt.figure(figsize=(10, 10))
             plt.imshow(d_mat, cmap='Blues', vmin=0, vmax=1)
-            plt.xticks(np.arange(len(BIOMES)), labels=BIOMES, rotation=90)
-            plt.yticks(np.arange(len(BIOMES)), labels=BIOMES)
+            plt.xticks(np.arange(len(labels)), labels=labels, rotation=90)
+            plt.yticks(np.arange(len(labels)), labels=labels)
             plt.colorbar()
-            plt.title(f'Biome effect size matrix for max(0, |d(PC{col+1}| - d(PC1))')
+            plt.title(f'{group_method} effect size matrix for max(0, |d(PC{col+1}| - d(PC1))')
             plt.tight_layout()
-            plt.savefig(self.output_dir / f'biome_effect_size_matrix_{data_name}{sens}_PC{col+1}-PC1.png')
+            plt.savefig(self.output_dir / f'{group_method.lower()}_effect_size_matrix_{data_name}{sens}_PC{col+1}-PC1.png')
+
+    def run_land_cover_effect_size_analysis(self):
+        print('Run biome effect size analysis')
+        import pandas as pd
+        data_dir = Path(self.data_fps[0]).parent.parent
+        pc_cols = [f'PC{i+1}' for i in range(101)]
+        rh_cols = [f"RH{i}" for i in range(101)]
+        cols = pc_cols + rh_cols
+        mean_per_lc = pd.DataFrame(columns=cols, index=ESA_WC.values())
+        mean_per_lc = mean_per_lc.replace(np.nan, 0)
+        var_df = pd.DataFrame(columns=cols, index=ESA_WC.values())
+        var_df = var_df.replace(np.nan, 0)
+        lc_count = pd.Series(index=ESA_WC.values(), data=0)
+        N = np.zeros(1)
+        for fp in self.data_fps:
+            data_name = Path(fp).stem
+            rhs, wc = prepare_data(fp, [1, 2], self.slope, self.sens)
+            rhs = rhs.astype(self.dtype)
+            print(rhs.shape)
+            rhs_projected = self.pca.transform(rhs)
+            data = np.concatenate([rhs_projected, rhs, wc], axis=1)
+            df = pd.DataFrame(data, columns=cols + ['LC'])
+            
+            lc_count_old = lc_count
+            lc_count = lc_count.add(df['LC'].value_counts(), fill_value=0)
+            avg = df.groupby('LC').sum()
+            mean_per_lc = mean_per_lc.mul(lc_count_old, axis=0).add(avg, fill_value=0).div(lc_count, axis=0)
+            mean_per_lc = mean_per_lc.fillna(0)
+            x_square = df.groupby('LC').apply(lambda x: x[cols]**2)
+            x_square = x_square.groupby('LC').sum()
+            var_df = var_df.add(x_square, fill_value=0)
+
+        sens = f'{self.sens}' if self.sens else ''
+        N = lc_count.sum()
+        data_name = 'train' if len(self.data_fps) > 1 else data_name
+    
+        var_all_lcs = var_df.sum() / (N-1)
+        std_all_lcs = np.sqrt(var_all_lcs - mean_per_lc.mul(lc_count,  axis=0).sum()**2/N/(N-1)) # per col mean
+        cohend_matrix = np.abs(
+            mean_per_lc.values.T[:, :, None] - mean_per_lc.values.T[:, None, :]) / std_all_lcs.values[:, None, None]
+        print('Verify the STD of all land covers...')
+        assert np.allclose(std_all_lcs[:101], self.pca.explained_variance_), 'STD of all land covers is not the same as PCA model'
+        lc_count.to_csv(self.output_dir / f'land_cover_count_{data_name}{sens}.csv')
+        mean_per_lc.to_csv(self.output_dir / f'land_cover_mean_{data_name}{sens}.csv')
+        np.save(self.output_dir / f'landcover_effect_size_matrix_{data_name}{sens}.npy', cohend_matrix)
+        self.plot_cohend_matrix(cohend_matrix, data_name, sens, group_method='Land Cover')
+
 
 
 @dataclass
@@ -532,9 +609,9 @@ def main(cfg: DictConfig) -> None:
     # find_sensitivity_biome_cor(glob.glob(cfg.data_fps))
     print(task)
     model = PCAAnalysis(**cfg)
-    model.plot_explained_variance()
-    model.plot_components()
-    model.run_biome_effect_size_analysis()
+    # model.plot_explained_variance()
+    # model.plot_components()
+    model.run_land_cover_effect_size_analysis()
 
     print(f'time taken for running {cfg.task}: {time.time() - t0}')
 
