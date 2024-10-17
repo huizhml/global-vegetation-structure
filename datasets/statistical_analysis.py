@@ -5,7 +5,6 @@ from hydra.core.config_store import ConfigStore
 from omegaconf import DictConfig
 import hydra
 from sklearn.decomposition import PCA
-from sklearn.decomposition import IncrementalPCA
 import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
@@ -15,27 +14,10 @@ import time
 import glob
 import joblib
 from ffcv.loader import Loader, OrderOption
-from const import ESA_WC
+import pandas as pd # has to be imported after ffcv
+from const import ESA_WC, BIOMES
 
-BIOMES = [
-    # Don't change the order, index is the corresponding BIOME number
-    'Tropical & Subtropical Moist Broadleaf Forests',
-    'Tropical & Subtropical Dry Broadleaf Forests',
-    'Tropical & Subtropical Coniferous Forests',
-    'Temperate Broadleaf & Mixed Forests',
-    'Temperate Conifer Forests',
-    'Boreal Forests/Taiga',
-    'Tropical & Subtropical Grasslands, Savannas & Shrublands',
-    'Temperate Grasslands, Savannas & Shrublands',
-    'Flooded Grasslands & Savannas',
-    'Montane Grasslands & Shrublands',
-    'Tundra',
-    'Mediterranean Forests, Woodlands & Scrub',
-    'Deserts & Xeric Shrublands',
-    'Mangroves'
-]
-
-
+torch.nn.functional.cross_entropy
 def filters():
     '''
     Filters for the data
@@ -101,24 +83,35 @@ def find_sensitivity_beam_cor(data_fps):
 
     '''
     from sklearn.metrics import confusion_matrix
-    print(data_fps)
+    batch_size = 100 if 'debug' in data_fps[0] else 4096
+    print('batch size: ', batch_size)
+    tall_veg_th = [0, 10, 30, 50]
+    contingency = np.zeros((len(tall_veg_th), 2, 2)) # three difinitions of high vegetation
+
     for fp in data_fps:
-        loader = Loader(fp, batch_size=4096, num_workers=4,
+        print('loading data from ', fp)
+        loader = Loader(fp, batch_size=batch_size, num_workers=2,
                         distributed=False, batches_ahead=3,
                         order=OrderOption.SEQUENTIAL, os_cache=False)
-        contingency = np.zeros((3, 2, 2))
+        
         for batch in tqdm(loader):
-            for th in [10, 30, 50]:
+            for i, th in enumerate(tall_veg_th):
                 filter1 = batch[2] > th # high vegetation
-                low_sens = batch[-1][filter1, 24] < 0.95
-                full_beam = batch[-1][filter1, 0] < 5
-                contingency[0] += confusion_matrix(low_sens, full_beam)
-        t_sum = contingency.sum(axis=2, dtype=np.float64)
-        p_sum = contingency.sum(axis=1, dtype=np.float64)
+                low_sens = batch[-1][filter1[:, 0], 24] < 0.95
+                full_beam = batch[-1][filter1[:, 0], 0] < 5
+                if low_sens.sum() > 0:
+                    contingency[i] += confusion_matrix(low_sens, full_beam)
+    t_sum = contingency.sum(axis=2, dtype=np.float64)
+    p_sum = contingency.sum(axis=1, dtype=np.float64)
+    n_correlated = np.trace(contingency, axis1=1, axis2=2)
+    n = p_sum.sum(1)
+    cov_ytyp = n_correlated * n - np.diag(t_sum @ p_sum.T)
+    cov_ypyp = n**2 - np.diag(p_sum @ p_sum.T)
+    cov_ytyt = n**2 - np.diag(t_sum @ t_sum.T)
 
-
-        phi_coeff = (contingency[0, 0, 0] * contingency[0, 1, 1] - contingency[0, 0, 1] * contingency[0, 1, 0]) / \
-                    np.sqrt(np.prod(contingency[0, 0]) * np.prod(contingency[0, 1]))
+    phi_corr = cov_ytyp / np.sqrt(cov_ypyp * cov_ytyt)
+    np.save('output/contingency_table_sens_beam_corr.npy', contingency)
+    print('phi coefficient for high vegetation and full beam coverage: ', phi_corr)
 
 
 def find_sensitivity_biome_cor(data_fps):
@@ -322,6 +315,7 @@ class PCAAnalysis:
         print('run sanity check')
         n_features = rh_examples.shape[1]
         rhs_projected = self.pca.transform(rh_examples)  # (n,101)
+        self.pca.inverse_transform(rhs_projected)
         rhs_inversed = rhs_projected[:, idx] @ self.pca.components_[idx] + self.pca.mean_.reshape(1, n_features)
 
         fig, axs = plt.subplots(len(idx), figsize=(6, 6), tight_layout=True)
@@ -578,18 +572,130 @@ class PCAAnalysis:
         cohend_matrix = np.abs(
             mean_per_lc.values.T[:, :, None] - mean_per_lc.values.T[:, None, :]) / std_all_lcs.values[:, None, None]
         print('Verify the STD of all land covers...')
-        assert np.allclose(std_all_lcs[:101], self.pca.explained_variance_), 'STD of all land covers is not the same as PCA model'
+        if not np.allclose(std_all_lcs[:101]**2, self.pca.explained_variance_):
+            print('The STD of all land covers are not correct')
+            print(std_all_lcs**2 - self.pca.explained_variance_)
         lc_count.to_csv(self.output_dir / f'land_cover_count_{data_name}{sens}.csv')
         mean_per_lc.to_csv(self.output_dir / f'land_cover_mean_{data_name}{sens}.csv')
         np.save(self.output_dir / f'landcover_effect_size_matrix_{data_name}{sens}.npy', cohend_matrix)
         self.plot_cohend_matrix(cohend_matrix, data_name, sens, group_method='Land Cover')
 
+    def reconstruct_RHs_(self, data_fps):
+        '''
+        Reconstruct RHs from the first few components
+        '''
+        rh_cols = [f"rh{i}" for i in range(101)]
+        data_fps = glob.glob(data_fps)
+        mse_biome = {}
+        for fp in data_fps:
+            print('loading data from ', fp)
+            fp = Path(fp).expanduser()
+            df = pd.read_parquet(fp)
+            rhs = df[rh_cols].values
+            rhs = rhs.astype(self.dtype)
+            print('reconstructing data')
+            mse = np.zeros(101)
+            N = 0
+            split_size = rhs.shape[0] // 100000
+            print('split size: ', split_size, 'rhs shape: ', rhs.shape)
+            if split_size == 0:
+                split_size = 1
+            for chunk in np.array_split(rhs, split_size):
+                rhs_projected = self.pca.transform(chunk)
+                reconstructed = np.einsum('mr,rn->mrn', rhs_projected, self.pca.components_)
+                # rhs_projected[:, :, None] * self.pca.components_[None, :, :]
+                reconstructed = reconstructed.cumsum(axis=1)
+                reconstructed += self.pca.mean_
+                residual = (reconstructed - chunk[:, None, :])**2
+                mse = (mse * N + residual.sum(axis=2).sum(axis=0))/(N + chunk.shape[0])
+                N += chunk.shape[0]
+                print('MSE: ', mse)
+            
+            # reconstructed = rhs_projected[:, :, None] * self.pca.components_[None, :, :]    
+            # print('cumsum')
+            # reconstructed = reconstructed.cumsum(axis=1)
+            # reconstructed += self.pca.mean_
+            # print('calculating mse')
+            # residual = (reconstructed - rhs[:, None, :])**2
+            # mse = residual.sum(axis=2).mean(axis=0)
+            print('MSE: ', mse)
+            mse_biome[fp.stem[10:]] = mse
+            np.save(self.output_dir / f'reconstruct_mse_{fp.stem[10:]}.npy', mse)
 
+        df = pd.DataFrame(mse_biome)
+        df.to_csv(self.output_dir / f'reconstruct_mse_biome_pca_sens95.csv')
+        plt.figure(figsize=(12, 12))
+        for key, value in mse_biome.items():
+            plt.plot(value, '-o', label=key)
+        plt.legend()
+        plt.grid()
+        plt.xlabel('Relative Height')
+        plt.ylabel('MSE')
+
+    def reconstruct_RH_bins(self, data_fps):
+        rh_cols = [f"rh{i}" for i in range(101)]
+        data_fps = glob.glob(data_fps)
+        mse_biome = {}
+        for fp in data_fps:
+            fp = Path(fp).expanduser()
+            if (self.output_dir / f'reconstruct_rmse_rh98_groupped_{fp.stem[10:]}.csv').exists():
+                continue
+            print('loading data from ', fp)
+            
+            df = pd.read_parquet(fp)
+            df['rh98_groups'] = pd.cut(df['rh98'], bins=range(0, 101, 10))
+            rmse_group = {}
+            for name, group in df.groupby('rh98_groups'):
+                print('reconstructing data for group: ', name)
+                rhs = group[rh_cols].values
+                rhs = rhs.astype(self.dtype)
+                print('reconstructing data')
+                mse = np.zeros(101)
+                N = 0
+                split_size = rhs.shape[0] // 100000
+                print('split size: ', split_size, 'rhs shape: ', rhs.shape)
+                if rhs.shape[0] == 0:
+                    continue
+                if split_size == 0:
+                    split_size = 1
+                for chunk in np.array_split(rhs, split_size):
+                    rhs_projected = self.pca.transform(chunk)
+                    reconstructed = np.einsum('mr,rn->mrn', rhs_projected, self.pca.components_)
+                    reconstructed = reconstructed.cumsum(axis=1)
+                    reconstructed += self.pca.mean_
+                    residual = (reconstructed - chunk[:, None, :])**2
+                    mse = (mse * N + residual.sum(axis=2).sum(axis=0))/(N + chunk.shape[0])
+                    N += chunk.shape[0]
+                    print('MSE: ', mse)
+                
+                print('MSE: ', mse)
+                rmse_group[name] = np.sqrt(mse/101)
+            df = pd.DataFrame(rmse_group)
+            df.to_csv(self.output_dir / f'reconstruct_rmse_rh98_groupped_{fp.stem[10:]}.csv')
+            plt.figure(figsize=(12, 12))
+            for key, value in rmse_group.items():
+                plt.plot(value, '-o', label=key)
+            plt.legend()
+            plt.grid()
+            plt.title(f'Reconstruction error - grouped by RH98')
+            plt.xlabel('Compoenent')
+            plt.ylabel('Reconstruction error (RMSE)')
+            plt.savefig(self.output_dir / f'reconstruct_rmse_rh98_groupped_{fp.stem[10:]}.png')
+            
+        # rhs = df[rh_cols].values
+        # rhs = rhs.astype(self.dtype)
+        # print('reconstructing data')
+        # mse = np.zeros(101)
+        # N = 0
+        # split_size = rhs.shape[0] // 100000
+        # print('split size: ', split_size, 'rhs shape: ', rhs.shape)
+        
+        
 
 @dataclass
 class MyConfig:
     model_path: str = 'output/pca_model.pkl'
-    data_fps: str = '~/data/GEDI/train_subsets/train1.beton'
+    data_fps: str = '~/data/GEDI/train_subsets/train1_attrs.beton'
     output_dir: str = 'output'
     task: str = 'run_pca_on_rhs'
 
@@ -611,7 +717,8 @@ def main(cfg: DictConfig) -> None:
     model = PCAAnalysis(**cfg)
     # model.plot_explained_variance()
     # model.plot_components()
-    model.run_land_cover_effect_size_analysis()
+    # model.run_land_cover_effect_size_analysis()
+    model.reconstruct_RH_bins(cfg.data_fps)
 
     print(f'time taken for running {cfg.task}: {time.time() - t0}')
 
