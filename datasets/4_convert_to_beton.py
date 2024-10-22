@@ -246,9 +246,9 @@ def check_s2_value(train_fp: Path):
         
 @dataclass
 class MyConfig:
-    index_table: str = '~/data/split_test0.1_cal0.1_val0.1_seed42/index_table_train'
-    h5_file: str = '~/scratch/data/GVS.h5'
-    out_dir: str = '~/scratch/data' # parent dir for train_subsets and index_table_train_subsets
+    index_table: str = '~/data/GEDI/split_test0.1_cal0.1_val0.1_seed42/index_table_train'
+    h5_file: str = '~/data/GEDI/train.h5'
+    out_idx_dir: str = '~/data/GEDI/index_table_train_subsets'
     nsplit: int= 10
     split_idx: int = 0
     seed: int = 42
@@ -264,28 +264,46 @@ def main(cfg: DictConfig):
     np.random.seed(cfg.seed)
     h5_file = Path(cfg.h5_file).expanduser()
     index_dir = Path(cfg.index_table).expanduser()
-    out_dir = Path(cfg.out_dir).expanduser()
-    splited_idx_dir = out_dir / 'index_table_train_subsets'
-    splited_idx_dir.mkdir(exist_ok=True, parents=True)
+    out_idx_dir = Path(cfg.out_idx_dir).expanduser()
+    out_idx_dir.mkdir(exist_ok=True, parents=True)
 
-    if len(list(splited_idx_dir.glob('*.parquet'))) != cfg.nsplit:
-        print('Re-splitting index table')
-        split_index_table(cfg.nsplit, splited_idx_dir, index_dir/f'*.parquet')
-        visualize_subset_distribution(splited_idx_dir / f'train{cfg.split_idx}.parquet')
-    
-    # split_h5(h5_file, str(splited_idx_dir / f'train*.parquet'), out_dir)
-    out_beton_name = 'debug' if cfg.get('debug', False) else 'train'
-    out_file = out_dir / f'train_subsets/{out_beton_name}{cfg.split_idx}_attrs.beton'
-    if not out_file.exists():
-        index_ = gpd.read_parquet(splited_idx_dir / f'train{cfg.split_idx}.parquet')
-        if cfg.get('debug', False):
-            index_ = index_.iloc[:100]
-        print('index table', len(index_))
-        index_ = index_.sort_values(['path', 'in_partition_idx'])
-        index_['in_partition_idx'] = index_.groupby('path').cumcount()
-        dataset = S2Dataset(h5_file, index_)
-        write_beton(out_file, dataset, shuffle_indices=cfg.shuffle_indices)
+    if 'train' in index_dir.stem:
+        print('Generating train subsets in beton...')
+        if len(list(out_idx_dir.glob('*.parquet'))) != cfg.nsplit:
+            print('Re-splitting index table')
+            split_index_table(cfg.nsplit, out_idx_dir, index_dir/f'*.parquet')
+            visualize_subset_distribution(out_idx_dir / f'train{cfg.split_idx}.parquet')
+        
+        # split_h5(h5_file, str(splited_idx_dir / f'train*.parquet'), out_dir)
+        out_beton_name = 'debug' if cfg.get('debug', False) else 'train'
+        out_file = out_idx_dir.parent / f'train_subsets/{out_beton_name}{cfg.split_idx}_attrs_filtered.beton'
+        if not out_file.exists():
+            index_ = pd.read_parquet(out_idx_dir / f'train{cfg.split_idx}.parquet')
+            if cfg.get('debug', False):
+                index_ = index_.iloc[:100]
+            index_ = index_[index_['sensitivity'] >= 0.95]
+            print('index table', len(index_))
+            index_ = index_.sort_values(['path', 'in_partition_idx'])
+            index_['in_partition_idx'] = index_.groupby('path').cumcount()
+            dataset = S2Dataset(h5_file, index_)
+            write_beton(out_file, dataset, shuffle_indices=cfg.shuffle_indices)
+    else:
+        split = index_dir.stem.split('_')[3]
+        assert h5_file.stem == split, f'cannot generate {split}.beton from {h5_file}, check index_dir and h5_file'
+        assert index_dir.stem.split('_')[-1] == 'sensitivity', f'index table should be the one with sensitivity, {index_dir} provided'
+        
+        out_file = f'~/data/GEDI/train_subsets/{split}_attrs_filtered.beton'
+        if not Path(out_file).exists():
+            print(f'Generating {split}.beton...')
+            index_ = pd.read_parquet(index_dir/'*.parquet')
+            index_ = index_[index_['sensitivity'] >= 0.95]
+            print('index table', len(index_))
+            index_ = index_.sort_values(['path', 'in_partition_idx'])
+            index_['in_partition_idx'] = index_.groupby('path').cumcount()
+            dataset = S2Dataset(h5_file, index_)
     # check_s2_value(out_file)
+
+
 
 if __name__ == '__main__':
     print('Running main')

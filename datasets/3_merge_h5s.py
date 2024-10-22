@@ -101,9 +101,9 @@ def merge_partitions(zone='02K', h5_dir='~/data/GEDI', h5_out_dir: str=None, **k
 
 @dataclass
 class MyConfig:
-    h5_dir: str = '~/data/split_test0.1_cal0.1_val0.1_seed42/train_h5s'
-    merged_h5_file: str = '~/flash/data/train.h5'
-    h5_out_dir: str = '~/flash/data/h5s_no_partitions'
+    h5_dir: str = '~/data/GEDI/split_test0.1_cal0.1_val0.1_seed42/train_h5s'
+    merged_h5_file: str = '~/data/GEDI/train.h5'
+    h5_out_dir: str = '~/data/GEDI/h5s_no_partitions' # flatten h5 groups
     zone: str = '37N'
     functions: list = field(default_factory=lambda: ['merge_all_zones'])
 

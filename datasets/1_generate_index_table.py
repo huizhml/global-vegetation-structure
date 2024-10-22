@@ -8,6 +8,8 @@ import dask.bag as db
 import pandas as pd
 import geopandas as gpd
 from pathlib import Path
+from dataclasses import dataclass
+from hydra.core.config_store import ConfigStore
 from dask.utils import natural_sort_key
 from datatree.io import _iter_nc_groups
 from h5netcdf.legacyapi import Dataset as h5Dataset
@@ -16,21 +18,22 @@ logger = logging.getLogger(__name__)
 
 class IndexTableGenerater:
     """
-    Using dask to process zones in parallel.
-    Generate an index table for each zone.
+    Generate an index table for each zone, will be saved as out_idx_dir/{zone}.parquet
+    Saved index table will have columns: path, in_partition_idx, s2_tile, lat, lon, sensitivity, shot_number
+    Using dask to process zones in parallel. Thus using h5_dir/{zone}.h5 as input.
     """
 
-    def __init__(self, h5_dir:str='~/data/GEDI', index_table_dir:str='~/data/index_table') -> None:
+    def __init__(self, h5_dir:str='~/data/GEDI', out_idx_dir:str='~/data/index_table') -> None:
         """
         * h5_dir: folder where {zone}.h5 is
-        * index_table_dir: folder where {zone}.parquet is saved to
+        * out_idx_dir: folder where {zone}.parquet is saved to
         """
         self.h5_dir = Path(h5_dir).expanduser()
-        self.index_table_dir = Path(index_table_dir).expanduser()
-        self.index_table_dir.mkdir(parents=True, exist_ok=True)
+        self.out_idx_dir = Path(out_idx_dir).expanduser()
+        self.out_idx_dir.mkdir(parents=True, exist_ok=True)
         h5_files = self.h5_dir.glob('*.h5')
         zones = [f.stem for f in h5_files]
-        self.target_files = [str(self.index_table_dir/f'{z}.parquet') for z in zones]
+        self.target_files = [str(self.out_idx_dir/f'{z}.parquet') for z in zones]
         self.target_files = sorted(self.target_files, key=natural_sort_key)
     
     def __call__(self):
@@ -70,9 +73,11 @@ class IndexTableGenerater:
                     if len(group.split('/')) == 3:
                         s2_ids = data[f'{group}/id'][:].astype('U')
                         latlon = data[f'{group}/latlon'][:]
-                        index_df.append([f'/{zone}{group}', s2_ids,latlon[:,0],latlon[:,1]])
-        index_df = pd.DataFrame(index_df, columns=['path','s2_tile', 'lat', 'lon'])
-        index_df = index_df.explode(['s2_tile', 'lat', 'lon'])
+                        sensitivity = data[f'{group}/gedi_attrs'][:, 24]
+                        shot_number = data[f'{group}/shot_number'][:].astype('U')
+                        index_df.append([f'/{zone}{group}', s2_ids,latlon[:,0],latlon[:,1], sensitivity, shot_number])
+        index_df = pd.DataFrame(index_df, columns=['path','s2_tile', 'lat', 'lon', 'sensitivity', 'shot_number'])
+        index_df = index_df.explode(['s2_tile', 'lat', 'lon', 'sensitivity', 'shot_number'])
         index_df['s2_tile'] = index_df['s2_tile'].str[33:38]
         index_df['in_partition_idx'] = index_df.groupby('path').cumcount()
         index_gdf = gpd.GeoDataFrame(index_df, geometry=gpd.points_from_xy(index_df.lon, index_df.lat), crs='EPSG:4326')
@@ -82,7 +87,19 @@ class IndexTableGenerater:
             print(f'index table saved to: ', index_table_file)
 
 
-@hydra.main(config_path="../config", config_name="s2_download", version_base="1.2")
+
+
+@dataclass
+class MyConfig:
+    h5_dir: str = '~/data/GEDI/GEDI_S2_h5s_original'
+    out_idx_dir: str = '~/data/GEDI/geo_index_table_with_sensitivity'
+
+
+cs = ConfigStore.instance()
+cs.store(name="my_config", node=MyConfig)
+
+
+@hydra.main(config_name="my_config", version_base="1.2")
 def main(cfg):
     # check if the zone has Sentinel-2 candidates gathered
     from dask.distributed import Client, LocalCluster
@@ -95,7 +112,7 @@ def main(cfg):
     print(client)
 
     t0 = time.time()
-    bestS2Finder = IndexTableGenerater(index_table_dir='~/data/geo_index_table')()
+    IndexTableGenerater(**cfg)()
     
     logger.info(f'time taken: {time.time() - t0}')
     client.close()

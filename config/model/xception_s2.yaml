@@ -1,0 +1,17 @@
+class_path: models.xception_s2.XceptionS2
+init_args:
+  in_channels: 12
+  out_channels: 101
+  num_sepconv_blocks: 8
+  num_sepconv_filters: 256
+  long_skip: True
+  returns: targets
+  # used in the base model (_base_pl_model.py)
+  mask_fc: datasets.transforms.SlopeWCMask
+  loss_fc: models.losses.base.Loss
+  
+
+
+  
+
+

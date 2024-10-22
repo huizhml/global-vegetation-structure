@@ -7,34 +7,31 @@ from kornia.enhance import normalize
 
 from const import ESA_WC
 
-MEAN = np.array([172.49044799804688,
-        217.19879150390625,
-        306.56103515625,
-        384.7140808105469,
-        491.4490051269531,
-        662.2481079101562,
-        867.2765502929688,
-        927.40576171875,
-        995.0731811523438,
-        959.4855346679688,
-        820.0773315429688,
-        640.4260864257812,
-        # 6.1001691818237305,
-        # -0.01115760300308466,
-        # 0.08859393745660782
+MEAN = np.array([628.1879 , 
+                 1475.1014 , 
+                 1165.6053 , 
+                 794.6629 , 
+                 1873.0237 , 
+                 2563.7012 , 
+                 2852.5837 , 
+                 2928.7439 , 
+                 3045.0754 , 
+                 3052.8425 , 
+                 3006.8704 , 
+                 2330.9114 ,
         ])
-STD = np.array([439.42572021484375,
-        498.8157958984375,
-        600.3677978515625,
-        750.9793701171875,
-        896.781494140625,
-        1420.87890625,
-        1624.6717529296875,
-        1676.152099609375,
-        1730.864990234375,
-        1711.1083984375,
-        1552.2928466796875,
-        1207.4013671875,
+STD = np.array([531.9321,
+                1304.8284 ,
+                846.0083  ,
+                636.7952 ,
+                1286.7987 ,
+                1097.4255 ,
+                1140.2261 ,
+                1151.3964 ,
+                1139.3654 ,
+                1128.2611 ,
+                1634.0034 ,
+                1698.3635
         # 20.39255142211914,
         # 0.385648638010025,
         # 0.3675101101398468
@@ -47,7 +44,7 @@ class SlopeWCMask(nn.Module):
         self.slope_th = slope_th
 
     @torch.no_grad()
-    def forward(self, x, y, wc, slope, latlon) -> Tensor:
+    def forward(self, x, y, wc, slope, latlon, *args) -> Tensor:
         # NOTE: zero out the central pixel if it is in classes: 'Built-up', 'Snow and ice', 'Permanent water bodies'
         zero_cls = torch.tensor([ESA_WC['Built-up'], ESA_WC['Snow and ice'], ESA_WC['Permanent water bodies']], device=x.device)
         # wc = wc[..., 7, 7]
@@ -61,4 +58,4 @@ class SlopeWCMask(nn.Module):
         loss_mask = loss_mask_wc * loss_mask_slope
         loss_mask = 1 - loss_mask
         loss_mask = loss_mask.type(torch.bool)
-        return normalize(x, MEAN, STD), y, loss_mask.squeeze()
+        return normalize(x.float(), MEAN, STD), y, loss_mask.squeeze()

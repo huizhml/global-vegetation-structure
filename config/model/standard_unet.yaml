@@ -1,32 +1,33 @@
-class_path: models.pl_model.UNet
+class_path: models.unet.UNet
 init_args:
-  in_channels: 12
-  n_classes: 1
+  out_channels: 101
   patch_size: 15
-  preprocess:
-    class_path: models.preprocess.Standardize
-  # encoder
-  backbone_model:
+  norm_layer_up: torch.nn.BatchNorm2d
+  up_block: models.modules.standard.DoubleConvSkip
+  last_opt: torch.nn.Identity
+  encoder:
     class_path: models.modules.standard.StandardNet
     init_args:
-      norm_layer: torch.nn.BatchNorm2d
+      in_channels: 12
+      depths: [64, 128, 256, 512]
+      kernal_sizes: [1, 3]
       initial_stride: 1
-
-  # decoder
-  norm_layer_up: torch.nn.BatchNorm2d
-  activation_layer:
-    class_path: torch.nn.ELU
-    init_args:
-      inplace: True
-      alpha: 0.54
-
+      norm_layer: torch.nn.BatchNorm2d
+      activation_layer: 
+        class_path: torch.nn.ELU
+        init_args:
+          inplace: True
+          alpha: 0.54
+      block: models.modules.standard.DoubleConvSkip
+      
   upsampling: nearest
-  up_block: models.modules.standard.DoubleConvSkip
-
-
-  loss: 
-    class_path: torch.nn.MSELoss
-  
+  blur_final: False
+  blur: False
+  final_skip: False
+  self_attention: False
+  # used in the base model (_base_pl_model.py)
+  mask_fc: datasets.transforms.SlopeWCMask
+  loss_fc: models.losses.base.Loss #torch.nn.BCELoss # 
 
 
   

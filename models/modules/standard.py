@@ -46,6 +46,8 @@ class StandardNet(BaseModule):
                  block: str = 'DoubleConvSkip', initial_stride: int = 1, depths=(64, 128, 256, 512, 1024), kernal_sizes:List[int]=(3,3)):
         super(StandardNet, self).__init__()
         assert initial_stride in [1, 2], "standard model only supports initial_stride of 1 or 2"
+        self.in_channels = in_channels
+        self.activation_layer = activation_layer
         block = get_class(block)
         norm_layer = get_class(norm_layer)
         # depths = [in_channels, 64, 128, 256, 512, 1024]

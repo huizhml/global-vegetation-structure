@@ -6,6 +6,9 @@ import numpy as np
 import h5py
 
 
+coverage_beams = ['BEAM0000', 'BEAM0001', 'BEAM0010', 'BEAM0011']
+power_beams = ['BEAM0101', 'BEAM0110', 'BEAM1000', 'BEAM1011']
+
 class S2Dataset(Dataset):
 
 

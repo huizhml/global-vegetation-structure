@@ -14,42 +14,44 @@ data:
   init_args: 
     train_fp: ~/flash/data/val.beton
     val_fp: ~/flash/data/val.beton
-    num_workers: 32
-    batches_ahead: 6
-    batch_size: 1024 # per device
+    num_workers: 4
+    batches_ahead: 3
+    batch_size: 4096 # per device
     order: QUASI_RANDOM
     os_cache: False
     distributed: False
 
 model:
-  class_path: models.pl_model.UNet
+  class_path: models.unet.UNet
   init_args:
-    in_channels: 12
     out_channels: 101
     patch_size: 15
     norm_layer_up: torch.nn.BatchNorm2d
     up_block: models.modules.standard.DoubleConvSkip
     last_opt: torch.nn.Identity
-    activation_layer: 
-      class_path: torch.nn.ELU
-      init_args:
-        inplace: True
-        alpha: 0.54
     encoder:
       class_path: models.modules.standard.StandardNet
       init_args:
-        depths: [512]
+        in_channels: 12
+        depths: [64, 128, 256, 512]
+        kernal_sizes: [1, 3]
         initial_stride: 1
         norm_layer: torch.nn.BatchNorm2d
+        activation_layer: 
+          class_path: torch.nn.ELU
+          init_args:
+            inplace: True
+            alpha: 0.54
         block: models.modules.standard.DoubleConvSkip
-        kernal_sizes: [1, 3, 1]
-    mask_module: datasets.transforms.SlopeWCMask
-    loss: models.losses.mse.MSELoss
+        
     upsampling: nearest
     blur_final: False
     blur: False
     final_skip: False
     self_attention: False
+    # used in the base model (_base_pl_model.py)
+    mask_fc: datasets.transforms.SlopeWCMask
+    loss_fc: models.losses.base.Loss #torch.nn.BCELoss # 
 
 trainer:
   accelerator: gpu
@@ -60,9 +62,9 @@ trainer:
   # check_val_every_n_epoch: 10
   max_epochs: 100
   num_sanity_val_steps: 0
-  fast_dev_run: 10000
+  # fast_dev_run: 10000
   # profiler: advanced
-  profiler: simple
+  # profiler: simple
   #   class_path: lightning.pytorch.profilers.PyTorchProfiler
   #   init_args:
   #     sort_by_key: self_cpu_memory_usage
@@ -72,16 +74,16 @@ trainer:
     - class_path: lightning.pytorch.callbacks.LearningRateMonitor
       init_args:
         logging_interval: step
-    - class_path: callbacks.boxplot.BoxplotLogger
+    - class_path: callbacks.regression_metrics_logger.ErrorMetricsLogger
       init_args:
-        log_every: 10
+        log_every: 1
     - class_path: lightning.pytorch.callbacks.ModelCheckpoint
       init_args:
         monitor: 'val_loss'
         filename: 'BestModel-{epoch:02d}-{val_loss:.2f}'
         save_top_k: 1
         mode: min
-        every_n_epochs: 10 #check every n epochs
+        every_n_epochs: 1 #check every n epochs
         save_last: True # save the last epoch? or just save the last best model?
     # - class_path: callbacks.index_shuffle.IndexShuffler
 
@@ -91,4 +93,4 @@ trainer:
         project: global-vegetation-structure
         name: test
         job_type: train
-        save_dir: /tmp/wandb
+        save_dir: /tmp/logs

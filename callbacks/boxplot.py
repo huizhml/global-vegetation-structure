@@ -16,15 +16,26 @@ class Visualizer:
         self.state = []
         self.xlabel = xlabel
         self.ylabel = ylabel
+        self.me = 0 # mean error for each rh
+        self.mae = 0 # mean absolute error for each rh
+        self.mse = 0 # mean squared error for each rh
+        
     
     def update(self, pred: Tensor, y: Tensor) -> None:
         v = self.func(pred, y)
         self.state.append(v)
+        residuals = pred - y
+        self.me += residuals.mean(dim=0)
+        self.mae += residuals.abs().mean(dim=0)
+        self.mse += residuals.pow(2).mean(dim=0)
 
     def grouped_cat(self) -> None:
         boxes = []
         for i in range(len(self.state[0])):
-            boxes.append(torch.cat([arr[i] for arr in self.state], dim=0).cpu().numpy())
+        v = self.func(pred, y)
+        self.state.append(v)
+
+            boxes.append(torch.cat([arr[i] for arr in self.state], dim=0).numpy())
         return boxes
 
     def reset(self):
@@ -35,7 +46,7 @@ class Visualizer:
             v = self.grouped_cat()
             w = len(v)
         else:
-            v = torch.cat(self.state, dim=0).cpu().numpy()
+            v = torch.cat(self.state, dim=0).numpy()
             w = v.shape[1]
         fig = plt.figure(figsize=(30, 6))
         plt.boxplot(v, whis=[0, 100])
@@ -46,18 +57,14 @@ class Visualizer:
         plt.title(title)
         return fig
 
-
-def mae(pred: Tensor, y: Tensor) -> Tensor:
-    return (pred - y).abs().mean()
-
 def residuals(pred: Tensor, y: Tensor) -> Tensor:
-    return pred - y
+    return (pred - y).cpu()
 
 def delta_rh(pred: Tensor, y: Tensor) -> Tensor:
     return pred[:, 1:] - pred[:, :-1]
 
 def relative_height(pred: Tensor, y: Tensor) -> Tensor:
-    return pred
+    return pred.cpu()
 
 def residuals_rh98(pred: Tensor, y: Tensor) -> Tensor:
     bins = torch.tensor(np.arange(0,90,10), device=pred.device)
@@ -65,29 +72,21 @@ def residuals_rh98(pred: Tensor, y: Tensor) -> Tensor:
     res = pred[:, 98] - rh98
     bin_places = (rh98.unsqueeze(1) >= bins).long().sum(1)
     binned_res = [res[bin_places == i] for i in range(1, len(bins)+1)]
-    return binned_res
+    return binned_res.cpu()
 
 
 METRICS = {
-    'mae': {
-        'func': mae,
-    },
-    'residuals': {
+    'Residuals': {
         'func': residuals,
         'xlabel': 'RH0-RH100',
         'ylabel': 'Residuals (m)'
     },
-    'delta_rh': {
-        'func': delta_rh,
-        'xlabel': 'delta_RH1-delta_RH100',
-        'ylabel': 'Delta RH (m)'
-    },
-    'relative_height': {
+    'Predicted RHs': {
         'func': relative_height,
         'xlabel': 'RH0-RH100',
         'ylabel': 'Relative Height (m)'
     },
-    'residuals_rh98': {
+    'Residuals RH98': {
         'func': residuals_rh98,
         'xlabel': 'Residuals (m)',
         'ylabel': 'RH98 (x10m)'

@@ -1,6 +1,6 @@
 import logging
+import sys
 import wandb
-wandb.require('core')
 import argparse
 import lightning.pytorch as pl
 from lightning.pytorch.cli import LightningCLI, SaveConfigCallback
@@ -36,10 +36,10 @@ class MyLightningCLI(LightningCLI):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
-    def add_arguments_to_parser(self, parser) -> None:
-        # parser.add_argument("--notification_email", default="huzh@di.ku.dk")
-        parser.link_arguments('model.init_args.in_channels', 'model.init_args.encoder.init_args.in_channels')
-        parser.link_arguments('model.init_args.activation_layer', 'model.init_args.encoder.init_args.activation_layer')
+    # def add_arguments_to_parser(self, parser) -> None:
+    #     import ipdb; ipdb.set_trace()
+    #     parser.link_arguments('model.init_args.in_channels', 'model.init_args.encoder.init_args.in_channels')
+    #     parser.link_arguments('model.init_args.activation_layer', 'model.init_args.encoder.init_args.activation_layer')
     
 
     # def after_fit(self):

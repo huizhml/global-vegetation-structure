@@ -208,17 +208,17 @@ class Stats:
         """
         boxplot_dir = Path(boxplot_dir).expanduser()
         import time
+        from dask.distributed import Client, LocalCluster
+        cluster = LocalCluster()
+        client = Client(cluster)
+        print(client)
         for split in splits:
             print(split)          
             if exists := os.path.exists(f'{str(self.save_dir)}/boxplot_stats_rhs_{split}.json'):
                 print('loading RHs from json')
-                with open(f'{str(self.save_dir)}/boxplot_stats_rhs_{split}.json', 'r') as f:
+                with open(f'boxplot_stats_rhs_{split}.json', 'r') as f:
                     stats = json.load(f)
             else:
-                from dask.distributed import Client, LocalCluster
-                cluster = LocalCluster()
-                client = Client(cluster)
-                print(client)
                 data_dir = f'{str(self.save_dir)}/index_table_{split}'
                 index_df_files = [f"{data_dir}/{f}" for f in os.listdir(data_dir)]
                 self.index_df_files = sorted(index_df_files, key=natural_sort_key)
@@ -251,13 +251,9 @@ class Stats:
                     else:
                         with open(file, 'w') as f:
                             json.dump([stats], f, indent=4, default=convert_to_serializable)
-            fig, ax = plt.subplots(figsize=(20,6))
-            ax.bxp(stats, patch_artist=True, boxprops={'facecolor': 'bisque'}, showfliers=False)
-            ax.set_xticks(np.arange(1, 102, 10))
-            ax.set_xticklabels(np.arange(0, 101, 10))
-            plt.xlabel('Relative Heights')
-            plt.savefig(f'{boxplot_dir}/RHs_boxplot_{split}.png', dpi=300)
-            print('boxplot saved to ', f'{boxplot_dir}/RHs_boxplot_{split}.png')
+            fig, ax = plt.subplots()
+            ax.bxp(stats, patch_artist=True, boxprops={'facecolor': 'bisque'})
+            plt.savefig(f'{boxplot_dir}/RHs_boxplot_{split}.png')
 
     def plot_violins(self, splits: Iterable=None, **kwargs):
         """

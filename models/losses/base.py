@@ -2,9 +2,10 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-class Loss(nn.Module):
+class Loss(nn.BCELoss):
 
     def __init__(self, name:str='mae') -> None:
+        super().__init__()
         self.name = name
 
 

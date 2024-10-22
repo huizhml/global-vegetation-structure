@@ -2,7 +2,7 @@
 rh_dtype = {f'rh{i}': 'float32' for i in range(101)}
 gedi_attr_dtype = {
     # 'system:index': 'object',
-    'beam': 'uint16',
+    'beam': 'uint16', # can tell if it's full or half
     'delta_time': 'float64',
     'digital_elevation_model': 'float32',
     'digital_elevation_model_srtm': 'float32',
