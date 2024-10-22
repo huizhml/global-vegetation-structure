@@ -10,26 +10,30 @@
 #SBATCH --error=./logs/%x-%A_%a.err
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=huzh@di.ku.dk
-hostname
+# export PATH="~/scratch/ffcv/bin:$PATH"
 
-export MIOPEN_USER_DB_PATH="/tmp/$(whoami)-miopen-cache-$SLURM_NODEID"
-export MIOPEN_CUSTOM_CACHE_DIR=$MIOPEN_USER_DB_PATH
-
-if [ $SLURM_LOCALID -eq 0 ] ; then
-    rm -rf $MIOPEN_USER_DB_PATH
-    mkdir -p $MIOPEN_USER_DB_PATH
+if [[ ${HOME} == "/users*" ]]; then
+    echo "Running on LUMI"
+    export MIOPEN_USER_DB_PATH="/tmp/$(whoami)-miopen-cache-$SLURM_NODEID"
+    export MIOPEN_CUSTOM_CACHE_DIR=$MIOPEN_USER_DB_PATH
+    module load CrayEnv LUMI/23.09  partition/G
+    module load rocm/5.4.6
+    if [ $SLURM_LOCALID -eq 0 ] ; then
+        rm -rf $MIOPEN_USER_DB_PATH
+        mkdir -p $MIOPEN_USER_DB_PATH
+    fi
+else
+    echo "Running on Hendrix"
+    conda activate ffcv
 fi
 
-module load CrayEnv LUMI/23.09  partition/G
-module load rocm/5.4.6
-# module load rocm/5.6.1
-
+hostname
 
 echo using training subsets and multiple gpus, ffcv.;
-python run.py fit -c config/train.yaml  --data config/data/ffcv.yaml \
-        --data.init_args.train_fp ~/flash/data/debug1.beton \
-        --data.init_args.distributed True \
-        --data.init_args.batch_size 1024 --data.init_args.num_workers 2 \
+python run.py fit -c config/train.yaml  --model config/model/standard_unet.yaml \
+        --data.init_args.train_fp ${HOME}/data/GEDI/train_subsets/train0_attrs_filtered.beton \
+        --data.init_args.val_fp ${HOME}/data/GEDI/train_subsets/train1_attrs_filtered.beton \
+        --data.init_args.batch_size 100 --data.init_args.num_workers 2 \
         --data.init_args.batches_ahead 3
 
 
