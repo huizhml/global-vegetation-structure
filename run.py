@@ -1,6 +1,7 @@
 import logging
 import sys
 import wandb
+import torch
 import argparse
 import lightning.pytorch as pl
 from lightning.pytorch.cli import LightningCLI, SaveConfigCallback
@@ -54,6 +55,7 @@ def cli_main():
                          save_config_callback=LoggerSaveConfigCallback,
                         #  parser_kwargs={"parser_mode": "omegaconf"},
                          ) # omegaconf: allow variable interpolation
+    cli.model = torch.compile(cli.model)
     # cli.trainer.fit(cli.model, datamodule=cli.datamodule)
     # test on best model
     # cli.trainer.test(cli.model, datamodule=cli.datamodule)
