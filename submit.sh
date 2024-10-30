@@ -23,7 +23,7 @@ data_dir=/home/ksb781/data/GEDI
 
 id=$1
 case $id in
-1)
+1)¨
 echo running job 1 ;
 echo generate index table for the whole downloaded data
 python -m datasets.1_generate_index_table;;
@@ -58,14 +58,14 @@ else
         input_dir=$data_dir
 fi
 
-python -m datasets.4_convert_to_beton nsplit=$nsplit split_idx=$idx \
-        h5_file=$input_dir/train.h5 out_dir=$data_dir \
+python -m datasets._4_convert_to_beton nsplit=$nsplit split_idx=$idx \
+        h5_file=$input_dir/train.h5 out_idx_dir=$data_dir/index_table_train_subsets \
         index_table=$data_dir/split_test0.1_cal0.1_val0.1_seed42/index_table_train \
         shuffle_indices=True +debug=$debug;;
 
 5)
 echo calculate the mean and std of sentinel-2 images from the training data
-python -m datasets.5_calculate_stats;;
+python -m datasets._5_calculate_stats;;
 
 6)
 echo get the mean and std from the training data

@@ -25,4 +25,6 @@ class WandbLogger(wb.WandbLogger):
             kwargs.update({'tags': tags})
         super().__init__(**kwargs)
         self.experiment # explicitly call to check if wandb is initialized
+        wandb.define_metric('prediction/rh')
+        wandb.define_metric('prediction/*', step_metric='prediction/rh')
 

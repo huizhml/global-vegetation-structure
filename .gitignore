@@ -41,7 +41,7 @@ pytest_cache/
 
 
 *.out
-*test*
+test*
 *key.json
 logs/
 keys/

@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 from typing import Any
 import lightning as L
+from torchsummary import summary
 
 from .modules.unet_blocks import UnetBlockDeep, CatResBlock, PassBlock, get_upscaler
 from .modules.util import CustomPixelShuffle_ICNR, icnr_init
@@ -45,8 +46,8 @@ class UNet(BaseModel):
 
         self.encoder = encoder
         self.init_decoder()
-
-
+        print("UNet model initialized")
+        print(summary(self))
         torch.set_float32_matmul_precision('high')
 
     def init_decoder(self):
@@ -64,13 +65,13 @@ class UNet(BaseModel):
             self.scale_factors.append(ps / out.shape[2])
             ps = out.shape[2]
         self.scale_factors.append(ps / x.shape[2])
-
+        
         in_sizes = [out.size(1) for out in outs]
 
         # invert sizes and outputs
-        cross_sizes = in_sizes[::-1]
+        cross_sizes = in_sizes[::-1] # e.g, [256, 128, 64]
         outs = outs[::-1]
-        self.scale_factors = self.scale_factors[::-1]
+        self.scale_factors = self.scale_factors[::-1] # [1.0, 1.875, 2.0, 2.0]
 
         # init up scaling
         up_layers = []
@@ -106,7 +107,7 @@ class UNet(BaseModel):
                 self.norm_layer_up, activation_layer
             ).eval()
         else:
-            self.pre_final_conv = PassBlock()
+            self.pre_final_conv = PassBlock() # drop img input
         x = self.pre_final_conv(x, img)
 
         self.last_conv = nn.Conv2d(x.size(1), self.out_channels, 1).eval()

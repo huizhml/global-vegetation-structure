@@ -39,6 +39,8 @@ class AverageMeter:
         plt.ylabel(name.upper())
         plt.xticks(np.arange(len(matric)))
         plt.title(title)
+        if matric.shape[1] > 1:
+            plt.legend([f'Q{i+1}' for i in range(matric.shape[1])])
         return fig
 
 

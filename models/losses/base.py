@@ -11,6 +11,8 @@ class Loss(nn.BCELoss):
 
     def forward(self, y_hat, y, *args) -> Tensor:
         residuals = y_hat - y
+        rmse_rh98 = torch.sqrt(torch.mean(residuals[:, 98]**2))
+        me_rh98 = torch.mean(residuals[:, 98])
         mse = torch.mean(residuals**2)
         me = torch.mean(residuals)
         mae = torch.mean(torch.abs(residuals))
@@ -20,6 +22,8 @@ class Loss(nn.BCELoss):
             "me": me,
             "mae": mae,
             "rmse": rmse,
+            "rmse_rh98": rmse_rh98,
+            "me_rh98": me_rh98
         }
         losses['loss'] = losses[self.name]
         return losses

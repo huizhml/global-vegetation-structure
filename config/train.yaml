@@ -2,12 +2,12 @@ seed_everything: 42
 optimizer:
   class_path: torch.optim.AdamW
   init_args:
-    lr: 0.0001
-# lr_scheduler:
-#   class_path: torch.optim.lr_scheduler.StepLR
-#   init_args:
-#     gamma: 0.1
-#     step_size: 10
+    lr: 0.001
+lr_scheduler:
+  class_path: torch.optim.lr_scheduler.StepLR
+  init_args:
+    gamma: 0.1
+    step_size: 20
 
 data:
   class_path: datasets.ffcv_datamodule.FFCVDataModel
@@ -15,8 +15,8 @@ data:
     train_fp: ~/flash/data/val.beton
     val_fp: ~/flash/data/val.beton
     num_workers: 4
-    batches_ahead: 3
-    batch_size: 4096 # per device
+    batches_ahead: 2 # affect ram usage
+    batch_size: 8192 # per device
     order: QUASI_RANDOM
     os_cache: False
     distributed: False
@@ -34,7 +34,7 @@ model:
       init_args:
         in_channels: 12
         depths: [64, 128, 256, 512]
-        kernal_sizes: [1, 3]
+        kernal_sizes: [3, 3]
         initial_stride: 1
         norm_layer: torch.nn.BatchNorm2d
         activation_layer: 
@@ -59,9 +59,9 @@ trainer:
   devices: auto
   default_root_dir: /tmp/wandb
   # val_check_interval: 100000
-  # check_val_every_n_epoch: 10
+  # check_val_every_n_epoch: 1
   max_epochs: 100
-  num_sanity_val_steps: 0
+  # num_sanity_val_steps: 10
   # fast_dev_run: 10000
   # profiler: advanced
   # profiler: simple
@@ -76,14 +76,19 @@ trainer:
         logging_interval: step
     - class_path: callbacks.regression_metrics_logger.ErrorMetricsLogger
       init_args:
-        log_every: 1
+        log_every: 10
+    - class_path: callbacks.prediction_logger.PredictionLogger
+      init_args:
+        log_every: 10
+        log_batch: 2000
     - class_path: lightning.pytorch.callbacks.ModelCheckpoint
       init_args:
+        dirpath: checkpoints
         monitor: 'val_loss'
         filename: 'BestModel-{epoch:02d}-{val_loss:.2f}'
         save_top_k: 1
         mode: min
-        every_n_epochs: 1 #check every n epochs
+        every_n_epochs: 10 #check every n epochs
         save_last: True # save the last epoch? or just save the last best model?
     # - class_path: callbacks.index_shuffle.IndexShuffler
 

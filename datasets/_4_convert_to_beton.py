@@ -24,7 +24,7 @@ import dask
 import dask.bag as db
 import dask.dataframe as dd
 
-from datasets._merge_h5s import dst_conf
+from datasets._3_merge_h5s import dst_conf
 
 
 class MyDatasetWriter(DatasetWriter):
@@ -184,7 +184,8 @@ def write_beton(out_file, dataset, shuffle_indices=False):
         'wc': IntField(),
         'slope': FloatField(),
         'latlon': NDArrayField(dtype=np.dtype("float64"), shape=(2,)),
-        'attrs': NDArrayField(dtype=np.dtype("float64"), shape=(30,)),
+        'sensitivity': FloatField(),
+        'shot_number': IntField()
     })
 
     # Write dataset
@@ -276,11 +277,11 @@ def main(cfg: DictConfig):
         
         # split_h5(h5_file, str(splited_idx_dir / f'train*.parquet'), out_dir)
         out_beton_name = 'debug' if cfg.get('debug', False) else 'train'
-        out_file = out_idx_dir.parent / f'train_subsets/{out_beton_name}{cfg.split_idx}_attrs_filtered.beton'
+        out_file = out_idx_dir.parent / f'train_subsets/{out_beton_name}{cfg.split_idx}_filtered.beton'
         if not out_file.exists():
             index_ = pd.read_parquet(out_idx_dir / f'train{cfg.split_idx}.parquet')
             if cfg.get('debug', False):
-                index_ = index_.iloc[:100]
+                index_ = index_.iloc[:10000]
             index_ = index_[index_['sensitivity'] >= 0.95]
             print('index table', len(index_))
             index_ = index_.sort_values(['path', 'in_partition_idx'])

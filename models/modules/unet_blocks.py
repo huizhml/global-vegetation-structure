@@ -14,7 +14,6 @@ class UnetBlockDeep(nn.Module):
         super().__init__()
         up_in_shuf, upscaler = get_upscaler(up_in_c, scale_factor, activation_layer, norm_layer, blur, upsampling)
         self.upscaler = upscaler
-
         channel_in = up_in_shuf + x_in_c
         channel_out = channel_in if final else channel_in // 2
         self.block = block(

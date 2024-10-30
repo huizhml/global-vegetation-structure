@@ -1,10 +1,10 @@
 #!/bin/bash
 ##SBATCH --account=project_465000894
 #SBATCH --partition=gpu
-##SBATCH --cpus-per-task=32
-#SBATCH --mem=200G
+##SBATCH --cpus-per-task=16
+#SBATCH --mem=160G
 #SBATCH --gres=gpu:1
-#SBATCH --exclude hendrixgpu04fl,hendrixgpu03fl,hendrixgpu08fl,hendrixgpu11fl,hendrixgpu12fl,hendrixgpu14fl,hendrixgpu15fl,hendrixgpu18fl #for using /scratch
+#SBATCH --exclude hendrixgpu05fl,hendrixgpu06fl,hendrixgpu09fl,hendrixgpu10fl,hendrixgpu11fl,hendrixgpu12fl,hendrixgpu13fl,hendrixgpu18fl #for using /scratch
 #SBATCH --time=3-00:00:00
 #SBATCH --output=./logs/%x-%A_%a.out
 #SBATCH --error=./logs/%x-%A_%a.err
@@ -14,43 +14,57 @@ hostname
 conda activate ffcv
 
 # sync data to /scratch
-mkdir -p /scratch/train_subsets
-rsync -av --progress ~/data/GEDI/train_subsets/train0.beton /scratch/train_subsets
-rsync -av --progress ~/data/GEDI/train_subsets/val.beton /scratch/train_subsets/val.beton &
-# rsync -av ~/data/GEDI/train_subsets/train*.beton /scratch/train_subsets &
-echo syncing data to /scratch
-data_dir=/scratch/train_subsets
+# mkdir -p /scratch/train_subsets
+# rsync -av --progress ~/data/GEDI/train_subsets/train0_attrs_filtered.beton /scratch/train_subsets
+# rsync -av --progress ~/data/GEDI/train_subsets/train1_attrs_filtered.beton /scratch/train_subsets/train1_attrs_filtered.beton &
+# # rsync -av ~/data/GEDI/train_subsets/train*.beton /scratch/train_subsets &
+# echo syncing data to /scratch
+data_dir=${HOME}/data/GEDI/train_subsets #/scratch/train_subsets
 
 
-id=$SLURM_ARRAY_TASK_ID
-echo SLURM_ARRAY_TASK_ID $id
+id=$1
+echo Running job $id
 case $id in
 1)
 echo debuging, using debug1.beton;
 python run.py fit -c config/train.yaml \
-        --data.init_args.train_fp  $data_dir/debug1.beton \
-        --data.init_args.val_fp  $data_dir/debug1.beton \
-        --data.init_args.batch_size 100 \
-        --data.init_args.num_workers 4 \
-        --model.init_args.loss models.losses.robust_loss.AdaptiveLossFunction \
-        --model.init_args.loss.init_args.num_dims 101;;
+        --data.init_args.train_fp $data_dir/debug0_filtered.beton \
+        --data.init_args.val_fp $data_dir/debug0_filtered.beton;;
 2)
-echo running job 2 ;
 echo training, using beton subsets.;
 python run.py fit -c config/train.yaml \
-        --data.init_args.train_fp $data_dir/train0.beton \
-        --data.init_args.val_fp $data_dir/val.beton \
+        --data.init_args.train_fp $data_dir/train1_filtered.beton \
+        --data.init_args.val_fp $data_dir/train7_filtered.beton \
         --trainer.logger.init_args.name L1_loss;;
 3)
-echo running job 3 ;
-echo training, using beton subsets.;
+echo training on beton subsets.;
 python run.py fit -c config/train.yaml \
-        --data.init_args.train_fp $data_dir/train0.beton \
-        --data.init_args.val_fp $data_dir/val.beton \
-        --model.init_args.loss.init_args.name mse \
+        --data.init_args.train_fp $data_dir/train1_filtered.beton \
+        --data.init_args.val_fp $data_dir/train7_filtered.beton \
+        --model.init_args.loss_fc.init_args.name mse \
         --trainer.logger.init_args.name L2_loss;;
 4)
-echo running job 4 ;
+echo training on beton subsets. qualtile loss;
+python run.py fit -c config/train.yaml \
+        --data.init_args.train_fp $data_dir/train1_filtered.beton \
+        --data.init_args.val_fp $data_dir/train7_filtered.beton \
+        --model.init_args.out_channels 303 \
+        --model.init_args.loss_fc.class_path models.losses.quantile_loss.QuantileLoss \
+        --trainer.logger.init_args.name Quantile_loss;;
+5)
+echo find best inital learning rate;
+lr=$(echo "scale=5; $SLURM_ARRAY_TASK_ID / 10000.0" | bc)
+lr=$(printf "%.5f" "$lr")
+echo "$lr" 
+
+python run.py fit -c config/train.yaml \
+        --optimizer.init_args.lr $lr \
+        --data.init_args.train_fp $data_dir/train1_filtered.beton \
+        --data.init_args.val_fp $data_dir/train7_filtered.beton \
+        --model.init_args.out_channels 303 \
+        --model.init_args.loss_fc.class_path models.losses.quantile_loss.QuantileLoss \
+        --trainer.logger.init_args.name Quantile_loss;;
+6)
 train_fp=$1
 if ["$train_fp" == "~/flash/data/debug1.beton"]; then
     echo debug AdaptiveRobustLoss;
@@ -65,29 +79,7 @@ else
         --model.init_args.loss models.losses.robust_loss.RobustLoss \
         --model.init_args.loss.init_args.num_dms 101
 fi
-
-
-singularity exec $SIF bash -c '$WITH_CONDA_VENV ;
-            python run.py fit -c config/train.yaml -c config/train_model_rh.yaml \
-                --optimizer.class_path adabelief_pytorch.AdaBelief \
-                --optimizer.init_args.lr 1e-4 --optimizer.weight_decay 0.06 \
-                --trainer.logger.init_args.name model_rh_GNL_homo \
-                --model.init_args.loss models.losses.gaussian_nl.GNLLoss \
-                --model.init_args.out_channels 102
-            ';;
-5)
-echo running job 5 ;
-singularity exec $SIF bash -c '$WITH_CONDA_VENV ;
-            python run.py fit -c config/train.yaml -c config/train_model_rh.yaml \
-                --optimizer.class_path adabelief_pytorch.AdaBelief \
-                --optimizer.init_args.lr 1e-4 --optimizer.weight_decay 0.06 \
-                --trainer.logger.init_args.name model_rh_GNL_hetero \
-                --model.init_args.loss models.losses.gaussian_nl.GNLLoss \
-                --model.init_args.out_channels 202
-            ';;
-6) 
-echo running job 6;
-python run.py fit -c config/train.yaml ;;
+;;
 *)
 echo runnning nothing ;;
 esac
