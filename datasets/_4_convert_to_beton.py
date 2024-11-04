@@ -280,9 +280,9 @@ def main(cfg: DictConfig):
         out_file = out_idx_dir.parent / f'train_subsets/{out_beton_name}{cfg.split_idx}_filtered.beton'
         if not out_file.exists():
             index_ = pd.read_parquet(out_idx_dir / f'train{cfg.split_idx}.parquet')
+            index_ = index_[index_['sensitivity'] >= 0.95]
             if cfg.get('debug', False):
                 index_ = index_.iloc[:10000]
-            index_ = index_[index_['sensitivity'] >= 0.95]
             print('index table', len(index_))
             index_ = index_.sort_values(['path', 'in_partition_idx'])
             index_['in_partition_idx'] = index_.groupby('path').cumcount()

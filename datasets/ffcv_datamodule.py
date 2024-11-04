@@ -96,8 +96,6 @@ def plot_boxplots(fp, boxplot_dir:str='~/data/GEDI/boxplots'):
         grouped_data = df.groupby('wc')[f'rh{idx}'].apply(list)
         stats = cbook.boxplot_stats(grouped_data.tolist(), labels=grouped_data.index, whis=[5, 95])
 
-        # with open(file, 'w') as f:
-        #     json.dump(stats, f, indent=4, default=convert_to_serializable)
         
     # plot boxplots for each ESA_WC
     for name, wc in ESA_WC.items():

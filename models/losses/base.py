@@ -23,7 +23,9 @@ class Loss(nn.BCELoss):
             "mae": mae,
             "rmse": rmse,
             "rmse_rh98": rmse_rh98,
-            "me_rh98": me_rh98
+            "me_rh98": me_rh98,
+            "pred": y_hat,
+            "target": y
         }
         losses['loss'] = losses[self.name]
         return losses

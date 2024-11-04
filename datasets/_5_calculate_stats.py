@@ -33,12 +33,11 @@ def calculate_s2_mean_std(beton_fp:str):
             n += img.shape[0]
             avg = (avg * n_old + img.sum(axis=(0, 2, 3)))/ n
             avg_x_square = (avg_x_square * n_old + (img**2).sum(axis=(0, 2, 3))) / n          
-            import ipdb; ipdb.set_trace()  
             
     avg *= n
     variance = avg_x_square * n / (n*225 -1) - (avg**2/(n*225)/(n*225-1))
     print('n: ', n)
-    print('mean: ', avg)
+    print('mean: ', avg/n)
     print('std: ', np.sqrt(variance))
     np.savetxt('output/s2_mean_filtered.txt', avg)
     np.savetxt('output/s2_std_filtered.txt', np.sqrt(variance))

@@ -16,28 +16,23 @@ class BaseModel(L.LightningModule):
 
     def training_step(self, sample, batch_idx):
         x, y, mask = self.mask_fc(*sample)
-        output = self.forward(x.float())
-        output = output[mask][..., 7,7] # drop patches with high slope
-        y = y[mask].float().unsqueeze(-1)
-        batch_size = y.size(0)
-        feature_size = y.size(1)
-        y_hat = output.reshape(batch_size, feature_size, -1)
-        # y_hat = self.yhat_transform(output) # for outputing delta RHs
-        losses = self.loss_fc(y_hat, y)
+        y_hat = self.forward(x.float())
+        y_hat = y_hat[mask][...,7,7]
+        y = y[mask].float()
+        losses = self.loss_fc(y_hat, y, mask)
         for name, loss in losses.items():
-            self.log(f'train_{name}', loss, on_epoch=True, on_step=False, sync_dist=True)
-        return {'loss': losses['loss'], 'pred': y_hat, 'target': y, 'wc': sample[2][mask], 'slope': sample[3][mask], 'sens': sample[5], 'shot_number': sample[-1][mask]}
+            if name not in ['pred', 'target']:
+                self.log(f'train_{name}', loss, on_epoch=True, on_step=False, sync_dist=True)
+        return {'loss': losses['loss'], 'pred': losses['pred'], 'target': losses['target'], 'wc': sample[2][mask], 'slope': sample[3][mask], 'sens': sample[5], 'shot_number': sample[-1][mask]}
 
     def validation_step(self, sample, batch_idx):
         x, y, mask = self.mask_fc(*sample)
-        output = self.forward(x.float())
-        output = output[mask][...,7,7] 
-        y = y[mask].float().unsqueeze(-1) # drop patches with high slope
-        batch_size = y.size(0)
-        feature_size = y.size(1)
-        y_hat = output.reshape(batch_size, feature_size, -1)
-        losses = self.loss_fc(y_hat, y)
+        y_hat = self.forward(x.float())
+        y_hat = y_hat[mask][...,7,7]
+        y = y[mask].float()
+        losses = self.loss_fc(y_hat, y, mask)
         for name, loss in losses.items():
-            self.log(f'val_{name}', loss, on_epoch=True, on_step=False, sync_dist=True)
+            if name not in ['pred', 'target']:
+                self.log(f'val_{name}', loss, on_epoch=True, on_step=False, sync_dist=True)
         
-        return {'loss': losses['loss'], 'pred': y_hat, 'target': y, 'wc': sample[2][mask], 'slope': sample[3][mask], 'sens': sample[5][mask], 'shot_number': sample[-1][mask]}
+        return {'loss': losses['loss'], 'pred': losses['pred'], 'target': losses['target'], 'wc': sample[2][mask], 'slope': sample[3][mask], 'sens': sample[5], 'shot_number': sample[-1][mask]}
