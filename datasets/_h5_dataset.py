@@ -35,10 +35,10 @@ class S2Dataset(Dataset):
         row = self.index_table.iloc[idx]
         image = self.h5_file[f'{row.path}/image'][row.in_partition_idx]
         # image = image.astype(np.int16)
-        wc = image[13, 7, 7]
+        wc = image[13]
         image = image[:12]
         label = self.h5_file[f'{row.path}/rhs'][row.in_partition_idx]
-        slope = self.h5_file[f'{row.path}/slope'][row.in_partition_idx, 7, 7]
+        slope = self.h5_file[f'{row.path}/slope'][row.in_partition_idx]
         slope = slope.astype(np.float32)
         latlon = self.h5_file[f'{row.path}/latlon'][row.in_partition_idx]
         sensitivity = self.h5_file[f'{row.path}/gedi_attrs'][row.in_partition_idx, 24]
@@ -56,8 +56,10 @@ class S2Dataset(Dataset):
 
 
 if __name__ == '__main__':
-    h5_files = Path.home() / 'data/GEDI/merged_file_test.h5'
-    index_table = 'cache/train_index_table.csv'
+    import pandas as pd
+    h5_files = Path.home() / 'data/GEDI/train.h5'
+    index_table = Path.home() / 'data/GEDI/index_table_train_subsets/train0.parquet'
+    index_table = pd.read_parquet(index_table)
     dataset = S2Dataset(h5_files, index_table)
     
     for i in range(len(dataset)):

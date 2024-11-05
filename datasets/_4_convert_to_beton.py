@@ -181,8 +181,8 @@ def write_beton(out_file, dataset, shuffle_indices=False):
         # Tune options to optimize dataset size, throughput at train-time
         'image': NDArrayField(dtype=np.dtype("int16"), shape=(12, 15, 15)),
         'rhs': NDArrayField(dtype=np.dtype("float32"), shape=(101,)),
-        'wc': IntField(),
-        'slope': FloatField(),
+        'wc': NDArrayField(dtype=np.dtype("int16"), shape=(15, 15)), #IntField(),
+        'slope':  NDArrayField(dtype=np.dtype("float32"), shape=(15, 15)),
         'latlon': NDArrayField(dtype=np.dtype("float64"), shape=(2,)),
         'sensitivity': FloatField(),
         'shot_number': IntField()
@@ -254,6 +254,7 @@ class MyConfig:
     split_idx: int = 0
     seed: int = 42
     shuffle_indices: bool = False
+    version: str = '1' # version of the beton file
 
 cs = ConfigStore.instance()
 cs.store(name="config", node=MyConfig)
@@ -277,7 +278,7 @@ def main(cfg: DictConfig):
         
         # split_h5(h5_file, str(splited_idx_dir / f'train*.parquet'), out_dir)
         out_beton_name = 'debug' if cfg.get('debug', False) else 'train'
-        out_file = out_idx_dir.parent / f'train_subsets/{out_beton_name}{cfg.split_idx}_filtered.beton'
+        out_file = out_idx_dir.parent / f'train_subsets/{out_beton_name}{cfg.split_idx}_filtered_v{cfg.version}.beton'
         if not out_file.exists():
             index_ = pd.read_parquet(out_idx_dir / f'train{cfg.split_idx}.parquet')
             index_ = index_[index_['sensitivity'] >= 0.95]
@@ -293,7 +294,7 @@ def main(cfg: DictConfig):
         assert h5_file.stem == split, f'cannot generate {split}.beton from {h5_file}, check index_dir and h5_file'
         assert index_dir.stem.split('_')[-1] == 'sensitivity', f'index table should be the one with sensitivity, {index_dir} provided'
         
-        out_file = f'~/data/GEDI/train_subsets/{split}_attrs_filtered.beton'
+        out_file = f'~/data/GEDI/train_subsets/{split}_filtered_v{cfg.version}.beton'
         if not Path(out_file).exists():
             print(f'Generating {split}.beton...')
             index_ = pd.read_parquet(index_dir/'*.parquet')
