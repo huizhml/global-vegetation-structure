@@ -12,8 +12,8 @@ lr_scheduler:
 data:
   class_path: datasets.ffcv_datamodule.FFCVDataModel
   init_args: 
-    train_fp: ~/flash/data/val.beton
-    val_fp: ~/flash/data/val.beton
+    train_fp: ~/data/GEDI/train_subsets/debug1_filtered.beton
+    val_fp: ~/data/GEDI/train_subsets/debug1_filtered.beton
     num_workers: 4
     batches_ahead: 3 # affect ram usage
     batch_size: 8192 # per device
@@ -61,7 +61,7 @@ trainer:
   # val_check_interval: 100000
   # check_val_every_n_epoch: 1
   max_epochs: 100
-  # num_sanity_val_steps: 10
+  num_sanity_val_steps: 0
   # fast_dev_run: 10000
   # profiler: advanced
   # profiler: simple
@@ -99,3 +99,5 @@ trainer:
         name: test
         job_type: train
         save_dir: /tmp/logs
+        log_model: True # 'all' would log the model after each epoch
+        id:

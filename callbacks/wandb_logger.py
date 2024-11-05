@@ -2,6 +2,8 @@ from typing import Any, List, Optional, Mapping
 import wandb
 import lightning.pytorch.loggers.wandb as wb
 from lightning.pytorch.utilities.rank_zero import rank_zero_only
+from typing_extensions import override
+from lightning.pytorch.callbacks.model_checkpoint import ModelCheckpoint
 
 
 class WandbLogger(wb.WandbLogger):
@@ -11,16 +13,7 @@ class WandbLogger(wb.WandbLogger):
                  artifact_path: str = None,
                  **kwargs: Any) -> None:
         self.artifact_path = artifact_path
-        print('******** allow_val_change: ',
-              kwargs.get('allow_val_change', None))
-        if kwargs.get('resume', None):
-            kwargs = {
-                'id': kwargs['id'],
-                'project': kwargs['project'],
-                'job_type': kwargs['project'],
-                'resume': 'allow'
-            }
-        elif tags is not None:
+        if tags is not None:
             tags = [t.strip() for t in tags.rstrip(',').split(',')]
             kwargs.update({'tags': tags})
         super().__init__(**kwargs)

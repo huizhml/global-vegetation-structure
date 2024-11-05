@@ -7,6 +7,12 @@ import lightning.pytorch as pl
 from lightning.pytorch.cli import LightningCLI, SaveConfigCallback
 from lightning.pytorch.trainer import Trainer
 from lightning.pytorch.loggers import Logger
+from argparse import Namespace
+from typing import Any, Dict, List, Optional, Union
+from lightning.pytorch.utilities.rank_zero import rank_zero_warn
+from lightning.pytorch.cli import LightningArgumentParser
+
+ArgsType = Optional[Union[List[str], Dict[str, Any], Namespace]]
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(message)s')
 logging.getLogger()
@@ -36,6 +42,27 @@ class LoggerSaveConfigCallback(SaveConfigCallback):
 class MyLightningCLI(LightningCLI):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+
+    def parse_arguments(self, parser: LightningArgumentParser, args: ArgsType) -> None:
+        """Parses command line arguments and stores it in ``self.config``."""
+        if args is not None and len(sys.argv) > 1:
+            rank_zero_warn(
+                "LightningCLI's args parameter is intended to run from within Python like if it were from the command "
+                "line. To prevent mistakes it is not recommended to provide both args and command line arguments, got: "
+                f"sys.argv[1:]={sys.argv[1:]}, args={args}."
+            )
+        if isinstance(args, (dict, Namespace)):
+            self.config = parser.parse_object(args)
+        else:
+            self.config = parser.parse_args(args)
+        
+        if run_id := self.config.fit.trainer.logger.init_args.id:
+            import wandb
+            cfg = self.config.fit.trainer.logger.init_args
+            run_ = wandb.init(project=cfg.project, id=run_id, resume="must")
+            artifact = run_.use_artifact(f'model-{run_id}:best', type='model')
+            ckpt_path = artifact.file()
+            self.config.fit.ckpt_path = ckpt_path
 
     # def add_arguments_to_parser(self, parser) -> None:
     #     import ipdb; ipdb.set_trace()
