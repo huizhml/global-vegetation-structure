@@ -39,7 +39,7 @@ class AverageMeter:
         plt.ylabel(name.upper())
         plt.xticks(np.arange(len(matric)))
         plt.title(title)
-        if matric.shape[1] > 1:
+        if len(matric.shape) > 1:
             plt.legend([f'Q{i+1}' for i in range(matric.shape[1])])
         return fig
 
@@ -57,7 +57,7 @@ class ErrorMetricsLogger(Callback):
     def on_train_batch_end(self, trainer: Trainer, pl_module: LightningModule, outputs, batch: Any, batch_idx: int) -> None:
         current_epoch = trainer.current_epoch
         if check_if_log(current_epoch, self.log_every):
-            self.avgmeter.update(outputs['pred'], outputs['target'])
+            self.avgmeter.update(outputs['rhs_hat'], outputs['rhs'])
         return super().on_train_batch_end(trainer, pl_module, outputs, batch, batch_idx)
     
     def on_validation_epoch_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
@@ -74,7 +74,7 @@ class ErrorMetricsLogger(Callback):
     def on_validation_batch_end(self, trainer: Trainer, pl_module: LightningModule, outputs, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> None:
         current_epoch = trainer.current_epoch
         if check_if_log(current_epoch, self.log_every):
-            self.avgmeter.update(outputs['pred'], outputs['target'])
+            self.avgmeter.update(outputs['rhs_hat'], outputs['rhs'])
         return super().on_validation_batch_end(trainer, pl_module, outputs, batch, batch_idx, dataloader_idx)
     
     def on_validation_epoch_end(self, trainer: Trainer, pl_module: LightningModule) -> None:

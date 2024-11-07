@@ -47,39 +47,19 @@ class SlopeWCMask(nn.Module):
     def forward(self, x, y, wc, slope, latlon, *args) -> Tensor:
         # NOTE: zero out the central pixel if it is in classes: 'Built-up', 'Snow and ice', 'Permanent water bodies'
         zero_cls = torch.tensor([ESA_WC['Built-up'], ESA_WC['Snow and ice'], ESA_WC['Permanent water bodies']], device=x.device)
-        # wc = wc[..., 7, 7]
+        wc = wc[..., 7, 7]
         label_mask = torch.where(torch.isin(wc, zero_cls), 0, 1)
-        y = y * label_mask
+        y = y * label_mask.unsqueeze(-1)
         # NOTE: if the central pixel is in the exclude class and the slope is greater than the threshold, the loss mask is 0
         exclude_cls = torch.tensor([ESA_WC['Grassland'], ESA_WC['Bare / sparse vegetation'], ESA_WC['Moss and lichen']], device=x.device)
         loss_mask_wc = torch.where(torch.isin(wc, exclude_cls), 1, 0)
-        # slope = slope[..., 7, 7]
+        slope = slope[..., 7, 7]
         loss_mask_slope = torch.where(slope > self.slope_th, 1, 0)
         loss_mask = loss_mask_wc * loss_mask_slope
         loss_mask = 1 - loss_mask
         loss_mask = loss_mask.type(torch.bool)
-        return normalize(x.float(), MEAN, STD), y, loss_mask.squeeze()
-    
+        return normalize(x.float(), MEAN, STD), y, None, None, None, loss_mask.squeeze()
 
-class SlopeMask(nn.Module):
-    def __init__(self, slope_th: float = 20):
-        super().__init__()
-        self.slope_th = slope_th
-
-    @torch.no_grad()
-    def forward(self, x, y, wc, slope, latlon, *args) -> Tensor:
-        # NOTE: if the central pixel is in the exclude class and the slope is greater than the threshold, the loss mask is 0
-        exclude_cls = torch.tensor([ESA_WC['Grassland'], ESA_WC['Bare / sparse vegetation'], ESA_WC['Moss and lichen']], device=x.device)
-        loss_mask_wc = torch.where(torch.isin(wc, exclude_cls), 1, 0)
-        # slope = slope[..., 7, 7]
-        loss_mask_slope = torch.where(slope > self.slope_th, 1, 0)
-        loss_mask = loss_mask_wc * loss_mask_slope
-        loss_mask = 1 - loss_mask
-        loss_mask = loss_mask.type(torch.bool)
-        wc = wc/10
-        wc = torch.where(wc==9.5, 0, wc)
-        y = torch.cat([wc, y], dim=-1)
-        return normalize(x.float(), MEAN, STD), y, loss_mask.squeeze()
     
 
 class Normalize(nn.Module):
@@ -87,8 +67,5 @@ class Normalize(nn.Module):
         super().__init__()
 
     @torch.no_grad()
-    def forward(self, x, y, wc, slope, latlon, *args) -> Tensor:
-        wc = wc/10
-        wc = torch.where(wc==9.5, 0, wc)
-        y = torch.cat([slope.unsqueeze(-1), wc.unsqueeze(-1), y], dim=-1)
-        return normalize(x.float(), MEAN, STD), y,
+    def forward(self, x) -> Tensor:
+        return normalize(x.float(), MEAN, STD)

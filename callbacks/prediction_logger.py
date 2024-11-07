@@ -8,10 +8,11 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
 
-from const import ESA_WC
+from const import ESA_WC_s
 from .utils import check_if_log
-    
-ESA_WC = {value: key for key, value in ESA_WC.items()}
+
+
+
 def plot_prediction(pred: Tensor, target: Tensor, xlabel:str='Relative Height (0-100)', **kwargs: Any):
     fig = plt.figure(figsize=(12, 6))
     plt.plot(pred.cpu().numpy())
@@ -107,13 +108,18 @@ class PredictionLogger(Callback):
             # plt.close(fig)
             for i in shot_numbers:
                 idx = torch.where(outputs['shot_number']==i)[0]
-                pred = torch.cat([outputs['pred'][idx], outputs['target'][idx]], dim=2).cpu().numpy()
-                n_features = outputs['pred'].shape[1]
-                n_predictions = outputs['pred'].shape[2]
-                slope = outputs['slope'][idx].cpu().numpy().round(2)
-                wc = outputs['wc'][idx].cpu().numpy()
-
-                title = f'[train] epoch{current_epoch} sample{i}_slope{slope.item()}_{ESA_WC[wc.item()]}'
+                pred = torch.cat([outputs['rhs_hat'][idx], outputs['rhs'][idx]], dim=2).cpu().numpy()
+                n_features = outputs['rhs_hat'].shape[1]
+                n_predictions = outputs['rhs_hat'].shape[2]
+                slope = outputs['slope'][idx,7,7].cpu().numpy().round(2)
+                lc = outputs['lc'][idx,7,7].cpu().numpy()
+                if outputs.get('lc_pred') is not None:
+                    lc_pred = outputs['lc_pred'][idx,7,7].cpu().numpy()
+                    lc_pred_name = ESA_WC_s[lc_pred.item()].replace('/', '_')
+                else:
+                    lc_pred_name = None
+                lc_name = ESA_WC_s[lc.item()].replace('/', '_')
+                title = f'[train] epoch{current_epoch}/{lc_name}-pred-{lc_pred_name}_slope{round(slope.item(), 2)} sample{i}'
                 line = wandb.plot.line_series(
                             xs=range(n_features),
                             ys=pred[0].T,
@@ -147,13 +153,18 @@ class PredictionLogger(Callback):
             # plt.close(fig)
             for i in shot_numbers:
                 idx = torch.where(outputs['shot_number']==i)[0]
-                pred = torch.cat([outputs['pred'][idx], outputs['target'][idx]], dim=2).cpu().numpy()
-                n_features = outputs['pred'].shape[1]
-                n_predictions = outputs['pred'].shape[2]
-                slope = outputs['slope'][idx].cpu().numpy().round(2)
-                wc = outputs['wc'][idx].cpu().numpy()
-
-                title = f'[val] epoch{current_epoch} sample{i}_slope{slope.item()}_{ESA_WC[wc.item()]}'
+                pred = torch.cat([outputs['rhs_hat'][idx], outputs['rhs'][idx]], dim=2).cpu().numpy()
+                n_features = outputs['rhs_hat'].shape[1]
+                n_predictions = outputs['rhs_hat'].shape[2]
+                slope = outputs['slope'][idx,7,7].cpu().numpy().round(2)
+                lc = outputs['lc'][idx,7,7].cpu().numpy()
+                if outputs.get('lc_pred') is not None:
+                    lc_pred = outputs['lc_pred'][idx,7,7].cpu().numpy()
+                    lc_pred_name = ESA_WC_s[lc_pred.item()].replace('/', '_')
+                else:
+                    lc_pred_name = None
+                lc_name = ESA_WC_s[lc.item()].replace('/', '_')
+                title = f'[val] epoch{current_epoch}/{lc_name}-pred-{lc_pred_name}_slope{round(slope.item(), 2)} sample{i}'
                 line = wandb.plot.line_series(
                             xs=range(n_features),
                             ys=pred[0].T,

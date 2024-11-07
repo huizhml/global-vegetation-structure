@@ -126,9 +126,12 @@ if __name__ == '__main__':
     import hydra
     @hydra.main(config_name='train', config_path='../config', version_base='1.2')
     def main(cfg):
-        # datamodel = FFCVDataModel(**cfg.data.init_args)
-        # import ipdb; ipdb.set_trace()
-        # dataloader = datamodel.train_dataloader()
+        datamodel = FFCVDataModel(**cfg.data.init_args)
+        dataloader = datamodel.train_dataloader()
+        for i, batch in enumerate(dataloader):
+            if batch[2].min() ==0:
+                print(batch[2].min())
+                import ipdb; ipdb.set_trace()
         task = cfg.task
         print(task)
         if task in globals():

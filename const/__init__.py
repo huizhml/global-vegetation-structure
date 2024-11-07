@@ -1,4 +1,5 @@
 ESA_WC = {
+    'unknown': 0,
     'Tree cover': 10,
     'Shrubland': 20,
     'Grassland': 30,
@@ -10,6 +11,21 @@ ESA_WC = {
     'Herbaceous wetland': 90,
     'Mangroves': 95,
     'Moss and lichen': 100,
+}
+
+ESA_WC_s = {
+    0:'unknown',
+    1: 'Tree',
+    2: 'Shrub',
+    3: 'Grass',
+    4: 'Crop',
+    5: 'Built',
+    6: 'Bare',
+    7: 'Snow',
+    8: 'Water',
+    9: 'Herb',
+    10: 'Moss', 
+    11: 'Mangroves'
 }
 
 BIOMES = [

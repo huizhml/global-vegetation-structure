@@ -3,13 +3,13 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 import torch.nn.functional as F
-from models.losses.base import Loss
+from models.losses.base import MaskedLoss
 
 
-class QuantileCELoss(Loss):
+class QuantileCELoss(MaskedLoss):
     
-    def __init__(self, *, quantiles: List[float] = [0.05, 0.5, 0.95]) -> None:
-        super().__init__()
+    def __init__(self, *, zero_out:bool=None, quantiles: List[float] = [0.05, 0.5, 0.95]) -> None:
+        super().__init__(zero_out=zero_out)
         if isinstance(quantiles, list):
             assert all(0 < q < 1 for q in quantiles), "Quantiles should be in (0, 1) range"
         else:
@@ -17,34 +17,47 @@ class QuantileCELoss(Loss):
         self.quantiles = quantiles
 
 
-    def forward(self, y_hat, y, mask, *args) -> Tensor:
+    def forward(self,  y_hat, rhs, lc, slope, latlon, sens, shot_number) -> Tensor:
         if isinstance(self.quantiles, list):
             quantiles_tensor = torch.tensor(self.quantiles, device=y_hat.device).view(1, -1)
         else:
             quantiles_tensor = self.quantiles.view(1, -1)
 
         median_idx = self.quantiles.index(0.5)
-        lc = y[:,0].long() # the first output channel is the land cover prediction
-        lc_hat = y_hat[:,:11] # we have 11 land cover classes
+        label_mask, loss_mask = self.get_mask(lc, slope)
+        y_hat = y_hat[loss_mask]
+        rhs = rhs[loss_mask].unsqueeze(-1)
+        lc = lc[loss_mask]
+        lc = lc//10
+        lc[lc==0.95] = 11
+        lc = lc.long()
+        lc_hat = y_hat[:,:12] # we have 11 land cover classes + unknown
         ce_loss = F.cross_entropy(lc_hat, lc)
-        
-        acc = (lc_hat.argmax(dim=-1) == lc).float().mean()
+        lc_pred = lc_hat.argmax(dim=1)
+        acc = (lc_pred == lc).float().mean()
 
-        y_hat = y_hat[:,11:].unsqueeze(-1)
-        y = y[..., 1:].unsqueeze(-1)
-        batch_size = y.size(0)
-        feature_size = y.size(1)
-        y_hat = y_hat.reshape(batch_size, feature_size, -1)        
-        losses = super().forward(y_hat[:,:, median_idx:median_idx+1], y)
-        
-        residuals = y_hat - y
+        rhs_hat = y_hat[:,12:, 7, 7] # (n, 303)
+        n, feature_size, _ = rhs.shape
+        rhs_hat = rhs_hat.reshape(n, feature_size, -1)
+        residuals = rhs_hat - rhs
+        error_metrics = self.error_metrics(residuals[..., median_idx])
         # Calculate losses for each quantile
         quantile_losses = torch.max((quantiles_tensor - 1) * residuals, quantiles_tensor * residuals)
         # Sum the losses and take the mean
         quantile_loss = torch.mean(torch.sum(quantile_losses, dim=2))
-        losses['loss'] = quantile_loss + ce_loss
-        losses['lc_ce'] = ce_loss
-        losses['quantile_loss'] = quantile_loss
-        losses['lc_acc'] = acc
-        losses['pred'] = y_hat
-        return losses
+        error_metrics['loss'] = quantile_loss + ce_loss
+        error_metrics['lc_ce'] = ce_loss
+        error_metrics['quantile_loss'] = quantile_loss
+        error_metrics['lc_acc'] = acc
+        output = {
+            'loss': error_metrics['loss'],
+            'lc_pred': lc_pred,
+            'lc': lc,
+            'rhs_hat': rhs_hat,
+            'rhs': rhs,
+            'slope': slope[loss_mask],
+            'latlon': latlon[loss_mask],
+            'sens': sens[loss_mask],
+            'shot_number': shot_number[loss_mask]
+        }
+        return error_metrics, output

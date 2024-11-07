@@ -12,11 +12,11 @@ lr_scheduler:
 data:
   class_path: datasets.ffcv_datamodule.FFCVDataModel
   init_args: 
-    train_fp: ~/data/GEDI/train_subsets/debug1_filtered.beton
-    val_fp: ~/data/GEDI/train_subsets/debug1_filtered.beton
+    train_fp: ~/data/GEDI/train_subsets/debug0_filtered_v1.beton
+    val_fp: ~/data/GEDI/train_subsets/debug0_filtered_v1.beton
     num_workers: 4
     batches_ahead: 3 # affect ram usage
-    batch_size: 8192 # per device
+    batch_size: 4096 # per device
     order: QUASI_RANDOM
     os_cache: False
     distributed: False
@@ -50,8 +50,8 @@ model:
     final_skip: False
     self_attention: False
     # used in the base model (_base_pl_model.py)
-    mask_fc: datasets.transforms.SlopeWCMask
-    loss_fc: models.losses.base.Loss #torch.nn.BCELoss # 
+    transform: datasets.transforms.Normalize
+    loss_fc: models.losses.base.MaskedLoss #torch.nn.BCELoss # 
 
 trainer:
   accelerator: gpu
