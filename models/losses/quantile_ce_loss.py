@@ -31,6 +31,9 @@ class QuantileCELoss(MaskedLoss):
         lc = lc//10
         lc[lc==0.95] = 11
         lc = lc.long()
+        center_lc = lc[..., 7, 7]
+        veg_idx = torch.where((center_lc==5)|(center_lc==7) | (center_lc==8), 0, 1) # built-up, snow and ice, permanent water bodies
+        veg_idx = veg_idx.bool()
         lc_hat = y_hat[:,:12] # we have 11 land cover classes + unknown
         ce_loss = F.cross_entropy(lc_hat, lc)
         lc_pred = lc_hat.argmax(dim=1)
@@ -41,6 +44,7 @@ class QuantileCELoss(MaskedLoss):
         rhs_hat = rhs_hat.reshape(n, feature_size, -1)
         residuals = rhs_hat - rhs
         error_metrics = self.error_metrics(residuals[..., median_idx])
+        error_metrics_veg = self.error_metrics(residuals[veg_idx,..., median_idx])
         # Calculate losses for each quantile
         quantile_losses = torch.max((quantiles_tensor - 1) * residuals, quantiles_tensor * residuals)
         # Sum the losses and take the mean
@@ -60,4 +64,4 @@ class QuantileCELoss(MaskedLoss):
             'sens': sens[loss_mask],
             'shot_number': shot_number[loss_mask]
         }
-        return error_metrics, output
+        return error_metrics, error_metrics_veg, output

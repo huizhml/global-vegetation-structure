@@ -14,7 +14,8 @@ class AverageMeter:
         self.xlabel = xlabel
         self.me = 0 # mean error for each rh
         self.mae = 0 # mean absolute error for each rh
-        self.mse = 0 # mean squared error for each rh
+        self.rmse = 0 # mean squared error for each rh
+        self.pred_interval = 0
         self.n = 0
     
     def update(self, pred: Tensor, y: Tensor) -> None:
@@ -22,25 +23,30 @@ class AverageMeter:
         self.n += len(residuals)
         self.me += residuals.sum(dim=0)
         self.mae += residuals.abs().sum(dim=0)
-        self.mse += residuals.pow(2).sum(dim=0)
+        self.rmse += residuals.pow(2).sum(dim=0)
+        if len(residuals.shape) > 2:
+            self.pred_interval += (pred[..., 0] - pred[..., -1]).sum(dim=0)
 
     def reset(self):
         self.me = 0 # mean error for each rh
         self.mae = 0 # mean absolute error for each rh
-        self.mse = 0 # mean squared error for each rh
+        self.rmse = 0 # mean squared error for each rh
+
         self.n = 0
 
     def plot(self, name:str=None, title:str=None,**kwargs: Any):
-        matric = getattr(self, name)
-        matric /= self.n
+        metric = getattr(self, name)
+        metric /= self.n
+        if name == 'rmse':
+            metric = metric.sqrt()
         fig = plt.figure(figsize=(30, 6))
-        plt.plot(matric.cpu().numpy())
+        plt.plot(metric.cpu().numpy())
         plt.xlabel(self.xlabel)
         plt.ylabel(name.upper())
-        plt.xticks(np.arange(len(matric)))
+        plt.xticks(np.arange(len(metric)))
         plt.title(title)
-        if len(matric.shape) > 1:
-            plt.legend([f'Q{i+1}' for i in range(matric.shape[1])])
+        if len(metric.shape) > 1:
+            plt.legend([f'Q{i+1}' for i in range(metric.shape[1])])
         return fig
 
 
@@ -63,7 +69,7 @@ class ErrorMetricsLogger(Callback):
     def on_validation_epoch_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
         current_epoch = trainer.current_epoch
         if check_if_log(current_epoch, self.log_every):
-            for metric in ['me', 'mae', 'mse']:
+            for metric in ['me', 'mae', 'rmse', 'pred_interval']:
                 fig = self.avgmeter.plot(metric, f'{metric.upper()} [train]')
                 wandb.log({f'{metric} [train]': wandb.Image(fig)})
                 plt.close(fig)
@@ -80,7 +86,7 @@ class ErrorMetricsLogger(Callback):
     def on_validation_epoch_end(self, trainer: Trainer, pl_module: LightningModule) -> None:
         current_epoch = trainer.current_epoch
         if check_if_log(current_epoch, self.log_every):
-            for metric in ['me', 'mae', 'mse']:
+            for metric in ['me', 'mae', 'rmse', 'pred_interval']:
                 fig = self.avgmeter.plot(metric, f'{metric.upper()} [val]')
                 wandb.log({f'{metric} [val]': wandb.Image(fig)})
                 plt.close(fig)

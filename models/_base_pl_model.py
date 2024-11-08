@@ -19,16 +19,20 @@ class BaseModel(L.LightningModule):
         x = self.transform(sample[0])
         y_hat = self.forward(x.float())
 
-        error_metrics, output = self.loss_fc(y_hat, *sample[1:])
+        error_metrics, error_metrics_veg, output = self.loss_fc(y_hat, *sample[1:])
         for name, err in error_metrics.items():
             self.log(f'train_{name}', err, on_epoch=True, on_step=False, sync_dist=True)
+        for name, err in error_metrics_veg.items():
+            self.log(f'veg/train_{name}', err, on_epoch=True, on_step=False, sync_dist=True)
         return output
 
     def validation_step(self, sample, batch_idx):
         x = self.transform(sample[0])
         y_hat = self.forward(x.float())
 
-        error_metrics, output = self.loss_fc(y_hat, *sample[1:])
+        error_metrics, error_metrics_veg, output = self.loss_fc(y_hat, *sample[1:])
         for name, err in error_metrics.items():
             self.log(f'val_{name}', err, on_epoch=True, on_step=False, sync_dist=True)
+        for name, err in error_metrics_veg.items():
+            self.log(f'veg/val_{name}', err, on_epoch=True, on_step=False, sync_dist=True)
         return output
