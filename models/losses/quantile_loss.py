@@ -29,15 +29,14 @@ class QuantileLoss(MaskedLoss):
             rhs = rhs * label_mask.unsqueeze(-1)
         rhs_hat = rhs_hat[loss_mask][..., 7, 7].unsqueeze(-1)
         rhs = rhs[loss_mask].float().unsqueeze(-1)
-        lc = lc[loss_mask]
-        lc = lc//10
+        lc = lc//10 # high slope doesn't change the land cover, so not need to mask lc
         lc[lc==0.95] = 11
         lc = lc.long()
-        center_lc = lc[..., 7, 7]
+        center_lc = lc[loss_mask,..., 7, 7]
         veg_idx = torch.where((center_lc==5)|(center_lc==7) | (center_lc==8), 0, 1) # built-up, snow and ice, permanent water bodies
         veg_idx = veg_idx.bool()
 
-        n, feature_size, _ = rhs.shape
+        n, feature_size, _ = rhs.shape # NOTE: n <= batch_size
         rhs_hat = rhs_hat.reshape(n, feature_size, -1) # n, 101, 3
         residuals = rhs_hat - rhs
         error_metrics = self.error_metrics(residuals[..., median_idx])
@@ -47,6 +46,7 @@ class QuantileLoss(MaskedLoss):
         error_metrics['loss'] = quantile_loss
         output = {
             'loss': quantile_loss,
+            'mask': loss_mask,
             'lc': lc,
             'rhs_hat': rhs_hat,
             'rhs': rhs,

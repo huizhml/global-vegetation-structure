@@ -25,21 +25,22 @@ class QuantileCELoss(MaskedLoss):
 
         median_idx = self.quantiles.index(0.5)
         label_mask, loss_mask = self.get_mask(lc, slope)
-        y_hat = y_hat[loss_mask]
+        if self.zero_out:
+            rhs = rhs * label_mask.unsqueeze(-1)
+        lc_hat = y_hat[:,:12] # we have 11 land cover classes + unknown
+        rhs_hat = y_hat[loss_mask, 12:, 7, 7] # (n, 303)
         rhs = rhs[loss_mask].unsqueeze(-1)
-        lc = lc[loss_mask]
         lc = lc//10
         lc[lc==0.95] = 11
         lc = lc.long()
-        center_lc = lc[..., 7, 7]
+        center_lc = lc[loss_mask,..., 7, 7]
         veg_idx = torch.where((center_lc==5)|(center_lc==7) | (center_lc==8), 0, 1) # built-up, snow and ice, permanent water bodies
         veg_idx = veg_idx.bool()
-        lc_hat = y_hat[:,:12] # we have 11 land cover classes + unknown
+        
         ce_loss = F.cross_entropy(lc_hat, lc)
         lc_pred = lc_hat.argmax(dim=1)
         acc = (lc_pred == lc).float().mean()
 
-        rhs_hat = y_hat[:,12:, 7, 7] # (n, 303)
         n, feature_size, _ = rhs.shape
         rhs_hat = rhs_hat.reshape(n, feature_size, -1)
         residuals = rhs_hat - rhs
@@ -55,6 +56,7 @@ class QuantileCELoss(MaskedLoss):
         error_metrics['lc_acc'] = acc
         output = {
             'loss': error_metrics['loss'],
+            'mask': loss_mask,
             'lc_pred': lc_pred,
             'lc': lc,
             'rhs_hat': rhs_hat,

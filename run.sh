@@ -39,57 +39,48 @@ fi
 
 id=$1
 echo Running job $id
+run_id=$2
+max_epochs=${$3:-200}
 case $id in
-1)
-echo debuging, using debug1.beton;
+9)
+echo quantile regression and land cover mapping, zero out RH profile for building etc.;
 python run.py fit -c config/train.yaml \
         --data.init_args.train_fp $data_dir/$train_data_name \
-        --data.init_args.val_fp $data_dir/$val_data_name \
+        --data.init_args.val_fp $data_dir/$train_data_name \
+        --model.init_args.out_channels 315 \
+        --model.init_args.loss_fc.class_path models.losses.quantile_ce_loss.QuantileCELoss \
+        --model.init_args.loss_fc.zero_out True \
+        --trainer.callbacks+=callbacks.classification_logger.ClassificationLogger \
+        --trainer.callbacks.log_val_every=10 \
+        --trainer.max_epochs $max_epochs \
+        --trainer.logger.init_args.id $run_id \
+        --trainer.logger.init_args.name Quantile_CE_loss_zero_out
+;;
+8)
+echo quantile regression, zero out RH profile for building etc.;
+python run.py fit -c config/train.yaml \
+        --data.init_args.train_fp $data_dir/$train_data_name \
+        --data.init_args.val_fp $data_dir/$train_data_name \
         --model.init_args.out_channels 303 \
         --model.init_args.loss_fc.class_path models.losses.quantile_loss.QuantileLoss \
         --model.init_args.loss_fc.zero_out True \
+        --trainer.max_epochs $max_epochs \
+        --trainer.logger.init_args.id $run_id \
+        --trainer.logger.init_args.name Quantile_loss_zero_out
+;;
+7)
+echo Quantile regression and land cover mapping;
+python run.py fit -c config/train.yaml \
+        --data.init_args.train_fp $data_dir/$train_data_name \
+        --data.init_args.val_fp $data_dir/$val_data_name \
+        --model.init_args.out_channels 315 \
         --model.init_args.loss_fc.class_path models.losses.quantile_ce_loss.QuantileCELoss \
         --trainer.callbacks+=callbacks.classification_logger.ClassificationLogger \
-        --trainer.callbacks.log_val_every=1
+        --trainer.callbacks.log_val_every=10 \
+        --trainer.max_epochs $max_epochs \
+        --trainer.logger.init_args.id $run_id \
+        --trainer.logger.init_args.name Quantile_CE_loss
         ;;
-2)
-echo training, using beton subsets.;
-python run.py fit -c config/train.yaml \
-        --data.init_args.train_fp $data_dir/$train_data_name \
-        --data.init_args.val_fp $data_dir/$val_data_name \
-        --trainer.logger.init_args.name L1_loss;;
-3)
-echo training on beton subsets.;
-python run.py fit -c config/train.yaml \
-        --data.init_args.train_fp $data_dir/$train_data_name \
-        --data.init_args.val_fp $data_dir/$val_data_name \
-        --model.init_args.loss_fc.init_args.name mse \
-        --trainer.logger.init_args.name L2_loss;;
-4)
-# resume --trainer.logger.init_args.id 
-echo training on beton subsets. qualtile loss; 
-python run.py fit -c config/train.yaml \
-        --data.init_args.train_fp $data_dir/$train_data_name \
-        --data.init_args.val_fp $data_dir/$val_data_name \
-        --model.init_args.out_channels 303 \
-        --model.init_args.loss_fc.class_path models.losses.quantile_loss.QuantileLoss \
-        --trainer.max_epochs 200 \
-        --trainer.logger.init_args.id 4fd8j93r \
-        --trainer.logger.init_args.name Quantile_loss
-        ;;
-5)
-    echo find best inital learning rate;
-    lr=$(echo "scale=5; $SLURM_ARRAY_TASK_ID / 10000.0" | bc)
-    lr=$(printf "%.5f" "$lr")
-    echo "$lr" 
-
-    python run.py fit -c config/train.yaml \
-            --optimizer.init_args.lr $lr \
-            --data.init_args.train_fp $data_dir/$train_data_name \
-            --data.init_args.val_fp $data_dir/$val_data_name \
-            --model.init_args.out_channels 303 \
-            --model.init_args.loss_fc.class_path models.losses.quantile_loss.QuantileLoss \
-            --trainer.logger.init_args.name Quantile_loss;;
 6)
     echo sanity check for quantile regression;
     data_dir=${HOME}/data/GEDI/train_subsets
@@ -112,31 +103,56 @@ python run.py fit -c config/train.yaml \
             --lr_scheduler.init_args.step_size 100 \
             --trainer.max_epochs 1000 \
             --trainer.logger.init_args.name Sanity_check_L1_loss;;
-7)
-echo Quantile regression and land cover mapping;
+5)
+    echo find best inital learning rate;
+    lr=$(echo "scale=5; $SLURM_ARRAY_TASK_ID / 10000.0" | bc)
+    lr=$(printf "%.5f" "$lr")
+    echo "$lr" 
+
+    python run.py fit -c config/train.yaml \
+            --optimizer.init_args.lr $lr \
+            --data.init_args.train_fp $data_dir/$train_data_name \
+            --data.init_args.val_fp $data_dir/$val_data_name \
+            --model.init_args.out_channels 303 \
+            --model.init_args.loss_fc.class_path models.losses.quantile_loss.QuantileLoss \
+            --trainer.logger.init_args.name Quantile_loss;;
+4)
+# resume --trainer.logger.init_args.id 
+echo training on beton subsets. qualtile loss; 
 python run.py fit -c config/train.yaml \
         --data.init_args.train_fp $data_dir/$train_data_name \
         --data.init_args.val_fp $data_dir/$val_data_name \
-        --model.init_args.out_channels 315 \
-        --model.init_args.loss_fc.class_path models.losses.quantile_ce_loss.QuantileCELoss \
-        --trainer.callbacks+=callbacks.classification_logger.ClassificationLogger \
-        --trainer.callbacks.log_val_every=10 \
-        --trainer.max_epochs 200 \
-        --trainer.logger.init_args.id allse0dy \
-        --trainer.logger.init_args.name Quantile_CE_loss
+        --model.init_args.out_channels 303 \
+        --model.init_args.loss_fc.class_path models.losses.quantile_loss.QuantileLoss \
+        --trainer.max_epochs $max_epochs \
+        --trainer.logger.init_args.id $run_id \
+        --trainer.logger.init_args.name Quantile_loss
         ;;
-8)
-echo quantile regression, zero out RH profile for building etc.;
+3)
+echo training on beton subsets.;
 python run.py fit -c config/train.yaml \
         --data.init_args.train_fp $data_dir/$train_data_name \
-        --data.init_args.val_fp $data_dir/$train_data_name \
+        --data.init_args.val_fp $data_dir/$val_data_name \
+        --model.init_args.loss_fc.init_args.name mse \
+        --trainer.logger.init_args.name L2_loss;;
+2)
+echo training, using beton subsets.;
+python run.py fit -c config/train.yaml \
+        --data.init_args.train_fp $data_dir/$train_data_name \
+        --data.init_args.val_fp $data_dir/$val_data_name \
+        --trainer.logger.init_args.name L1_loss;;
+1)
+echo debuging, using debug1.beton;
+python run.py fit -c config/train.yaml \
+        --data.init_args.train_fp $data_dir/$train_data_name \
+        --data.init_args.val_fp $data_dir/$val_data_name \
         --model.init_args.out_channels 303 \
         --model.init_args.loss_fc.class_path models.losses.quantile_loss.QuantileLoss \
         --model.init_args.loss_fc.zero_out True \
-        --trainer.max_epochs 200 \
-        --trainer.logger.init_args.id 05lp279m \
-        --trainer.logger.init_args.name Quantile_loss_zero_out
-;;
+        --model.init_args.loss_fc.class_path models.losses.quantile_ce_loss.QuantileCELoss \
+        --trainer.callbacks+=callbacks.classification_logger.ClassificationLogger \
+        --trainer.callbacks.log_val_every=1
+        ;;
 *)
 echo runnning nothing ;;
 esac
