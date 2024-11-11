@@ -106,19 +106,20 @@ class PredictionLogger(Callback):
             # fig = plot_prediction(outputs['pred'], outputs['target'])
             # wandb.log({f'Prediction [train]': wandb.Image(fig)})
             # plt.close(fig)
+            lc = outputs['lc'][outputs['mask'], 7,7].cpu().numpy()
+            if outputs.get('lc_pred') is not None:
+                lc_pred = outputs['lc_pred'][outputs['mask'], 7,7].cpu().numpy()
             for i in shot_numbers:
                 idx = torch.where(outputs['shot_number']==i)[0]
                 pred = torch.cat([outputs['rhs_hat'][idx], outputs['rhs'][idx]], dim=2).cpu().numpy()
                 n_features = outputs['rhs_hat'].shape[1]
                 n_predictions = outputs['rhs_hat'].shape[2]
                 slope = outputs['slope'][idx,7,7].cpu().numpy().round(2)
-                lc = outputs['lc'][idx,7,7].cpu().numpy()
                 if outputs.get('lc_pred') is not None:
-                    lc_pred = outputs['lc_pred'][idx,7,7].cpu().numpy()
-                    lc_pred_name = ESA_WC_s[lc_pred.item()].replace('/', '_')
+                    lc_pred_name = ESA_WC_s[lc_pred[idx].item()].replace('/', '_')
                 else:
                     lc_pred_name = None
-                lc_name = ESA_WC_s[lc.item()].replace('/', '_')
+                lc_name = ESA_WC_s[lc[idx].item()].replace('/', '_')
                 title = f'[train] epoch{current_epoch}/{lc_name}-pred-{lc_pred_name}_slope{round(slope.item(), 2)} sample{i}'
                 line = wandb.plot.line_series(
                             xs=range(n_features),
