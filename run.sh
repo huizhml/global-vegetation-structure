@@ -39,8 +39,8 @@ fi
 
 id=$1
 echo Running job $id
-run_id=$2
-max_epochs=${$3:-200}
+run_id=${2:-null}
+max_epochs=${3:-200}
 case $id in
 9)
 echo quantile regression and land cover mapping, zero out RH profile for building etc.;
