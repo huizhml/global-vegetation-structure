@@ -46,6 +46,23 @@ BIOMES = [
     'Mangroves'
 ]
 
+BIOMES_s = {
+    1: 'Tropical Moist Broadleaf',
+    2: 'Tropical Dry Broadleaf',
+    3: 'Tropical Coniferous',
+    4: 'Temperate Broadleaf',
+    5: 'Temperate Conifer',
+    6: 'Boreal',
+    7: 'Tropical Grasslands',
+    8: 'Temperate Grasslands',
+    9: 'Flooded Grasslands',
+    10: 'Montane Grasslands',
+    11: 'Tundra',
+    12: 'Mediterranean Forests',
+    13: 'Deserts',
+    14: 'Mangroves'
+}
+
 
 coverage_beams = ['BEAM0000', 'BEAM0001', 'BEAM0010', 'BEAM0011']
 power_beams = ['BEAM0101', 'BEAM0110', 'BEAM1000', 'BEAM1011']

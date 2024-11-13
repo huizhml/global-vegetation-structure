@@ -11,12 +11,12 @@
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=huzh@di.ku.dk
 
-train_data_name=train1_filtered_v1.beton
-val_data_name=train7_filtered_v1.beton
+train_data_name=train1_filtered_v1
+val_data_name=train7_filtered_v1
 debug=${2:-False}
 if [ "$debug" = "True" ]; then
-    train_data_name=debug0_filtered_v1.beton
-    val_data_name=debug0_filtered_v1.beton
+    train_data_name=debug0_filtered_v1
+    val_data_name=debug0_filtered_v1
 fi
 
 # Check if hostname is in the list
@@ -28,8 +28,9 @@ if [[ " ${host_list[@]} " =~ " $number " ]]; then
     echo "Host ${hostname} has an accessible scratch folder. Syncing data to /scratch."
     # sync data to /scratch
     mkdir -p /scratch/train_subsets
-    rsync -av --progress ~/data/GEDI/train_subsets/$train_data_name /scratch/train_subsets/
-    rsync -av --progress ~/data/GEDI/train_subsets/$val_data_name /scratch/train_subsets/
+    rsync -av --progress ~/data/GEDI/train_subsets/${train_data_name}.beton /scratch/train_subsets/
+    rsync -av --progress ~/data/GEDI/train_subsets/${val_data_name}.beton /scratch/train_subsets/
+    rsync -av --progress ~/data/GEDI/train_subsets/${val_data_name}.parquet /scratch/train_subsets/
     data_dir=/scratch/train_subsets
 else
     echo "Host ${hostname} doesn't have scratch folder. Skipping data sync."
@@ -41,12 +42,55 @@ id=$1
 echo Running job $id
 run_id=${2:-null}
 max_epochs=${3:-200}
+subcommand=${4:-fit}
 case $id in
+12) echo evaluate
+python run.py $subcommand -c config/train.yaml \
+        --data.init_args.val_fp $data_dir/$val_data_name \
+        --model.init_args.out_channels 303 \
+        --trainer.callbacks+=callbacks.boxplot.BoxplotLogger \
+        --trainer.logger.init_args.id $run_id \
+        --model.init_args.loss_fc.class_path models.losses.quantile_loss.QuantileLoss \
+        --model.init_args.loss_fc.zero_out True 
+        ;;
+11)
+echo use slope as an input
+python run.py $subcommand -c config/train.yaml \
+        --data.init_args.train_fp $data_dir/$train_data_name \
+        --data.init_args.val_fp $data_dir/$val_data_name \
+        --model.init_args.out_channels 315 \
+        --model.init_args.loss_fc.class_path models.losses.quantile_ce_loss.QuantileCELoss \
+        --model.init_args.feed_slope True \
+        --model.init_args.feed_latlon True \
+        --model.init_args.loss_fc.zero_out True \
+        --model.init_args.encoder.init_args.in_channels 16 \
+        --trainer.callbacks+=callbacks.classification_logger.ClassificationLogger \
+        --trainer.callbacks.log_val_every=10 \
+        --trainer.max_epochs $max_epochs \
+        --trainer.logger.init_args.id $run_id \
+        --trainer.logger.init_args.name QR_and_LCC_zero_out_slope
+;;
+10)
+echo use slope as an input
+python run.py fit -c config/train.yaml \
+        --data.init_args.train_fp $data_dir/$train_data_name \
+        --data.init_args.val_fp $data_dir/$val_data_name \
+        --model.init_args.out_channels 315 \
+        --model.init_args.loss_fc.class_path models.losses.quantile_ce_loss.QuantileCELoss \
+        --model.init_args.feed_slope True \
+        --model.init_args.loss_fc.zero_out True \
+        --model.init_args.encoder.init_args.in_channels 13 \
+        --trainer.callbacks+=callbacks.classification_logger.ClassificationLogger \
+        --trainer.callbacks.log_val_every=100 \
+        --trainer.max_epochs $max_epochs \
+        --trainer.logger.init_args.id $run_id \
+        --trainer.logger.init_args.name QR_and_LCC_zero_out_slope
+;;
 9)
 echo quantile regression and land cover mapping, zero out RH profile for building etc.;
 python run.py fit -c config/train.yaml \
         --data.init_args.train_fp $data_dir/$train_data_name \
-        --data.init_args.val_fp $data_dir/$train_data_name \
+        --data.init_args.val_fp $data_dir/$val_data_name \
         --model.init_args.out_channels 315 \
         --model.init_args.loss_fc.class_path models.losses.quantile_ce_loss.QuantileCELoss \
         --model.init_args.loss_fc.zero_out True \
@@ -60,7 +104,7 @@ python run.py fit -c config/train.yaml \
 echo quantile regression, zero out RH profile for building etc.;
 python run.py fit -c config/train.yaml \
         --data.init_args.train_fp $data_dir/$train_data_name \
-        --data.init_args.val_fp $data_dir/$train_data_name \
+        --data.init_args.val_fp $data_dir/$val_data_name \
         --model.init_args.out_channels 303 \
         --model.init_args.loss_fc.class_path models.losses.quantile_loss.QuantileLoss \
         --model.init_args.loss_fc.zero_out True \

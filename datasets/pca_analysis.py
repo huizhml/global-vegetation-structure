@@ -26,7 +26,7 @@ def aggregate_gedi_data(beton_fps: List[str]):
     Aggregate GEDI data (RHs + GEDI attributes) {train*}.beton to a single parquet file
     '''
     beton_fps = glob.glob(str(Path(beton_fps).expanduser()))
-    cols = [f'rh{i}' for i in range(101)] + ['wc', 'slope', 'lat', 'lon'] + list(gedi_attr_dtype.keys())
+    cols = [f'rh{i}' for i in range(101)] + ['wc', 'slope', 'lat', 'lon', 'sensitivity']
     data_dir = Path(beton_fps[0]).parent.parent
     ecoregions = gpd.read_file(data_dir / 'ecoregions/wwf_terr_ecos.shp')
     batch_size = 100 if 'debug' in beton_fps[0] else 4096
@@ -40,17 +40,20 @@ def aggregate_gedi_data(beton_fps: List[str]):
                         order=OrderOption.SEQUENTIAL, os_cache=False)
 
         data = []
+        shot_numbers = []
         for batch in tqdm(loader):
-            _, rhs, wc, slope, latlon, attrs = batch
-            batch = np.concatenate([rhs, wc, slope, latlon, attrs], axis=1)
-            data.append(batch)
+            _, rhs, wc, slope, latlon, sensitivity, shot_number = batch
+            shot_numbers.append(shot_number.numpy().copy())
+            batch_ = np.concatenate([rhs, wc[...,7:8,7], slope[...,7:8,7], latlon, sensitivity], axis=1)
+            data.append(batch_)
         data = np.concatenate(data, axis=0)
         df = pd.DataFrame(data, columns=cols)
+        df['shot_number'] = np.concatenate(shot_numbers)
         df = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.lon, df.lat))
         df = df.set_crs(epsg=4326)
         df = df.to_crs(epsg=3857)
         df = gpd.sjoin(df, ecoregions, how='left', predicate='within')
-        df = df[cols + ['BIOME']]
+        df = df[cols + ['BIOME', 'shot_number']]
         df.to_parquet(file)
         print('saved to', file)
     print('Grouping by biome')
@@ -71,7 +74,7 @@ def group_df_by_biome(df_fps: List[str] = None):
     def save_parquet(x):
         print(x)
         if x.name is not None and int(x.name) < 15:
-            name = f'rhs_attrs_{BIOMES[int(x.name)-1].replace(" ", "_").replace("&", 'and')}.parquet'
+            name = f'rhs_attrs_{BIOMES[int(x.name)-1].replace(" ", "_").replace("&", "and")}.parquet'
             x.to_parquet(data_dir / name)
         else:
             x.to_parquet(data_dir / f'rhs_attrs_biome_{x.name}.parquet')
@@ -106,7 +109,7 @@ class PCAAnalysis:
             if not self.parquet_fps.exists():
                 print('parquet file not found')
                 # raise here, generate the parquet file here will cause race condition if multiple processes of PCA analysis are running
-                raise FileNotFoundError, f'{parquet_fp} not found, please run python -m datasets.pca_analysis task=aggregate_gedi_data first'
+                raise f'{parquet_fp} not found, please run python -m datasets.pca_analysis task=aggregate_gedi_data first'
         else:
             model_path = Path(model_path).expanduser()
             self.parquet_fps = glob.glob(str(self.parquet_fps))
@@ -357,8 +360,7 @@ class PCAAnalysis:
                 annot = annot + 1
             sns.heatmap(value, cmap=cmap, annot=annot, annot_kws={'fontsize': 10}, fmt='d', vmin=vmin, vmax=vmax,
                         xticklabels=labels, yticklabels=labels)
-            title = f'{group_method} effect size: most evident values of {name.upper()} across all {
-                group_method.lower()}s'
+            title = f'{group_method} effect size: most evident values of {name.upper()} across all {group_method.lower()}s'
             plt.title(title)
             plt.tight_layout()
             plt.show()
@@ -386,8 +388,7 @@ class PCAAnalysis:
             plt.colorbar()
             plt.title(f'{group_method} effect size matrix for max(0, |d(PC{col+1}| - |d(RH98)|)')
             plt.tight_layout()
-            plt.savefig(self.output_dir / f'{group_method.lower()
-                                             }_effect_size_matrix_{data_name}{sens}_PC{col+1}-RH98.png')
+            plt.savefig(self.output_dir / f'{group_method.lower()}_effect_size_matrix_{data_name}{sens}_PC{col+1}-RH98.png')
 
         # relative Cohen's d betweem PC1 and PC2-3
         for col in range(1, 3):
@@ -399,8 +400,7 @@ class PCAAnalysis:
             plt.colorbar()
             plt.title(f'{group_method} effect size matrix for max(0, |d(PC{col+1}| - d(PC1))')
             plt.tight_layout()
-            plt.savefig(self.output_dir / f'{group_method.lower()
-                                             }_effect_size_matrix_{data_name}{sens}_PC{col+1}-PC1.png')
+            plt.savefig(self.output_dir / f'{group_method.lower()}_effect_size_matrix_{data_name}{sens}_PC{col+1}-PC1.png')
 
     def run_biome_effect_size_analysis(self):
         print('Run biome effect size analysis')
@@ -565,7 +565,7 @@ def main(cfg: DictConfig) -> None:
     # find_sensitivity_biome_cor(glob.glob(cfg.parquet_fp))
     print(task)
     if task == 'aggregate_gedi_data':
-        beton_fps = cfg.get('beton_fps', '~/data/GEDI/train_subsets/train*_filtered.beton')
+        beton_fps = cfg.get('beton_fps', '~/data/GEDI/train_subsets/train*_filtered_v1.beton')
         aggregate_gedi_data(beton_fps)
     else:
         model = PCAAnalysis(**cfg)

@@ -33,20 +33,21 @@ class QuantileLoss(MaskedLoss):
         lc[lc==0.95] = 11
         lc = lc.long()
         center_lc = lc[loss_mask,..., 7, 7]
-        veg_idx = torch.where((center_lc==5)|(center_lc==7) | (center_lc==8), 0, 1) # built-up, snow and ice, permanent water bodies
-        veg_idx = veg_idx.bool()
+        veg_mask = torch.where((center_lc==5)|(center_lc==7) | (center_lc==8), 0, 1) # built-up, snow and ice, permanent water bodies
+        veg_mask = veg_mask.bool()
 
         n, feature_size, _ = rhs.shape # NOTE: n <= batch_size
         rhs_hat = rhs_hat.reshape(n, feature_size, -1) # n, 101, 3
         residuals = rhs_hat - rhs
         error_metrics = self.error_metrics(residuals[..., median_idx])
-        error_metrics_veg = self.error_metrics(residuals[veg_idx,..., median_idx])
+        error_metrics_veg = self.error_metrics(residuals[veg_mask,..., median_idx])
         quantile_losses = torch.max((quantiles_tensor - 1) * residuals, quantiles_tensor * residuals)
         quantile_loss = torch.mean(torch.sum(quantile_losses, dim=2))
         error_metrics['loss'] = quantile_loss
         output = {
             'loss': quantile_loss,
             'mask': loss_mask,
+            'veg_mask': veg_mask,
             'lc': lc,
             'rhs_hat': rhs_hat,
             'rhs': rhs,

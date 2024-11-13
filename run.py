@@ -56,13 +56,14 @@ class MyLightningCLI(LightningCLI):
         else:
             self.config = parser.parse_args(args)
         
-        if run_id := self.config.fit.trainer.logger.init_args.id:
+        subcommand = self.config.subcommand
+        if run_id := self.config[subcommand].trainer.logger.init_args.id:
             import wandb
-            cfg = self.config.fit.trainer.logger.init_args
+            cfg = self.config[subcommand].trainer.logger.init_args
             run_ = wandb.init(project=cfg.project, id=run_id, resume="must")
             artifact = run_.use_artifact(f'model-{run_id}:best', type='model')
             ckpt_path = artifact.file()
-            self.config.fit.ckpt_path = ckpt_path
+            self.config[subcommand].ckpt_path = ckpt_path
 
     # def add_arguments_to_parser(self, parser) -> None:
     #     import ipdb; ipdb.set_trace()

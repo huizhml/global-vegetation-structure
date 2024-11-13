@@ -79,8 +79,11 @@ trainer:
         log_every: 10
     - class_path: callbacks.prediction_logger.PredictionLogger
       init_args:
-        log_every: 10
+        log_every: 50
         log_batch: 2000
+    - class_path: callbacks.boxplot.BoxplotLogger
+      init_args:
+        log_every: 100
     - class_path: lightning.pytorch.callbacks.ModelCheckpoint
       init_args:
         dirpath: checkpoints

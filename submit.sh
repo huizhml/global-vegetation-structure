@@ -86,6 +86,10 @@ echo Run PCA on the training subset;
 python -m datasets.statistical_analysis \
         data_fps=$data_dir'/train_subsets/train*_attrs.beton' \
         model_path=output/pca_model.pkl;;
+9)
+echo aggregate the GEDI data;
+python -m datasets.pca_analysis task=aggregate_gedi_data
+;;
 *)
 echo runnning nothing ;;
 esac

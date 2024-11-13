@@ -55,15 +55,16 @@ class MaskedLoss(nn.BCELoss):
         rhs_hat = rhs_hat[loss_mask][..., 7, 7].unsqueeze(-1)
         rhs = rhs[loss_mask].float().unsqueeze(-1)
         center_lc = lc[loss_mask,..., 7, 7]
-        veg_idx = torch.where((center_lc==50)|(center_lc==70) | (center_lc==80), 0, 1) # built-up, snow and ice, permanent water bodies
-        veg_idx = veg_idx.bool()
+        veg_mask = torch.where((center_lc==50)|(center_lc==70) | (center_lc==80), 0, 1) # built-up, snow and ice, permanent water bodies
+        veg_mask = veg_mask.bool()
         residuals = rhs_hat - rhs
         error_metrics = self.error_metrics(residuals)
-        error_metrics_veg = self.error_metrics(residuals[veg_idx])
+        error_metrics_veg = self.error_metrics(residuals[veg_mask])
         error_metrics['loss'] = error_metrics[self.name]
         output = {
             'loss': error_metrics['loss'],
             'mask': loss_mask, # used to mask land cover when predicting RH profiles
+            'veg_mask': veg_mask,
             'lc': lc,
             'rhs_hat': rhs_hat,# high slope samples don't contribute to the evaluation metrics
             'rhs': rhs,
