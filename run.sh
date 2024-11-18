@@ -46,7 +46,7 @@ subcommand=${4:-fit}
 case $id in
 12) echo evaluate
 python run.py $subcommand -c config/train.yaml \
-        --data.init_args.val_fp $data_dir/$val_data_name \
+        --data.init_args.val_fp $data_dir/$val_data_name.beton \
         --model.init_args.out_channels 303 \
         --trainer.callbacks+=callbacks.boxplot.BoxplotLogger \
         --trainer.logger.init_args.id $run_id \
@@ -54,10 +54,10 @@ python run.py $subcommand -c config/train.yaml \
         --model.init_args.loss_fc.zero_out True 
         ;;
 11)
-echo use slope as an input
+echo use slope and latlon as an input
 python run.py $subcommand -c config/train.yaml \
-        --data.init_args.train_fp $data_dir/$train_data_name \
-        --data.init_args.val_fp $data_dir/$val_data_name \
+        --data.init_args.train_fp $data_dir/$train_data_name.beton \
+        --data.init_args.val_fp $data_dir/$val_data_name.beton \
         --model.init_args.out_channels 315 \
         --model.init_args.loss_fc.class_path models.losses.quantile_ce_loss.QuantileCELoss \
         --model.init_args.feed_slope True \
@@ -68,13 +68,13 @@ python run.py $subcommand -c config/train.yaml \
         --trainer.callbacks.log_val_every=10 \
         --trainer.max_epochs $max_epochs \
         --trainer.logger.init_args.id $run_id \
-        --trainer.logger.init_args.name QR_and_LCC_zero_out_slope
+        --trainer.logger.init_args.name QR_and_LCC_zero_out_slope_latlon
 ;;
 10)
 echo use slope as an input
 python run.py fit -c config/train.yaml \
-        --data.init_args.train_fp $data_dir/$train_data_name \
-        --data.init_args.val_fp $data_dir/$val_data_name \
+        --data.init_args.train_fp $data_dir/$train_data_name.beton \
+        --data.init_args.val_fp $data_dir/$val_data_name.beton \
         --model.init_args.out_channels 315 \
         --model.init_args.loss_fc.class_path models.losses.quantile_ce_loss.QuantileCELoss \
         --model.init_args.feed_slope True \
@@ -89,8 +89,8 @@ python run.py fit -c config/train.yaml \
 9)
 echo quantile regression and land cover mapping, zero out RH profile for building etc.;
 python run.py fit -c config/train.yaml \
-        --data.init_args.train_fp $data_dir/$train_data_name \
-        --data.init_args.val_fp $data_dir/$val_data_name \
+        --data.init_args.train_fp $data_dir/$train_data_name.beton \
+        --data.init_args.val_fp $data_dir/$val_data_name.beton \
         --model.init_args.out_channels 315 \
         --model.init_args.loss_fc.class_path models.losses.quantile_ce_loss.QuantileCELoss \
         --model.init_args.loss_fc.zero_out True \
@@ -103,8 +103,8 @@ python run.py fit -c config/train.yaml \
 8)
 echo quantile regression, zero out RH profile for building etc.;
 python run.py fit -c config/train.yaml \
-        --data.init_args.train_fp $data_dir/$train_data_name \
-        --data.init_args.val_fp $data_dir/$val_data_name \
+        --data.init_args.train_fp $data_dir/$train_data_name.beton \
+        --data.init_args.val_fp $data_dir/$val_data_name.beton \
         --model.init_args.out_channels 303 \
         --model.init_args.loss_fc.class_path models.losses.quantile_loss.QuantileLoss \
         --model.init_args.loss_fc.zero_out True \
@@ -115,8 +115,8 @@ python run.py fit -c config/train.yaml \
 7)
 echo Quantile regression and land cover mapping;
 python run.py fit -c config/train.yaml \
-        --data.init_args.train_fp $data_dir/$train_data_name \
-        --data.init_args.val_fp $data_dir/$val_data_name \
+        --data.init_args.train_fp $data_dir/$train_data_name.beton \
+        --data.init_args.val_fp $data_dir/$val_data_name.beton \
         --model.init_args.out_channels 315 \
         --model.init_args.loss_fc.class_path models.losses.quantile_ce_loss.QuantileCELoss \
         --trainer.callbacks+=callbacks.classification_logger.ClassificationLogger \
@@ -155,8 +155,8 @@ python run.py fit -c config/train.yaml \
 
     python run.py fit -c config/train.yaml \
             --optimizer.init_args.lr $lr \
-            --data.init_args.train_fp $data_dir/$train_data_name \
-            --data.init_args.val_fp $data_dir/$val_data_name \
+            --data.init_args.train_fp $data_dir/$train_data_name.beton \
+            --data.init_args.val_fp $data_dir/$val_data_name.beton \
             --model.init_args.out_channels 303 \
             --model.init_args.loss_fc.class_path models.losses.quantile_loss.QuantileLoss \
             --trainer.logger.init_args.name Quantile_loss;;
@@ -164,8 +164,8 @@ python run.py fit -c config/train.yaml \
 # resume --trainer.logger.init_args.id 
 echo training on beton subsets. qualtile loss; 
 python run.py fit -c config/train.yaml \
-        --data.init_args.train_fp $data_dir/$train_data_name \
-        --data.init_args.val_fp $data_dir/$val_data_name \
+        --data.init_args.train_fp $data_dir/$train_data_name.beton \
+        --data.init_args.val_fp $data_dir/$val_data_name.beton \
         --model.init_args.out_channels 303 \
         --model.init_args.loss_fc.class_path models.losses.quantile_loss.QuantileLoss \
         --trainer.max_epochs $max_epochs \
@@ -175,21 +175,21 @@ python run.py fit -c config/train.yaml \
 3)
 echo training on beton subsets.;
 python run.py fit -c config/train.yaml \
-        --data.init_args.train_fp $data_dir/$train_data_name \
-        --data.init_args.val_fp $data_dir/$val_data_name \
+        --data.init_args.train_fp $data_dir/$train_data_name.beton \
+        --data.init_args.val_fp $data_dir/$val_data_name.beton \
         --model.init_args.loss_fc.init_args.name mse \
         --trainer.logger.init_args.name L2_loss;;
 2)
 echo training, using beton subsets.;
 python run.py fit -c config/train.yaml \
-        --data.init_args.train_fp $data_dir/$train_data_name \
-        --data.init_args.val_fp $data_dir/$val_data_name \
+        --data.init_args.train_fp $data_dir/$train_data_name.beton \
+        --data.init_args.val_fp $data_dir/$val_data_name.beton \
         --trainer.logger.init_args.name L1_loss;;
 1)
 echo debuging, using debug1.beton;
 python run.py fit -c config/train.yaml \
-        --data.init_args.train_fp $data_dir/$train_data_name \
-        --data.init_args.val_fp $data_dir/$val_data_name \
+        --data.init_args.train_fp $data_dir/$train_data_name.beton \
+        --data.init_args.val_fp $data_dir/$val_data_name.beton \
         --model.init_args.out_channels 303 \
         --model.init_args.loss_fc.class_path models.losses.quantile_loss.QuantileLoss \
         --model.init_args.loss_fc.zero_out True \
