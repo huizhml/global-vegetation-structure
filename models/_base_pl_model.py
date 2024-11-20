@@ -4,6 +4,14 @@ import torch.nn as nn
 from typing import Any
 import lightning as L
 
+LAT_MEAN = 12.7036
+LAT_STD = 25.5279
+LON_SIN_MEAN = 0.1160
+LON_SIN_STD = 0.7507
+LON_COS_MEAN = 0.3087
+LON_COS_STD = 0.5724
+SLOPE_MEAN = 6.7048
+SLOPE_STD = 9.0447
 
 class BaseModel(L.LightningModule):
 
@@ -76,13 +84,17 @@ class BaseModel(L.LightningModule):
     def training_step(self, sample, batch_idx):
         x = self.transform(sample[0])
         if self.feed_slope:
-            slope = torch.nan_to_num(sample[3], nan=0)
-            x = torch.cat([x, slope.unsqueeze(1)/90], dim=1)
+            slope = torch.nan_to_num(sample[3], nan=0) 
+            slope = (slope - SLOPE_MEAN) / SLOPE_STD
+            x = torch.cat([x, slope.unsqueeze(1)], dim=1)
         if self.feed_latlon:
             latlon = sample[4]
             lat, lon = self.get_dense_latlon(latlon)
             sin_lon = torch.sin(lon*torch.pi/180)
             cos_lon = torch.cos(lon*torch.pi/180)
+            lat = (lat - LAT_MEAN) / LAT_STD
+            sin_lon = (sin_lon - LON_SIN_MEAN) / LON_SIN_STD
+            cos_lon = (cos_lon - LON_COS_MEAN) / LON_COS_STD
             x = torch.cat([x,lat.unsqueeze(1), sin_lon.unsqueeze(1), cos_lon.unsqueeze(1)], dim=1)
         y_hat = self.forward(x.float())
         error_metrics, error_metrics_veg, output = self.loss_fc(y_hat, *sample[1:])
@@ -95,13 +107,17 @@ class BaseModel(L.LightningModule):
     def validation_step(self, sample, batch_idx):
         x = self.transform(sample[0])
         if self.feed_slope:
-            slope = torch.nan_to_num(sample[3], nan=0)
-            x = torch.cat([x, slope.unsqueeze(1)/90], dim=1)
+            slope = torch.nan_to_num(sample[3], nan=0) 
+            slope = (slope - SLOPE_MEAN) / SLOPE_STD
+            x = torch.cat([x, slope.unsqueeze(1)], dim=1)
         if self.feed_latlon:
             latlon = sample[4]
             lat, lon = self.get_dense_latlon(latlon)
-            sin_lon = torch.sin(lon/180)
-            cos_lon = torch.cos(lon/180)
+            sin_lon = torch.sin(lon*torch.pi/180)
+            cos_lon = torch.cos(lon*torch.pi/180)
+            lat = (lat - LAT_MEAN) / LAT_STD
+            sin_lon = (sin_lon - LON_SIN_MEAN) / LON_SIN_STD
+            cos_lon = (cos_lon - LON_COS_MEAN) / LON_COS_STD
             x = torch.cat([x,lat.unsqueeze(1), sin_lon.unsqueeze(1), cos_lon.unsqueeze(1)], dim=1)
         y_hat = self.forward(x.float())
         
