@@ -18,14 +18,14 @@ class MaskedLoss(nn.BCELoss):
         label_mask = torch.where(torch.isin(lc, zero_cls), 0, 1)
         
         # NOTE: if the central pixel is in the exclude class and the slope is greater than the threshold, the loss mask is 0
-        exclude_cls = torch.tensor([ESA_WC['Grassland'], ESA_WC['Bare / sparse vegetation'], ESA_WC['Moss and lichen']], device=lc.device)
-        loss_mask_wc = torch.where(torch.isin(lc, exclude_cls), 1, 0)
+        # exclude_cls = torch.tensor([ESA_WC['Grassland'], ESA_WC['Bare / sparse vegetation'], ESA_WC['Moss and lichen']], device=lc.device)
+        # loss_mask_wc = torch.where(torch.isin(lc, exclude_cls), 1, 0)
         slope = slope[..., 7, 7]
-        loss_mask_slope = torch.where(slope > self.slope_th, 1, 0)
-        loss_mask = loss_mask_wc * loss_mask_slope
-        loss_mask = 1 - loss_mask
-        loss_mask = loss_mask.type(torch.bool)
-        return label_mask, loss_mask
+        loss_mask_slope = torch.where(slope < self.slope_th, 1, 0)
+        # loss_mask = loss_mask_wc * loss_mask_slope
+        # loss_mask = 1 - loss_mask
+        loss_mask_slope = loss_mask_slope.type(torch.bool)
+        return label_mask, loss_mask_slope
     
     def error_metrics(self, residuals):
         res_square = residuals**2
@@ -48,13 +48,23 @@ class MaskedLoss(nn.BCELoss):
             "me_rh100": me_rh100,
         }
     
-    def forward(self,  rhs_hat, rhs, lc, slope, latlon, sens, shot_number) -> Tensor:
+    def forward(self,  rhs_hat, rhs, lc, slope, latlon, sens, shot_number,training:bool=True) -> Tensor:
         label_mask, loss_mask = self.get_mask(lc, slope)
         if self.zero_out:
             rhs = rhs * label_mask.unsqueeze(-1)
-        rhs_hat = rhs_hat[loss_mask][..., 7, 7].unsqueeze(-1)
-        rhs = rhs[loss_mask].float().unsqueeze(-1)
-        center_lc = lc[loss_mask,..., 7, 7]
+        if training:
+            rhs_hat = rhs_hat[loss_mask][..., 7, 7].unsqueeze(-1)
+            rhs = rhs[loss_mask].float().unsqueeze(-1)
+            center_lc = lc[loss_mask,..., 7, 7]
+            slope = slope[loss_mask]
+            latlon = latlon[loss_mask]
+            sens = sens[loss_mask]
+            shot_number = shot_number[loss_mask]
+        else:
+            rhs_hat = rhs_hat[..., 7, 7].unsqueeze(-1)
+            rhs = rhs.float().unsqueeze(-1)
+            center_lc = lc[..., 7, 7]
+            
         veg_mask = torch.where((center_lc==50)|(center_lc==70) | (center_lc==80), 0, 1) # built-up, snow and ice, permanent water bodies
         veg_mask = veg_mask.bool()
         residuals = rhs_hat - rhs
@@ -68,9 +78,9 @@ class MaskedLoss(nn.BCELoss):
             'lc': lc,
             'rhs_hat': rhs_hat,# high slope samples don't contribute to the evaluation metrics
             'rhs': rhs,
-            'slope': slope[loss_mask],
-            'latlon': latlon[loss_mask],
-            'sens': sens[loss_mask],
-            'shot_number': shot_number[loss_mask]
+            'slope': slope,
+            'latlon': latlon,
+            'sens': sens,
+            'shot_number': shot_number
         }
         return error_metrics, error_metrics_veg, output

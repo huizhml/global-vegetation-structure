@@ -121,7 +121,7 @@ class BaseModel(L.LightningModule):
             x = torch.cat([x,lat.unsqueeze(1), sin_lon.unsqueeze(1), cos_lon.unsqueeze(1)], dim=1)
         y_hat = self.forward(x.float())
         
-        error_metrics, error_metrics_veg, output = self.loss_fc(y_hat, *sample[1:])
+        error_metrics, error_metrics_veg, output = self.loss_fc(y_hat, *sample[1:], training=False)
         for name, err in error_metrics.items():
             self.log(f'val_{name}', err, on_epoch=True, on_step=False, sync_dist=True)
         for name, err in error_metrics_veg.items():

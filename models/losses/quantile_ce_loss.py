@@ -17,7 +17,7 @@ class QuantileCELoss(MaskedLoss):
         self.quantiles = quantiles
 
 
-    def forward(self,  y_hat, rhs, lc, slope, latlon, sens, shot_number) -> Tensor:
+    def forward(self,  y_hat, rhs, lc, slope, latlon, sens, shot_number, training:bool=True) -> Tensor:
         if isinstance(self.quantiles, list):
             quantiles_tensor = torch.tensor(self.quantiles, device=y_hat.device).view(1, -1)
         else:
@@ -28,12 +28,23 @@ class QuantileCELoss(MaskedLoss):
         if self.zero_out:
             rhs = rhs * label_mask.unsqueeze(-1)
         lc_hat = y_hat[:,:12] # we have 11 land cover classes + unknown
-        rhs_hat = y_hat[loss_mask, 12:, 7, 7] # (n, 303)
-        rhs = rhs[loss_mask].unsqueeze(-1)
         lc = lc//10
         lc[lc==0.95] = 11
         lc = lc.long()
-        center_lc = lc[loss_mask,..., 7, 7]
+        if training:
+            print(training)
+            rhs_hat = y_hat[loss_mask, 12:, 7, 7] # (n, 303)
+            rhs = rhs[loss_mask].unsqueeze(-1)
+            center_lc = lc[loss_mask,..., 7, 7]
+            slope = slope[loss_mask]
+            latlon = latlon[loss_mask]
+            sens = sens[loss_mask]
+            shot_number = shot_number[loss_mask]
+        else: # validation, calculate loss for high slope points as well
+            rhs_hat = y_hat[:, 12:, 7, 7]
+            rhs = rhs.unsqueeze(-1)
+            center_lc = lc[..., 7, 7]
+
         veg_mask = torch.where((center_lc==5)|(center_lc==7) | (center_lc==8), 0, 1) # built-up, snow and ice, permanent water bodies
         veg_mask = veg_mask.bool()
         
@@ -62,9 +73,25 @@ class QuantileCELoss(MaskedLoss):
             'lc': lc,
             'rhs_hat': rhs_hat,
             'rhs': rhs,
-            'slope': slope[loss_mask],
-            'latlon': latlon[loss_mask],
-            'sens': sens[loss_mask],
-            'shot_number': shot_number[loss_mask]
+            'slope': slope,
+            'latlon': latlon,
+            'sens': sens,
+            'shot_number': shot_number
         }
         return error_metrics, error_metrics_veg, output
+
+if __name__ == "__main__":
+    # Test QuantileCELoss
+    y_hat = torch.rand(10, 303, 15, 15)
+    rhs = torch.rand(10, 101, 15, 15)
+    lc = torch.randint(0, 12, (10, 15, 15))
+    slope = torch.rand(10, 15, 15)
+    latlon = torch.rand(10, 2)
+    sens = torch.rand(10, 1)
+    shot_number = torch.randint(0, 100, (10,))
+    loss = QuantileCELoss()
+    import ipdb; ipdb.set_trace()
+    error_metrics, error_metrics_veg, output = loss(y_hat, rhs, lc, slope, latlon, sens, shot_number)
+    print(error_metrics)
+    print(error_metrics_veg)
+    print(output)

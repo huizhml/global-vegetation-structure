@@ -16,23 +16,32 @@ class QuantileLoss(MaskedLoss):
         self.quantiles = quantiles
 
 
-    def forward(self,  rhs_hat, rhs, lc, slope, latlon, sens, shot_number) -> Tensor:
+    def forward(self,  rhs_hat, rhs, lc, slope, latlon, sens, shot_number, training:bool=True) -> Tensor:
         if isinstance(self.quantiles, list):
             quantiles_tensor = torch.tensor(self.quantiles, device=rhs_hat.device).view(1, -1)
         else:
             quantiles_tensor = self.quantiles.view(1, -1)
 
         median_idx = self.quantiles.index(0.5)
-        
         label_mask, loss_mask = self.get_mask(lc, slope)
-        if self.zero_out:
-            rhs = rhs * label_mask.unsqueeze(-1)
-        rhs_hat = rhs_hat[loss_mask][..., 7, 7].unsqueeze(-1)
-        rhs = rhs[loss_mask].float().unsqueeze(-1)
         lc = lc//10 # high slope doesn't change the land cover, so not need to mask lc
         lc[lc==0.95] = 11
         lc = lc.long()
-        center_lc = lc[loss_mask,..., 7, 7]
+
+        if self.zero_out:
+            rhs = rhs * label_mask.unsqueeze(-1)
+        if training:
+            rhs_hat = rhs_hat[loss_mask][..., 7, 7].unsqueeze(-1)
+            rhs = rhs[loss_mask].float().unsqueeze(-1)
+            center_lc = lc[loss_mask,..., 7, 7]
+            slope = slope[loss_mask]
+            latlon = latlon[loss_mask]
+            sens = sens[loss_mask]
+            shot_number = shot_number[loss_mask]
+        else:
+            rhs_hat = rhs_hat[..., 7, 7].unsqueeze(-1)
+            rhs = rhs.float().unsqueeze(-1)
+            center_lc = lc[..., 7, 7]
         veg_mask = torch.where((center_lc==5)|(center_lc==7) | (center_lc==8), 0, 1) # built-up, snow and ice, permanent water bodies
         veg_mask = veg_mask.bool()
 
@@ -51,9 +60,9 @@ class QuantileLoss(MaskedLoss):
             'lc': lc,
             'rhs_hat': rhs_hat,
             'rhs': rhs,
-            'slope': slope[loss_mask],
-            'latlon': latlon[loss_mask],
-            'sens': sens[loss_mask],
-            'shot_number': shot_number[loss_mask]
+            'slope': slope,
+            'latlon': latlon,
+            'sens': sens,
+            'shot_number': shot_number
         }
         return error_metrics, error_metrics_veg, output

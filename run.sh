@@ -98,7 +98,7 @@ python run.py fit -c config/train.yaml \
         --trainer.callbacks.log_val_every=10 \
         --trainer.max_epochs $max_epochs \
         --trainer.logger.init_args.id $run_id \
-        --trainer.logger.init_args.name Quantile_CE_loss_zero_out
+        --trainer.logger.init_args.name QR_and_LCC_zero_out
 ;;
 8)
 echo quantile regression, zero out RH profile for building etc.;
@@ -110,7 +110,7 @@ python run.py fit -c config/train.yaml \
         --model.init_args.loss_fc.zero_out True \
         --trainer.max_epochs $max_epochs \
         --trainer.logger.init_args.id $run_id \
-        --trainer.logger.init_args.name Quantile_loss_zero_out
+        --trainer.logger.init_args.name QR_zero_out
 ;;
 7)
 echo Quantile regression and land cover mapping;
@@ -123,7 +123,7 @@ python run.py fit -c config/train.yaml \
         --trainer.callbacks.log_val_every=10 \
         --trainer.max_epochs $max_epochs \
         --trainer.logger.init_args.id $run_id \
-        --trainer.logger.init_args.name Quantile_CE_loss
+        --trainer.logger.init_args.name QR_and_LCC_
         ;;
 6)
     echo sanity check for quantile regression;
