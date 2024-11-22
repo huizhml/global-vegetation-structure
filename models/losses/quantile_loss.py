@@ -37,7 +37,6 @@ class QuantileLoss(MaskedLoss):
             slope = slope[loss_mask]
             latlon = latlon[loss_mask]
             sens = sens[loss_mask]
-            shot_number = shot_number[loss_mask]
         else:
             rhs_hat = rhs_hat[..., 7, 7].unsqueeze(-1)
             rhs = rhs.float().unsqueeze(-1)
@@ -63,6 +62,6 @@ class QuantileLoss(MaskedLoss):
             'slope': slope,
             'latlon': latlon,
             'sens': sens,
-            'shot_number': shot_number
+            'shot_number': shot_number # for indexing samples to visualize, no need to mask
         }
         return error_metrics, error_metrics_veg, output

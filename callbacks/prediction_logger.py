@@ -52,6 +52,9 @@ SHOT_NUMBERS_TRAIN = [
 ]
 
 SHOT_NUMBERS_VAL = [
+    # debug
+    90651100400337024, 
+    45930000300182392,
     # wc 10
     44350500300290822, 
     # wc 20
@@ -106,9 +109,10 @@ class PredictionLogger(Callback):
             # fig = plot_prediction(outputs['pred'], outputs['target'])
             # wandb.log({f'Prediction [train]': wandb.Image(fig)})
             # plt.close(fig)
-            lc = outputs['lc'][outputs['mask'], 7,7].cpu().numpy()
+            #NOTE: Currently visualized examples are from slope<=20
+            lc = outputs['lc'][..., 7,7].cpu().numpy() 
             if outputs.get('lc_pred') is not None:
-                lc_pred = outputs['lc_pred'][outputs['mask'], 7,7].cpu().numpy()
+                lc_pred = outputs['lc_pred'][..., 7,7].cpu().numpy()
             for i in shot_numbers:
                 idx = torch.where(outputs['shot_number']==i)[0]
                 pred = torch.cat([outputs['rhs_hat'][idx], outputs['rhs'][idx]], dim=2).cpu().numpy()
@@ -149,12 +153,10 @@ class PredictionLogger(Callback):
         shot_numbers = [v for v in self.shot_numbers_val if v in outputs['shot_number']]
         self.finished += shot_numbers
         if check_if_log(current_epoch, self.log_every) and len(shot_numbers) > 0:
-            # fig = plot_prediction(outputs['pred'], outputs['target'])
-            # wandb.log({f'Prediction [train]': wandb.Image(fig)})
-            # plt.close(fig)
-            lc = outputs['lc'][outputs['mask'], 7,7].cpu().numpy()
+            #NOTE: Currently visualized examples are from slope<=20
+            lc = outputs['lc'][..., 7,7].cpu().numpy() 
             if outputs.get('lc_pred') is not None:
-                lc_pred = outputs['lc_pred'][outputs['mask'], 7,7].cpu().numpy()
+                lc_pred = outputs['lc_pred'][..., 7,7].cpu().numpy()
             for i in shot_numbers:
                 idx = torch.where(outputs['shot_number']==i)[0]
                 pred = torch.cat([outputs['rhs_hat'][idx], outputs['rhs'][idx]], dim=2).cpu().numpy()

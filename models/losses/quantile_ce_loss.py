@@ -32,7 +32,6 @@ class QuantileCELoss(MaskedLoss):
         lc[lc==0.95] = 11
         lc = lc.long()
         if training:
-            print(training)
             rhs_hat = y_hat[loss_mask, 12:, 7, 7] # (n, 303)
             rhs = rhs[loss_mask].unsqueeze(-1)
             center_lc = lc[loss_mask,..., 7, 7]
