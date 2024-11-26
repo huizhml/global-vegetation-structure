@@ -285,8 +285,6 @@ def main(cfg: DictConfig):
             if cfg.get('debug', False):
                 index_ = index_.iloc[:10000]
             print('index table', len(index_))
-            index_ = index_.sort_values(['path', 'in_partition_idx'])
-            index_['in_partition_idx'] = index_.groupby('path').cumcount()
             dataset = S2Dataset(h5_file, index_)
             write_beton(out_file, dataset, shuffle_indices=cfg.shuffle_indices)
     else:
@@ -300,8 +298,6 @@ def main(cfg: DictConfig):
             index_ = pd.read_parquet(index_dir/'*.parquet')
             index_ = index_[index_['sensitivity'] >= 0.95]
             print('index table', len(index_))
-            index_ = index_.sort_values(['path', 'in_partition_idx'])
-            index_['in_partition_idx'] = index_.groupby('path').cumcount()
             dataset = S2Dataset(h5_file, index_)
     # check_s2_value(out_file)
 

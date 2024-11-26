@@ -43,6 +43,8 @@ class S2Dataset(Dataset):
         latlon = self.h5_file[f'{row.path}/latlon'][row.in_partition_idx]
         sensitivity = self.h5_file[f'{row.path}/gedi_attrs'][row.in_partition_idx, 24]
         shot_number = self.h5_file[f'{row.path}/shot_number'][row.in_partition_idx]
+        if shot_number != row.shot_number:
+            raise ValueError(f'Error: something wrong with the index table, {shot_number} != {row.shot_number}')
         # image = image.astype('float')
         if self.transform:
             image = self.transform(image)
