@@ -17,6 +17,7 @@ class FFCVDataModel(L.LightningDataModule):
     def __init__(self,
         train_fp: str=None,
         val_fp: str=None,
+        test_fp: str=None,
         distributed: bool=False,
         batches_ahead: int=3,
         batch_size: int=64,
@@ -28,6 +29,8 @@ class FFCVDataModel(L.LightningDataModule):
         super().__init__()
         self.train_fp = Path(train_fp).expanduser()
         self.val_fp = Path(val_fp).expanduser()
+        if test_fp is not None:
+            self.test_fp = Path(test_fp).expanduser()
         if not self.train_fp.exists():
             raise FileNotFoundError(f'{self.train_fp} does not exist. Please run python -m datasets._convert_to_beton.')
         if self.train_fp.is_dir():
@@ -60,10 +63,10 @@ class FFCVDataModel(L.LightningDataModule):
         print('time taken for val dataloader: ', time.time()-t0)
         return loader
 
-    # def test_dataloader(self):
-    #     return Loader(self.test_fp, batch_size=self.batch_size, num_workers=self.num_workers,
-    #             distributed=self.distributed, batches_ahead=self.batches_ahead,
-    #             order=OrderOption.SEQUENTIAL, os_cache=self.os_cache)
+    def test_dataloader(self):
+        return Loader(self.test_fp, batch_size=self.batch_size, num_workers=self.num_workers,
+                distributed=self.distributed, batches_ahead=self.batches_ahead,
+                order=OrderOption.SEQUENTIAL, os_cache=self.os_cache)
 
 
 

@@ -39,6 +39,22 @@ class LoggerSaveConfigCallback(SaveConfigCallback):
             config = namespace_to_dict(config)
             trainer.logger.log_hyperparams({"config": config})
 
+
+def update_namespace_from_nested_dict(namespace, nested_dict, prefix=""):
+    for key, value in nested_dict.items():
+        # Create a variable name based on the current prefix
+        # keep those training configurations unchanged
+        if prefix=="" and (key not in ['seed_everything', 'optimizer', 'lr_scheduler', 'data', 'model']):
+            continue
+        full_key = f"{prefix}.{key}" if prefix else key
+        if isinstance(value, dict):
+            # Recursively update for nested dictionaries
+            update_namespace_from_nested_dict(namespace, value, prefix=f"{full_key}")
+        else:
+            # Set the value in the namespace
+            namespace[full_key] = value
+
+
 class MyLightningCLI(LightningCLI):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -59,11 +75,24 @@ class MyLightningCLI(LightningCLI):
         subcommand = self.config.subcommand
         if run_id := self.config[subcommand].trainer.logger.init_args.id:
             import wandb
+            
             cfg = self.config[subcommand].trainer.logger.init_args
             run_ = wandb.init(project=cfg.project, id=run_id, resume="must")
+            if subcommand == "validate":
+                validate_params = {
+                    "val_fp": self.config[subcommand].data.init_args.val_fp,
+                    'zero_slope': self.config[subcommand].model.init_args.zero_slope,
+                    'note': 'validate on low slope samples (<20)'
+                }
+                run_.config.update({'validate': validate_params}, allow_val_change=True)
+            # update the model config with the model config from the run
+            update_namespace_from_nested_dict(self.config[subcommand], run_.config['config'])
+            if subcommand == "validate":
+                self.config[subcommand].model.init_args.zero_slope = validate_params['zero_slope']
             artifact = run_.use_artifact(f'model-{run_id}:best', type='model')
             ckpt_path = artifact.file()
             self.config[subcommand].ckpt_path = ckpt_path
+
 
     # def add_arguments_to_parser(self, parser) -> None:
     #     import ipdb; ipdb.set_trace()

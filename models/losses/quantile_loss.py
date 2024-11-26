@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Any
 import torch
 import torch.nn as nn
 from torch import Tensor
@@ -7,8 +7,8 @@ from models.losses.base import MaskedLoss
 
 class QuantileLoss(MaskedLoss):
 
-    def __init__(self, *, zero_out:bool=None, quantiles: List[float] = [0.05, 0.5, 0.95]) -> None:
-        super().__init__(zero_out=zero_out)
+    def __init__(self, zero_out:bool=None, quantiles: List[float] = [0.05, 0.5, 0.95], *args: Any, **kwargs: Any) -> None:
+        super().__init__(zero_out=zero_out, *args, **kwargs)
         if isinstance(quantiles, list):
             assert all(0 < q < 1 for q in quantiles), "Quantiles should be in (0, 1) range"
         else:

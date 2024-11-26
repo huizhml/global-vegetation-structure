@@ -1,8 +1,9 @@
 import joblib
 import torch
 import torch.nn as nn
-from typing import Any
+from typing import Any, Dict
 import lightning as L
+from lightning import LightningModule, Trainer
 
 LAT_MEAN = 12.7036
 LAT_STD = 25.5279
@@ -18,6 +19,7 @@ class BaseModel(L.LightningModule):
     def __init__(
             self, 
             feed_slope: bool = False,
+            zero_slope: bool = False,
             feed_latlon: bool = False,
             loss_fc: nn.Module = None, 
             transform: nn.Module = None, 
@@ -25,6 +27,7 @@ class BaseModel(L.LightningModule):
             kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.feed_slope = feed_slope
+        self.zero_slope = zero_slope
         self.feed_latlon = feed_latlon
         self.loss_fc = loss_fc
         self.transform = transform
@@ -107,8 +110,11 @@ class BaseModel(L.LightningModule):
     def validation_step(self, sample, batch_idx):
         x = self.transform(sample[0])
         if self.feed_slope:
-            slope = torch.nan_to_num(sample[3], nan=0) 
-            slope = (slope - SLOPE_MEAN) / SLOPE_STD
+            if self.zero_slope:
+                slope = torch.zeros_like(sample[3])
+            else:
+                slope = torch.nan_to_num(sample[3], nan=0) 
+                slope = (slope - SLOPE_MEAN) / SLOPE_STD
             x = torch.cat([x, slope.unsqueeze(1)], dim=1)
         if self.feed_latlon:
             latlon = sample[4]
@@ -121,7 +127,7 @@ class BaseModel(L.LightningModule):
             x = torch.cat([x,lat.unsqueeze(1), sin_lon.unsqueeze(1), cos_lon.unsqueeze(1)], dim=1)
         y_hat = self.forward(x.float())
         
-        error_metrics, error_metrics_veg, output = self.loss_fc(y_hat, *sample[1:], training=False)
+        error_metrics, error_metrics_veg, output = self.loss_fc(y_hat, *sample[1:])
         for name, err in error_metrics.items():
             self.log(f'val_{name}', err, on_epoch=True, on_step=False, sync_dist=True)
         for name, err in error_metrics_veg.items():
