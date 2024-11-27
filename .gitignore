@@ -53,3 +53,5 @@ output*
 */*.html
 *.parquet
 logs/
+*.ipynb
+*.h5
