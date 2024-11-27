@@ -31,8 +31,6 @@ class FFCVDataModel(L.LightningDataModule):
         self.val_fp = Path(val_fp).expanduser()
         if test_fp is not None:
             self.test_fp = Path(test_fp).expanduser()
-        if not self.train_fp.exists():
-            raise FileNotFoundError(f'{self.train_fp} does not exist. Please run python -m datasets._convert_to_beton.')
         if self.train_fp.is_dir():
             self.train_fp = sorted(list(self.train_fp.glob('*.beton')))
         
@@ -45,6 +43,8 @@ class FFCVDataModel(L.LightningDataModule):
                     
 
     def train_dataloader(self):
+        if not self.train_fp.exists():
+            raise FileNotFoundError(f'{self.train_fp} does not exist. Please run python -m datasets._convert_to_beton.')
         print('loading from ', self.train_fp)
 
         t0 = time.time()

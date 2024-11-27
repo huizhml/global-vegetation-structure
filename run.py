@@ -1,5 +1,6 @@
 import logging
 import sys
+import copy
 import wandb
 import torch
 import argparse
@@ -78,10 +79,11 @@ class MyLightningCLI(LightningCLI):
             
             cfg = self.config[subcommand].trainer.logger.init_args
             run_ = wandb.init(project=cfg.project, id=run_id, resume="must")
+            train_fp = copy.copy(self.config[subcommand].data.init_args.train_fp)
             if subcommand == "validate":
                 validate_params = {
-                    "val_fp": self.config[subcommand].data.init_args.val_fp,
-                    'zero_slope': self.config[subcommand].model.init_args.zero_slope,
+                    "val_fp": copy.copy(self.config[subcommand].data.init_args.val_fp),
+                    'zero_slope': copy.copy(self.config[subcommand].model.init_args.zero_slope),
                     'note': 'validate on low slope samples (<20)'
                 }
                 run_.config.update({'validate': validate_params}, allow_val_change=True)
@@ -89,6 +91,10 @@ class MyLightningCLI(LightningCLI):
             update_namespace_from_nested_dict(self.config[subcommand], run_.config['config'])
             if subcommand == "validate":
                 self.config[subcommand].model.init_args.zero_slope = validate_params['zero_slope']
+                self.config[subcommand].data.init_args.val_fp = validate_params['val_fp']
+            # check if training/validation data exists
+            if subcommand == "fit" and (not os.path.exists(train_fp)):
+                self.config[subcommand].data.init_args.train_fp = train_fp
             artifact = run_.use_artifact(f'model-{run_id}:best', type='model')
             ckpt_path = artifact.file()
             self.config[subcommand].ckpt_path = ckpt_path

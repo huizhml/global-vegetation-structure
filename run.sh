@@ -44,14 +44,27 @@ run_id=${2:-null}
 max_epochs=${3:-200}
 subcommand=${4:-fit}
 case $id in
-12) echo evaluate
+13) echo evaluate
 python run.py $subcommand -c config/train.yaml \
         --data.init_args.val_fp $data_dir/$val_data_name.beton \
-        --model.init_args.out_channels 303 \
         --trainer.callbacks+=callbacks.boxplot.BoxplotLogger \
+        --trainer.logger.init_args.id $run_id
+        ;;
+12)
+echo use latlon as an input
+python run.py $subcommand -c config/train.yaml \
+        --data.init_args.train_fp $data_dir/$train_data_name.beton \
+        --data.init_args.val_fp $data_dir/$val_data_name.beton \
+        --model.init_args.out_channels 315 \
+        --model.init_args.loss_fc.class_path models.losses.quantile_ce_loss.QuantileCELoss \
+        --model.init_args.feed_latlon True \
+        --model.init_args.loss_fc.zero_out True \
+        --model.init_args.encoder.init_args.in_channels 15 \
+        --trainer.callbacks+=callbacks.classification_logger.ClassificationLogger \
+        --trainer.callbacks.log_val_every=10 \
+        --trainer.max_epochs $max_epochs \
         --trainer.logger.init_args.id $run_id \
-        --model.init_args.loss_fc.class_path models.losses.quantile_loss.QuantileLoss \
-        --model.init_args.loss_fc.zero_out True 
+        --trainer.logger.init_args.name QR_and_LCC_zero_out_latlon
         ;;
 11)
 echo use slope and latlon as an input

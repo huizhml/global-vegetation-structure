@@ -91,7 +91,7 @@ trainer:
         filename: 'BestModel-{epoch:02d}-{val_loss:.2f}'
         save_top_k: 1
         mode: min
-        every_n_epochs: 10 #check every n epochs
+        every_n_epochs: 50 #check every n epochs
         save_last: True # save the last epoch? or just save the last best model?
     # - class_path: callbacks.index_shuffle.IndexShuffler
 
@@ -102,5 +102,5 @@ trainer:
         name: test
         job_type: train
         save_dir: /tmp/logs
-        log_model: True # 'all' would log the model after each epoch
+        log_model: all # 'all' would log the model after each epoch
         id:

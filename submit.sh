@@ -59,7 +59,7 @@ fi
 python -m datasets._4_convert_to_beton nsplit=$nsplit split_idx=$idx \
         h5_file=$input_dir/train.h5 out_idx_dir=$data_dir/index_table_train_subsets \
         index_table=$data_dir/split_test0.1_cal0.1_val0.1_seed42/index_table_train \
-        shuffle_indices=True +debug=$debug;;
+        shuffle_indices=True +debug=$debug version=2;;
 
 5)
 echo calculate the mean and std of sentinel-2 images from the training data
