@@ -95,12 +95,14 @@ class MyDatasetWriter(DatasetWriter):
             print("file not found")
 
 
-def split_index_table(nsplit, out_dir, index_table_fp):
+def split_index_table(nsplit, out_dir, index_table_fp,version):
     index_table = dgp.read_parquet(index_table_fp, gather_spatial_partitions=False).compute()
     # Reindex in_partition_idx, it's not continuous, use it with train.h5 will cause the index out of range error
     # we use train.h5, the orignal whole data is too large
     index_table = index_table.sort_values(['path', 'in_partition_idx'])
     index_table['in_partition_idx'] = index_table.groupby('path').cumcount()    
+    index_table = index_table[index_table['sensitivity'] >= 0.95]
+    print('number of high sensitivity samples', len(index_table))
     index_table = index_table.sample(frac=1)
     N = len(index_table)
     n = N // nsplit
@@ -108,7 +110,7 @@ def split_index_table(nsplit, out_dir, index_table_fp):
         index_ = index_table.iloc[n*split:n*(split+1)] # not shuffled!
         if split == nsplit - 1:
             index_ = index_table.iloc[n*split:]
-        index_.to_parquet(out_dir / f'train{split}.parquet')
+        index_.to_parquet(out_dir / f'train{split}_v{version}.parquet')
 
 def split_h5(h5_dir, index_table_fps, save_dir): 
     import glob
@@ -271,17 +273,16 @@ def main(cfg: DictConfig):
 
     if 'train' in index_dir.stem:
         print('Generating train subsets in beton...')
-        if len(list(out_idx_dir.glob('*.parquet'))) != cfg.nsplit:
+        if len(list(out_idx_dir.glob(f'*v{cfg.version}.parquet'))) != cfg.nsplit:
             print('Re-splitting index table')
-            split_index_table(cfg.nsplit, out_idx_dir, index_dir/f'*.parquet')
+            split_index_table(cfg.nsplit, out_idx_dir, index_dir/f'*.parquet', cfg.version)
             visualize_subset_distribution(out_idx_dir / f'train{cfg.split_idx}.parquet')
         
         # split_h5(h5_file, str(splited_idx_dir / f'train*.parquet'), out_dir)
         out_beton_name = 'debug' if cfg.get('debug', False) else 'train'
         out_file = out_idx_dir.parent / f'train_subsets/{out_beton_name}{cfg.split_idx}_filtered_v{cfg.version}.beton'
         if not out_file.exists():
-            index_ = pd.read_parquet(out_idx_dir / f'train{cfg.split_idx}.parquet')
-            index_ = index_[index_['sensitivity'] >= 0.95]
+            index_ = pd.read_parquet(out_idx_dir / f'train{cfg.split_idx}_v{cfg.version}.parquet')
             if cfg.get('debug', False):
                 index_ = index_.iloc[:10000]
             print('index table', len(index_))
@@ -296,7 +297,6 @@ def main(cfg: DictConfig):
         if not Path(out_file).exists():
             print(f'Generating {split}.beton...')
             index_ = pd.read_parquet(index_dir/'*.parquet')
-            index_ = index_[index_['sensitivity'] >= 0.95]
             print('index table', len(index_))
             dataset = S2Dataset(h5_file, index_)
     # check_s2_value(out_file)

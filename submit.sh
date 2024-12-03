@@ -29,37 +29,39 @@ echo generate index table for the whole downloaded data
 python -m datasets.1_generate_index_table;;
 2)
 echo split index table and h5 files into train, val, test, cal
+#! incountinous write won't work, there will be some h5 files corrupted
 echo We split the {zone}.h5 files here, becase converting h5 file to {train/val/cal/test}.beton based on the large h5 is inefficient.
-python -m datasets.2_train_test_split index_dir=$data_dir/geo_index_table_with_sensitivity;;
+python -m datasets._2_train_test_split index_dir=$data_dir/geo_index_table_with_sensitivity;;
 3)
 echo merge {split} h5 files, the input for converting to beton
 for split in train val cal test; do
-        python -m datasets.3_merge_h5s h5_dir="$data_dir/split_test0.1_cal0.1_val0.1_seed42/${split}_h5s" \
+        python -m datasets._3_merge_h5s h5_dir="$data_dir/split_test0.1_cal0.1_val0.1_seed42_v1/${split}_h5s" \
                 merged_h5_file="$data_dir/${split}.h5"
 done;;
 4)
 # USE node 22, took ~30min to convert one subset, needs 240GB memory
-nsplit=10
+nsplit=5
 debug=${2:-False}
 idx=$SLURM_ARRAY_TASK_ID
 echo split training data index into $nsplit subsets, and converting to beton using FFCV
-if hostname | grep -q "hendrix"; then
-        echo "Running on Hendrix"
-        if [ ! -f /scratch/train.h5 ]; then
-                rsync -av --progress $data_dir/train.h5 /scratch/
-        else
-                echo "train.h5 already exists in /scratch"
-        fi
-        input_dir=/scratch
-else
-        echo "Running on LUMI"
-        input_dir=$data_dir
-fi
+# if hostname | grep -q "hendrix"; then
+#         echo "Running on Hendrix"
+#         if [ ! -f /scratch/train.h5 ]; then
+#                 rsync -av --progress $data_dir/train.h5 /scratch/
+#         else
+#                 echo "train.h5 already exists in /scratch"
+#         fi
+#         input_dir=/scratch
+# else
+#         echo "Running on LUMI"
+#         input_dir=$data_dir
+# fi
+input_dir=$data_dir
 
 python -m datasets._4_convert_to_beton nsplit=$nsplit split_idx=$idx \
         h5_file=$input_dir/train.h5 out_idx_dir=$data_dir/index_table_train_subsets \
-        index_table=$data_dir/split_test0.1_cal0.1_val0.1_seed42/index_table_train \
-        shuffle_indices=True +debug=$debug version=2;;
+        index_table=$data_dir/split_test0.1_cal0.1_val0.1_seed42_v1/index_table_train \
+        shuffle_indices=True +debug=$debug;;
 
 5)
 echo calculate the mean and std of sentinel-2 images from the training data
@@ -88,7 +90,7 @@ python -m datasets.statistical_analysis \
         model_path=output/pca_model.pkl;;
 9)
 echo aggregate the GEDI data;
-python -m datasets.pca_analysis task=aggregate_gedi_data
+python -m datasets.pca_analysis task=aggregate_gedi_data +beton_fps=${HOME}/data/GEDI/train_subsets/train*_filtered_v3.beton;;
 ;;
 *)
 echo runnning nothing ;;

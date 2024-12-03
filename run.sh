@@ -11,12 +11,12 @@
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=huzh@di.ku.dk
 
-train_data_name=train1_filtered_v1
-val_data_name=train7_filtered_v1
+train_data_name=train1_filtered_v3
+val_data_name=train7_filtered_v3
 debug=${2:-False}
 if [ "$debug" = "True" ]; then
-    train_data_name=debug0_filtered_v1
-    val_data_name=debug0_filtered_v1
+    train_data_name=debug0_filtered_v2
+    val_data_name=debug0_filtered_v2
 fi
 
 # Check if hostname is in the list
