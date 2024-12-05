@@ -11,6 +11,7 @@ def merge_all_zones(h5_dir:str='~/data/GEDI', merged_h5_file:str='~/data/GVS.h5'
     """
     h5_dir = Path(h5_dir).expanduser()
     merged_h5_file = Path(merged_h5_file).expanduser()
+    print(f"Merging all zones in '{h5_dir}' into '{merged_h5_file}'")
 
     if merged_h5_file.exists():
         mode = 'r+'

@@ -101,11 +101,12 @@ def split_index_table(nsplit, out_dir, index_table_fp,version):
     # we use train.h5, the orignal whole data is too large
     index_table = index_table.sort_values(['path', 'in_partition_idx'])
     index_table['in_partition_idx'] = index_table.groupby('path').cumcount()    
-    index_table = index_table[index_table['sensitivity'] >= 0.95]
-    print('number of high sensitivity samples', len(index_table))
+    # index_table = index_table[index_table['sensitivity'] >= 0.95]
+    print('number of training samples (high sensitivity): ', len(index_table))
     index_table = index_table.sample(frac=1)
     N = len(index_table)
     n = N // nsplit
+    index_table = index_table.astype({'shot_number': int})
     for split in range(nsplit):
         index_ = index_table.iloc[n*split:n*(split+1)] # not shuffled!
         if split == nsplit - 1:
@@ -218,28 +219,14 @@ def visualize_subset_distribution(index_table_fp):
     # Display the image
     print('Displaying')
     pil_img = img.to_pil()
-
-    # countries_shp = Path('~/data/ne_110m_admin_0_countries/ne_110m_admin_0_countries.shp').expanduser()
-    # world = gpd.read_file(countries_shp)
-    # # Convert to a format suitable for Datashader
-    # world = world.to_crs(epsg=3857)  # Convert to Web Mercator for better alignment
-    # # Plot using Matplotlib
-    # fig, ax = plt.subplots(figsize=(30, 30))
-    # # Display the Datashader image
-    # print('Displaying image')
-    # ax.imshow(pil_img, extent=x_range + y_range)
-    # # Plot the world boundaries
-    # print('Plotting world boundaries')
-    # world.boundary.plot(ax=ax, linewidth=1, color='black')
-    # Save the combined image
     print('Saving')
     # plt.savefig(f'/users/zhanghui/data/distribution_{index_table_fp.stem}.png', dpi=300, bbox_inches='tight')
-    pil_img.save(f'outputs/distribution_{index_table_fp.stem}.png')
+    pil_img.save(f'output/distribution_{index_table_fp.stem}.png')
 
 
 def check_s2_value(train_fp: Path):
     print('Checking values for ', train_fp)
-    loader = Loader(train_fp, batch_size=512, num_workers=16, order=OrderOption.SEQUENTIAL, os_cache=False)
+    loader = Loader(train_fp, batch_size=4196, num_workers=4, order=OrderOption.SEQUENTIAL, os_cache=False)
     for i, batch in tqdm(enumerate(loader)):
         if batch[0].min() < 0:
             print('negative values found')
@@ -249,10 +236,10 @@ def check_s2_value(train_fp: Path):
         
 @dataclass
 class MyConfig:
-    index_table: str = '~/data/GEDI/split_test0.1_cal0.1_val0.1_seed42/index_table_train'
+    index_table: str = '~/data/GEDI/split_test0.1_cal0.1_val0.1_seed42_v1/index_table_train'
     h5_file: str = '~/data/GEDI/train.h5'
     out_idx_dir: str = '~/data/GEDI/index_table_train_subsets'
-    nsplit: int= 10
+    nsplit: int= 5
     split_idx: int = 0
     seed: int = 42
     shuffle_indices: bool = False
@@ -276,7 +263,7 @@ def main(cfg: DictConfig):
         if len(list(out_idx_dir.glob(f'*v{cfg.version}.parquet'))) != cfg.nsplit:
             print('Re-splitting index table')
             split_index_table(cfg.nsplit, out_idx_dir, index_dir/f'*.parquet', cfg.version)
-            visualize_subset_distribution(out_idx_dir / f'train{cfg.split_idx}.parquet')
+            visualize_subset_distribution(out_idx_dir / f'train{cfg.split_idx}_v{cfg.version}.parquet')
         
         # split_h5(h5_file, str(splited_idx_dir / f'train*.parquet'), out_dir)
         out_beton_name = 'debug' if cfg.get('debug', False) else 'train'
@@ -284,24 +271,46 @@ def main(cfg: DictConfig):
         if not out_file.exists():
             index_ = pd.read_parquet(out_idx_dir / f'train{cfg.split_idx}_v{cfg.version}.parquet')
             if cfg.get('debug', False):
-                index_ = index_.iloc[:10000]
-            print('index table', len(index_))
+                size = 4096 * 28 # 1% of one subset
+                index_ = index_.iloc[:size]
+            print(f'size of training subset {cfg.version}:', len(index_))
             dataset = S2Dataset(h5_file, index_)
             write_beton(out_file, dataset, shuffle_indices=cfg.shuffle_indices)
     else:
-        split = index_dir.stem.split('_')[3]
+        split = index_dir.stem.split('_')[2]
         assert h5_file.stem == split, f'cannot generate {split}.beton from {h5_file}, check index_dir and h5_file'
-        assert index_dir.stem.split('_')[-1] == 'sensitivity', f'index table should be the one with sensitivity, {index_dir} provided'
         
-        out_file = f'~/data/GEDI/train_subsets/{split}_filtered_v{cfg.version}.beton'
-        if not Path(out_file).exists():
-            print(f'Generating {split}.beton...')
-            index_ = pd.read_parquet(index_dir/'*.parquet')
-            print('index table', len(index_))
-            dataset = S2Dataset(h5_file, index_)
-    # check_s2_value(out_file)
+        if cfg.get('create_subset'):
+            subset_sizes = [1000000, 5000000, 10000000]
+            out_files = [h5_file.parent / f'train_subsets/{split}_filtered_v{cfg.version}_{str(size//1000000)}m.beton' for size in subset_sizes]
+            out_files = [(Path(file), subset_sizes[i]) for i, file in enumerate(out_files) if not Path(file).exists()]
+            if len(out_files) > 0:
+                index_table = dgp.read_parquet(index_dir/'*.parquet', gather_spatial_partitions=False).compute()
+                #NOTE: Reindex in_partition_idx, it's not continuous, use it with val.h5 will cause the index out of range error
+                # we use val.h5, the orignal whole data is too large
+                index_table = index_table.sort_values(['path', 'in_partition_idx'])
+                index_table['in_partition_idx'] = index_table.groupby('path').cumcount()
 
+            for out_file, size in out_files:
+                print(f'Generating {out_file} from {h5_file}...')
+                index_table = index_table.sample(frac=1).iloc[:size]
+                print(f'number of {split} subset {size} samples (high sensitivity): ', len(index_table))
+                dataset = S2Dataset(h5_file, index_table)
+                write_beton(out_file, dataset, shuffle_indices=False)
 
+        else:
+            out_file = h5_file.parent / f'train_subsets/{split}_filtered_v{cfg.version}.beton'
+            if not Path(out_file).exists():
+                print(f'Generating {out_file} from {h5_file}...')
+                index_table = dgp.read_parquet(index_dir/'*.parquet', gather_spatial_partitions=False).compute()
+                #NOTE: Reindex in_partition_idx, it's not continuous, use it with val.h5 will cause the index out of range error
+                # we use val.h5, the orignal whole data is too large
+                index_table = index_table.sort_values(['path', 'in_partition_idx'])
+                index_table['in_partition_idx'] = index_table.groupby('path').cumcount()    
+                print(f'number of {split} samples (high sensitivity): ', len(index_table))
+                dataset = S2Dataset(h5_file, index_table)
+                write_beton(out_file, dataset, shuffle_indices=False)
+    check_s2_value(out_file)
 
 if __name__ == '__main__':
     print('Running main')
