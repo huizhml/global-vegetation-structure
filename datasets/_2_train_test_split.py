@@ -16,7 +16,7 @@ from omegaconf import DictConfig
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 
-from datasets._merge_h5s import dst_conf
+from datasets._3_merge_h5s import dst_conf
 
 
 class DataSplitter:
@@ -25,7 +25,7 @@ class DataSplitter:
     Splitting is based on the Sentinel-2 grid. No spatial overlap between the splits.
     '''
     def __init__(self, index_dir, test_ratio:float=0.1, val_ratio: float=0.1, cal_ratio:float=0.1, random_state:int=42,
-                s2_grid_file: Path=None, mgrs_file: Path=None):
+                s2_grid_file: Path=None, mgrs_file: Path=None, version: str='v1'):
         self.index_dir = index_dir
         self.test_ratio = test_ratio
         self.val_ratio = val_ratio
@@ -34,7 +34,7 @@ class DataSplitter:
         self.s2_grid_file = s2_grid_file
         self.mgrs_file = mgrs_file
         self.splits = ['test', 'cal', 'val']
-        self.save_dir = self.index_dir.parent / f'split_test{self.test_ratio}_cal{self.cal_ratio}_val{self.val_ratio}_seed{self.random_state}'
+        self.save_dir = self.index_dir.parent / f'split_test{self.test_ratio}_cal{self.cal_ratio}_val{self.val_ratio}_seed{self.random_state}_{version}'
         self.save_dir.mkdir(exist_ok=True)
 
     def _train_cal_val_test_split(self):
@@ -49,7 +49,9 @@ class DataSplitter:
                 setattr(self, f'tiles_{name}', tiles)
         else:  
             geo_index_df = dd.read_parquet(f'{self.index_dir}/*.parquet')
+            geo_index_df = geo_index_df[geo_index_df['sensitivity'] >= 0.95] # !NOTE: filter out low sensitivity samples
             unique_tiles = geo_index_df['s2_tile'].unique().compute()
+            unique_tiles = unique_tiles.reset_index(drop=True)
             self.s2_grid = self.s2_grid.loc[unique_tiles]
 
             n_test = int(len(unique_tiles) * self.test_ratio)
@@ -79,6 +81,7 @@ class DataSplitter:
     def _split_zone_by_spatial_query(self, index_df, partition_info):
         partition_idx = partition_info["number"] # the index of the partition in the dataframe
         zone = os.path.basename(self.index_table_fps[partition_idx])[:3]
+        index_df = index_df[index_df['sensitivity'] >= 0.95] # !NOTE: filter out low sensitivity samples
         index_df = index_df.reset_index(drop=True)
         for name in self.splits:
             overlapped_tiles = getattr(self, f'tiles_{name}').sjoin(self.mgrs_df.loc[[zone]], how='left')
@@ -111,7 +114,7 @@ class DataSplitter:
 
         index_table_fps = [f'{self.index_dir}/{zone}' for zone in os.listdir(self.index_dir)]
         self.index_table_fps = sorted(index_table_fps, key=natural_sort_key)
-        index_df = dgp.read_parquet(self.index_table_fps , gather_spatial_partitions=False, columns=['path', 's2_tile', 'in_partition_idx', 'geometry'])
+        index_df = dgp.read_parquet(self.index_table_fps , gather_spatial_partitions=False, columns=['path', 's2_tile', 'in_partition_idx', 'geometry', 'shot_number', 'sensitivity'])
         index_df.map_partitions(self._split_zone_by_spatial_query, meta=index_df._meta).compute()
 
     def count_for_split_per_zone(self):
@@ -139,7 +142,9 @@ class DataSplitter:
             count.loc[:, 'MGRS_UTM'] = [os.path.basename(f)[:3] for f in split_index_df_fps]
             count = count.set_index('MGRS_UTM', drop=True)
             self.mgrs_df.loc[:, f'count_{name}'] = count[0]
-            self.mgrs_df[f'ratio_{name}'] = self.mgrs_df[f'count_{name}'] / self.mgrs_df['total_downloaded']
+        self.mgrs_df['count_high_sensitivity'] = self.mgrs_df['count_test'] + self.mgrs_df['count_cal'] + self.mgrs_df['count_val'] + self.mgrs_df['count_train']
+        for name in splits:
+            self.mgrs_df[f'ratio_{name}'] = self.mgrs_df[f'count_{name}'] / self.mgrs_df['count_high_sensitivity']
             self.mgrs_df[f'ratio_{name}'] = self.mgrs_df[f'ratio_{name}'].replace(0, pd.NA)
         # self.mgrs_df = self.mgrs_df.fillna(value={f'count_{name}': 0 for name in splits})
         # sum_split = self.mgrs_df[[f'count_{name}' for name in splits]].sum(axis=1)
@@ -262,7 +267,13 @@ def _split_h5_per_zone(h5_in_fp, save_dir, index_dir):
             index_fp = index_dir / f'index_table_{name}' / f'{zone}.parquet'
             print(h5_file, index_fp)
             print(index_fp.exists(), h5_file.exists())
-            if h5_file.exists() or not index_fp.exists():
+            if h5_file.exists():
+                data = h5py.File(h5_file, 'r')
+                if len(data.keys()) < 4: # check if the file is corrupted
+                    data.close()
+                    os.remove(h5_file)
+                data.close()
+            if h5_file.exists() or not index_fp.exists(): # should be true, false
                 continue
             df = gpd.read_parquet(index_fp)
             with h5py.File(h5_file, 'w') as f_out:
@@ -286,14 +297,15 @@ def overlay_country_boundaries(ax):
 
 @dataclass
 class MyConfig:
-    index_dir: Path = Path('~/data/GEDI/geo_index_table').expanduser()
-    mgrs_file: Path = Path('~/data/GEDI/download_stats.parquet').expanduser()
-    s2_grid_file: Path = Path('~/data/GEDI/sentinel_2_index_shapefile.shp').expanduser()
+    index_dir: Path = Path('~/data/GEDI/geo_index_table_with_sensitivity').expanduser()
+    mgrs_file: Path = Path('~/data/GEDI/mgrs_stats.parquet').expanduser()
+    s2_grid_file: Path = Path('~/data/GEDI/Sentinel-2_tilling_shp/sentinel_2_index_shapefile.shp').expanduser()
     test_ratio: float = 0.1
     val_ratio: float = 0.1
     cal_ratio: float = 0.1
     random_state: int = 42
     subset_frac: float = 0.2 # the fraction of the training data to sample
+    version: str = 'v1'
 
 cs = ConfigStore.instance()
 cs.store(name="my_config", node=MyConfig)
@@ -306,9 +318,8 @@ def main(cfg: DictConfig) -> None:
     client = Client(cluster)
 
     print(client)
-
     t0 = time.time()
-    splitter = DataSplitter(cfg.index_dir, cfg.test_ratio, cfg.val_ratio, cfg.cal_ratio, cfg.random_state, cfg.s2_grid_file, cfg.mgrs_file)
+    splitter = DataSplitter(cfg.index_dir, cfg.test_ratio, cfg.val_ratio, cfg.cal_ratio, cfg.random_state, cfg.s2_grid_file, cfg.mgrs_file, cfg.version)
     print('Run split...')
     splitter.run_split()
     print('Count the number of train/val/cal/test samples per zone...')
@@ -318,11 +329,11 @@ def main(cfg: DictConfig) -> None:
     print('Split h5 files...') 
     # TODO: filter out low sensitivity samples before generating {split}.h5 to reduce time to convert to beton
     h5_dir = cfg.get('h5_dir', '~/data/GEDI/GEDI_S2_h5s_original')
-    index_dir = cfg.get('index_dir', '~/data/GEDI/split_test0.1_cal0.1_val0.1_seed42')
-    save_dir = cfg.get('save_dir', '~/data/GEDI')
+    index_dir = cfg.get('save_dir', splitter.save_dir)
+    save_dir = cfg.get('save_dir', splitter.save_dir)
     split_h5(h5_dir, index_dir, save_dir)
-    # print('Sample subset...')
-    # splitter.sample_subset(frac=cfg.subset_frac)
+    print('Sample subset...')
+    splitter.sample_subset(frac=cfg.subset_frac)
 
     print(f'time taken: {time.time() - t0}')
     client.close()
