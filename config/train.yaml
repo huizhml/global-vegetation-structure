@@ -2,12 +2,13 @@ seed_everything: 42
 optimizer:
   class_path: torch.optim.AdamW
   init_args:
-    lr: 0.0006
+    lr: 0.0005
+    weight_decay: 0.5
 lr_scheduler:
   class_path: torch.optim.lr_scheduler.StepLR
   init_args:
     gamma: 0.5
-    step_size: 30
+    step_size: 60
 
 data:
   class_path: datasets.ffcv_datamodule.FFCVDataModel
@@ -74,16 +75,16 @@ trainer:
     - class_path: lightning.pytorch.callbacks.LearningRateMonitor
       init_args:
         logging_interval: step
-    - class_path: callbacks.regression_metrics_logger.ErrorMetricsLogger
-      init_args:
-        log_every: 10
-    - class_path: callbacks.prediction_logger.PredictionLogger
-      init_args:
-        log_every: 50
-        log_batch: 2000
-    - class_path: callbacks.boxplot.BoxplotLogger
-      init_args:
-        log_every: 100
+    # - class_path: callbacks.regression_metrics_logger.ErrorMetricsLogger
+    #   init_args:
+    #     log_every: 10
+    # - class_path: callbacks.prediction_logger.PredictionLogger
+    #   init_args:
+    #     log_every: 50
+    #     log_batch: 2000
+    # - class_path: callbacks.boxplot.BoxplotLogger
+    #   init_args:
+    #     log_every: 50
     - class_path: lightning.pytorch.callbacks.ModelCheckpoint
       init_args:
         dirpath: checkpoints
@@ -102,5 +103,5 @@ trainer:
         name: test
         job_type: train
         save_dir: /tmp/logs
-        log_model: all # 'all' would log the model after each epoch
+        log_model: True # 'all' would log the model after each epoch
         id:

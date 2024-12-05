@@ -55,3 +55,4 @@ output*
 logs/
 *.ipynb
 *.h5
+artifacts

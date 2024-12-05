@@ -78,8 +78,21 @@ def export_summary_csv(ids):
     df = df[df.columns[::-1]]
     df.to_csv('output/run_summary.csv')
 
+
+def regression_results(ids):
+    import pandas as pd
+    from wandb.old.summary import SummarySubDict
+    dfs = []
+    for run_id in ids:
+        run = api.run(f"global-vegetation-structure/{run_id}")
+        summary = {}
+        for artifact in run.logged_artifacts():
+            if 'predictionvale' in artifact.name:
+                print(artifact.name)
+
+
 if __name__ == '__main__':
     # boxplot(run_ids)
-    run_ids = ['d30x6wk8','016hicb2','xxx1aume','bvzo4vlq' 'bvzo4vlq', 'b08sjobr', '016hicb2']
-    export_summary_csv(run_ids)
+    run_ids = ['d30x6wk8','016hicb2','xxx1aume','bvzo4vlq', '51kmjhma','ic6pfw20', 'ggi9w9b8', '4fd8j93r', '05lp279m', 'allse0dy']
+    regression_results(run_ids)
     print('done')

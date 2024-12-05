@@ -1,7 +1,7 @@
 
 from typing import Union
 from pathlib import Path
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
 import numpy as np
 import h5py
 
@@ -60,15 +60,16 @@ class S2Dataset(Dataset):
 if __name__ == '__main__':
     import pandas as pd
     h5_files = Path.home() / 'data/GEDI/train.h5'
-    index_table = Path.home() / 'data/GEDI/index_table_train_subsets/train0.parquet'
+    index_table = Path.home() / 'data/GEDI/index_table_train_subsets/train0_v1.parquet'
     index_table = pd.read_parquet(index_table)
     dataset = S2Dataset(h5_files, index_table)
     
     for i in range(len(dataset)):
-        img, label = dataset[i]
+        img = dataset[i][0]
         print(img.shape)
-        break
+        import ipdb; ipdb.set_trace()
     dataset.h5_file.close()
+
 
 
 # %%

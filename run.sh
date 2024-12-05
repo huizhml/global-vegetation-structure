@@ -15,8 +15,8 @@ train_data_name=train1_filtered_v3
 val_data_name=train7_filtered_v3
 debug=${2:-False}
 if [ "$debug" = "True" ]; then
-    train_data_name=debug0_filtered_v2
-    val_data_name=debug0_filtered_v2
+    train_data_name=debug1_filtered_v3
+    val_data_name=debug7_filtered_v3
 fi
 
 # Check if hostname is in the list
@@ -199,16 +199,13 @@ python run.py fit -c config/train.yaml \
         --data.init_args.val_fp $data_dir/$val_data_name.beton \
         --trainer.logger.init_args.name L1_loss;;
 1)
-echo debuging, using debug1.beton;
+echo debuging, fit RH98 only;
 python run.py fit -c config/train.yaml \
         --data.init_args.train_fp $data_dir/$train_data_name.beton \
         --data.init_args.val_fp $data_dir/$val_data_name.beton \
-        --model.init_args.out_channels 303 \
+        --model.init_args.out_channels 3 \
         --model.init_args.loss_fc.class_path models.losses.quantile_loss.QuantileLoss \
-        --model.init_args.loss_fc.zero_out True \
-        --model.init_args.loss_fc.class_path models.losses.quantile_ce_loss.QuantileCELoss \
-        --trainer.callbacks+=callbacks.classification_logger.ClassificationLogger \
-        --trainer.callbacks.log_val_every=1
+        --model.init_args.loss_fc.zero_out True
         ;;
 *)
 echo runnning nothing ;;

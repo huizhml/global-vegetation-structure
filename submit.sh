@@ -40,10 +40,11 @@ for split in train val cal test; do
 done;;
 4)
 # USE node 22, took ~30min to convert one subset, needs 240GB memory
-nsplit=5
+nsplit=10
 debug=${2:-False}
 idx=$SLURM_ARRAY_TASK_ID
 echo split training data index into $nsplit subsets, and converting to beton using FFCV
+input_dir=$data_dir
 # if hostname | grep -q "hendrix"; then
 #         echo "Running on Hendrix"
 #         if [ ! -f /scratch/train.h5 ]; then
@@ -56,12 +57,18 @@ echo split training data index into $nsplit subsets, and converting to beton usi
 #         echo "Running on LUMI"
 #         input_dir=$data_dir
 # fi
-input_dir=$data_dir
 
-python -m datasets._4_convert_to_beton nsplit=$nsplit split_idx=$idx \
-        h5_file=$input_dir/train.h5 out_idx_dir=$data_dir/index_table_train_subsets \
-        index_table=$data_dir/split_test0.1_cal0.1_val0.1_seed42_v1/index_table_train \
-        shuffle_indices=True +debug=$debug;;
+
+# python -m datasets._4_convert_to_beton nsplit=$nsplit split_idx=$idx \
+#         h5_file=$input_dir/train.h5 out_idx_dir=$data_dir/index_table_train_subsets \
+#         index_table=$data_dir/split_test0.1_cal0.1_val0.1_seed42_v1/index_table_train \
+#         shuffle_indices=True +debug=$debug version=$3
+
+python -m datasets._4_convert_to_beton \
+        h5_file=$input_dir/val.h5 \
+        index_table=$data_dir/split_test0.1_cal0.1_val0.1_seed42_v1/index_table_val \
+        shuffle_indices=False +debug=$debug version=$3 +create_subset=True
+;;
 
 5)
 echo calculate the mean and std of sentinel-2 images from the training data
@@ -90,7 +97,7 @@ python -m datasets.statistical_analysis \
         model_path=output/pca_model.pkl;;
 9)
 echo aggregate the GEDI data;
-python -m datasets.pca_analysis task=aggregate_gedi_data +beton_fps=${HOME}/data/GEDI/train_subsets/train*_filtered_v3.beton;;
+python -m datasets._6_visual_check task=aggregate_gedi_by_biome beton_fps=${data_dir}/train_subsets/test*_v3.beton
 ;;
 *)
 echo runnning nothing ;;

@@ -28,7 +28,7 @@ def aggregate_gedi_data(beton_fps: List[str]):
     beton_fps = glob.glob(str(Path(beton_fps).expanduser()))
     cols = [f'rh{i}' for i in range(101)] + ['wc', 'slope', 'lat', 'lon', 'sensitivity']
     data_dir = Path(beton_fps[0]).parent.parent
-    ecoregions = gpd.read_file(data_dir / 'ecoregions/wwf_terr_ecos.shp')
+    ecoregions = gpd.read_file( '~/data/GEDI/ecoregions/wwf_terr_ecos.shp')
     batch_size = 100 if 'debug' in beton_fps[0] else 4096
     for fp in beton_fps:
         file = Path(fp).with_suffix('.parquet')
