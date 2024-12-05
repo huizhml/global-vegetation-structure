@@ -16,7 +16,7 @@ class QuantileLoss(MaskedLoss):
         self.quantiles = quantiles
 
 
-    def forward(self,  rhs_hat, rhs, lc, slope, latlon, sens, shot_number, training:bool=True) -> Tensor:
+    def forward(self,  rhs_hat, rhs, lc, slope, latlon, sens, shot_number, predict_high_slope:bool=False) -> Tensor:
         if isinstance(self.quantiles, list):
             quantiles_tensor = torch.tensor(self.quantiles, device=rhs_hat.device).view(1, -1)
         else:
@@ -30,7 +30,7 @@ class QuantileLoss(MaskedLoss):
 
         if self.zero_out:
             rhs = rhs * label_mask.unsqueeze(-1)
-        if training:
+        if not predict_high_slope:
             rhs_hat = rhs_hat[loss_mask][..., 7, 7].unsqueeze(-1)
             rhs = rhs[loss_mask].float().unsqueeze(-1)
             center_lc = lc[loss_mask,..., 7, 7]
@@ -45,11 +45,12 @@ class QuantileLoss(MaskedLoss):
         veg_mask = torch.where((center_lc==5)|(center_lc==7) | (center_lc==8), 0, 1) # built-up, snow and ice, permanent water bodies
         veg_mask = veg_mask.bool()
 
+        # rhs = rhs[:, 98:99]
         n, feature_size, _ = rhs.shape # NOTE: n <= batch_size
         rhs_hat = rhs_hat.reshape(n, feature_size, -1) # n, 101, 3
         residuals = rhs_hat - rhs
         error_metrics = self.error_metrics(residuals[..., median_idx])
-        error_metrics_veg = self.error_metrics(residuals[veg_mask,..., median_idx])
+        error_metrics_veg = self.error_metrics_veg(residuals[veg_mask,..., median_idx])
         quantile_losses = torch.max((quantiles_tensor - 1) * residuals, quantiles_tensor * residuals)
         quantile_loss = torch.mean(torch.sum(quantile_losses, dim=2))
         error_metrics['loss'] = quantile_loss

@@ -21,6 +21,7 @@ class BaseModel(L.LightningModule):
             feed_slope: bool = False,
             zero_slope: bool = False,
             feed_latlon: bool = False,
+            predict_high_slope: bool = False,
             loss_fc: nn.Module = None, 
             transform: nn.Module = None, 
             yhat_transform: nn.Module = None, *args: Any, **
@@ -29,6 +30,7 @@ class BaseModel(L.LightningModule):
         self.feed_slope = feed_slope
         self.zero_slope = zero_slope
         self.feed_latlon = feed_latlon
+        self.predict_high_slope = predict_high_slope
         self.loss_fc = loss_fc
         self.transform = transform
         self.yhat_transform = yhat_transform
@@ -84,6 +86,14 @@ class BaseModel(L.LightningModule):
 
         return latitudes, longitudes
 
+    def on_train_epoch_start(self):
+        self.loss_fc.reset()
+        return super().on_train_epoch_start()
+    
+    def on_validation_epoch_start(self):
+        self.loss_fc.reset()
+        return super().on_validation_epoch_start()
+
     def training_step(self, sample, batch_idx):
         x = self.transform(sample[0])
         if self.feed_slope:
@@ -127,7 +137,7 @@ class BaseModel(L.LightningModule):
             x = torch.cat([x,lat.unsqueeze(1), sin_lon.unsqueeze(1), cos_lon.unsqueeze(1)], dim=1)
         y_hat = self.forward(x.float())
         
-        error_metrics, error_metrics_veg, output = self.loss_fc(y_hat, *sample[1:])
+        error_metrics, error_metrics_veg, output = self.loss_fc(y_hat, *sample[1:], predict_high_slope=self.predict_high_slope)
         for name, err in error_metrics.items():
             self.log(f'val_{name}', err, on_epoch=True, on_step=False, sync_dist=True)
         for name, err in error_metrics_veg.items():
