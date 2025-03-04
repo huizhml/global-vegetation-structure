@@ -23,7 +23,7 @@ import planetary_computer
 from urllib3 import Retry
 from pystac_client.stac_api_io import StacApiIO
 
-from download.dask_downloader import DaskDownloader
+from download._dask_downloader import DaskDownloader
 from ._utils import get_patch, get_tile_by_id
 
 # %%
@@ -41,11 +41,11 @@ defective_SCL = [0, 1, 8, 9, 10, 11]  # keep cloud shadows, model should learn t
 logger = logging.getLogger(__name__)
 
 
-def get_most_common_epsg(items):
+def get_most_common_epsg(items, key='proj:epsg'):
     """
     Get the most common epsg code for a list of items.
     """
-    epsgs = [item.properties['proj:epsg'] for item in items]
+    epsgs = [item.properties[key] for item in items]
     return max(set(epsgs), key=epsgs.count)
 
 

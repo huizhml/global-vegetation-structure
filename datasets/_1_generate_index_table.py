@@ -8,6 +8,7 @@ import dask.bag as db
 import pandas as pd
 import geopandas as gpd
 from pathlib import Path
+import numpy as np
 from dataclasses import dataclass
 from hydra.core.config_store import ConfigStore
 from dask.utils import natural_sort_key
@@ -23,7 +24,7 @@ class IndexTableGenerater:
     Using dask to process zones in parallel. Thus using h5_dir/{zone}.h5 as input.
     """
 
-    def __init__(self, h5_dir:str='~/data/GEDI', out_idx_dir:str='~/data/index_table') -> None:
+    def __init__(self, h5_dir:str='~/data/GEDI', out_idx_dir:str='~/data/index_table', debug: bool=False, **kwargs) -> None:
         """
         * h5_dir: folder where {zone}.h5 is
         * out_idx_dir: folder where {zone}.parquet is saved to
@@ -35,6 +36,9 @@ class IndexTableGenerater:
         zones = [f.stem for f in h5_files]
         self.target_files = [str(self.out_idx_dir/f'{z}.parquet') for z in zones]
         self.target_files = sorted(self.target_files, key=natural_sort_key)
+        if debug:
+            self.target_files = self.target_files[:1] # for testing
+            print('target_files:', self.target_files)
     
     def __call__(self):
         print('generating index tables for ', self.unfinished_files)
@@ -75,24 +79,62 @@ class IndexTableGenerater:
                         latlon = data[f'{group}/latlon'][:]
                         sensitivity = data[f'{group}/gedi_attrs'][:, 24]
                         shot_number = data[f'{group}/shot_number'][:].astype('U')
-                        index_df.append([f'/{zone}{group}', s2_ids,latlon[:,0],latlon[:,1], sensitivity, shot_number])
-        index_df = pd.DataFrame(index_df, columns=['path','s2_tile', 'lat', 'lon', 'sensitivity', 'shot_number'])
-        index_df = index_df.explode(['s2_tile', 'lat', 'lon', 'sensitivity', 'shot_number'])
+                        elev_lowestmode = data[f'{group}/gedi_attrs'][:, 5]
+                        elev_strm = data[f'{group}/gedi_attrs'][:, 3]
+                        mask = (elev_lowestmode <= -999999) | (elev_strm <= -999999)
+                        diff = np.abs(elev_lowestmode - elev_strm)
+                        diff[mask] = 0
+                        valid_elev = diff < 100
+                        index_df.append([f'/{zone}{group}', s2_ids,latlon[:,0],latlon[:,1], sensitivity, shot_number, valid_elev, elev_lowestmode, elev_strm])
+        index_df = pd.DataFrame(index_df, columns=['path','s2_tile', 'lat', 'lon', 'sensitivity', 'shot_number', 'valid_elev', 'elev_lowestmode', 'elev_strm'])
+        index_df = index_df.explode(['s2_tile', 'lat', 'lon', 'sensitivity', 'shot_number','valid_elev', 'elev_lowestmode', 'elev_strm'])
         index_df['s2_tile'] = index_df['s2_tile'].str[33:38]
         index_df['in_partition_idx'] = index_df.groupby('path').cumcount()
+        before = len(index_df)
+        index_df = index_df[index_df['sensitivity'] >= 0.95]
+        print(f'filtered out {before - len(index_df)} shots with sensitivity < 0.95 for zone {zone}')
+        before = len(index_df)
+        index_df_ = index_df[index_df['valid_elev']]
+        print(f'filtered out {before - len(index_df_)} shots with invalid elevation for zone {zone}')
         index_gdf = gpd.GeoDataFrame(index_df, geometry=gpd.points_from_xy(index_df.lon, index_df.lat), crs='EPSG:4326')
+
 
         if save:
             index_gdf.to_parquet(index_table_file)
             print(f'index table saved to: ', index_table_file)
 
 
+def calculate_high_sens_shots(index_table_dir, mgrs_file, version: int=1):
+    """
+    Calculate the number of shots with sensitivity >= 0.95 in the zone.
+    """
+    index_table_dir = Path(index_table_dir).expanduser()
+    mgrs_file = Path(mgrs_file).expanduser()
+    index_table_files = index_table_dir.glob('*.parquet')
+    mgrs_grid = gpd.read_parquet(mgrs_file)
+    for year in range(2019, 2023):
+        mgrs_grid[f'count_high_sens_{year}'] = 0
+    for file in index_table_files:
+        zone = file.stem
+        index_df = pd.read_parquet(file)
+        for year in range(2019, 2023):
+            mgrs_grid.loc[zone, f'count_high_sens_{year}'] = len(index_df[index_df['path'].str.contains(str(year))])
+    
+    for year in range(2019, 2023):
+        mgrs_grid[f'density_high_sens_{year}'] = mgrs_grid[f'count_high_sens_{year}'] / mgrs_grid['landmass']
+
+    
+    mgrs_grid.to_parquet(mgrs_file.with_name(f'mgrs_stats_v{version}.parquet'))
+    mgrs_grid = mgrs_grid.drop(columns=['geometry'])
+    mgrs_grid.to_csv(mgrs_file.with_name(f'mgrs_stats_v{version}.csv'))
 
 
 @dataclass
 class MyConfig:
-    h5_dir: str = '~/data/GEDI/GEDI_S2_h5s_original'
-    out_idx_dir: str = '~/data/GEDI/geo_index_table_with_sensitivity'
+    h5_dir: str = '~/data/GVS/GEDI_S2_h5'
+    out_idx_dir: str = '~/data/GVS/geo_index_table_with_sensitivity_and_elevation'
+    mgrs_file: str = '~/data/GEDI/mgrs_stats.parquet'
+    version: int=1
 
 
 cs = ConfigStore.instance()
@@ -113,6 +155,7 @@ def main(cfg):
 
     t0 = time.time()
     IndexTableGenerater(**cfg)()
+    # calculate_high_sens_shots(cfg.out_idx_dir, cfg.mgrs_file, cfg.version)
     
     logger.info(f'time taken: {time.time() - t0}')
     client.close()

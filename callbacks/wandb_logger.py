@@ -47,8 +47,8 @@ class WandbLogger(wb.WandbLogger):
             kwargs.update({'tags': tags})
         super().__init__(**kwargs)
         self.experiment # explicitly call to check if wandb is initialized
-        wandb.define_metric('prediction/rh')
-        wandb.define_metric('prediction/*', step_metric='prediction/rh')
+        # wandb.define_metric('prediction/rh')
+        # wandb.define_metric('prediction/*', step_metric='prediction/rh')
 
 
     def _scan_and_log_checkpoints(self, checkpoint_callback: ModelCheckpoint) -> None:
@@ -61,7 +61,7 @@ class WandbLogger(wb.WandbLogger):
         for t, p, s, tag in checkpoints:
             metadata = {
                 "score": s.item() if isinstance(s, Tensor) else s,
-                "original_filename": Path(p).name,
+                "original_filename": Path(p),
                 checkpoint_callback.__class__.__name__: {
                     k: getattr(checkpoint_callback, k)
                     for k in [

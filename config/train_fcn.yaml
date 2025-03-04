@@ -3,16 +3,14 @@ optimizer:
   class_path: torch.optim.Adam
   init_args:
     lr: 0.001
-    weight_decay: 0 # 0.0001
+    weight_decay: 0.000001 # 0.0001
 lr_scheduler:
-  class_path:  models._scheduler.ChainedScheduler # torch.optim.lr_scheduler.StepLR
+  class_path:  models._scheduler.CosineScheduler # torch.optim.lr_scheduler.StepLR
   init_args:
-    warmup_steps: 6980 # 5 epochs 20 subsets
-    T_0: 558400 # for 400 epochs 1 cycle
-    eta_min: 1e-6
-    max_lr: 0.001
-    gamma: 0.2
-
+    num_warmup_steps: 3490 # 5 epochs 20 subsets
+    # num_training_steps: 279300
+    # gamma: 0.5
+    # step_size: 30
 
 data:
   class_path: datasets.ffcv_datamodule.FFCVDataModel
@@ -29,37 +27,29 @@ data:
     distributed: True
 
 model:
-  class_path: models.unet.UNet
+  class_path: models.fcn.FCN
   init_args:
-    out_channels: 101
+    in_channels: 12
+    out_channels: 303
     patch_size: 15
-    norm_layer_up: torch.nn.BatchNorm2d
-    up_block: models.modules.standard.DoubleConvSkip
-    last_opt: torch.nn.Identity
-    encoder:
-      class_path: models.modules.standard.StandardNet
+    norm_layer: torch.nn.BatchNorm2d
+    feature_sizes: [256, 256, 256, 256]
+    long_skip: True
+    entry_block: 
+      class_path: models.modules.xception_blocks.PointwiseBlock
       init_args:
         in_channels: 12
-        depths: [64, 128, 256, 512]
-        kernal_sizes: [3, 3]
-        initial_stride: 1
+        filters: [128, 256, 256]
         norm_layer: torch.nn.BatchNorm2d
-        activation_layer: 
-          class_path: torch.nn.ELU
-          init_args:
-            inplace: True
-            alpha: 0.54
-        block: models.modules.standard.DoubleConvSkip
-        
-    upsampling: nearest
-    blur_final: False
-    blur: False
-    final_skip: False
-    self_attention: False
-    # used in the base model (_base_pl_model.py)
+
+    activation_layer: 
+      class_path: torch.nn.ELU
+      init_args:
+        inplace: True
+        alpha: 0.54
     transform: datasets.transforms.Normalize
     loss_fc: 
-      class_path: models.losses.base.MaskedL1Loss #torch.nn.BCELoss # 
+      class_path: models.losses.quantile_loss.QuantileLoss #torch.nn.BCELoss # 
 
 trainer:
   accelerator: gpu
@@ -68,7 +58,7 @@ trainer:
     # init_args:
     #   process_group_backend: gloo
   devices: auto
-  default_root_dir: logs/wandb
+  default_root_dir: /tmp/wandb
   # val_check_interval: 100000
   # check_val_every_n_epoch: 1
   max_epochs: 200
@@ -113,6 +103,6 @@ trainer:
         project: global-vegetation-structure-v1
         name: test
         job_type: train
-        save_dir: logs
+        save_dir: /tmp
         log_model: 'all' # 'all' would log the model after each checkpoint being saved
         id:

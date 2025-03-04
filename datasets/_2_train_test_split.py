@@ -79,6 +79,12 @@ class DataSplitter:
 
 
     def _split_zone_by_spatial_query(self, index_df, partition_info):
+        '''
+        Split the index table by the spatial query.
+        Parameters:
+            index_df: the index table of one zone
+            partition_info: stores the partition number
+        '''
         partition_idx = partition_info["number"] # the index of the partition in the dataframe
         zone = os.path.basename(self.index_table_fps[partition_idx])[:3]
         index_df = index_df[index_df['sensitivity'] >= 0.95] # !NOTE: filter out low sensitivity samples
@@ -122,11 +128,12 @@ class DataSplitter:
         Count the number of samples for each split in each MGRS zone
         Data splitting has been done.
         '''
-        if (self.save_dir / 'stats_mgrs.parquet').exists() and (self.save_dir / 'stats_splits.txt').exists():
+        if (self.save_dir / 'mgrs_stats.parquet').exists() and (self.save_dir / 'split_stats.txt').exists():
             print('Counting has been done.')
             return
         self.mgrs_df = gpd.read_parquet(self.mgrs_file)
-        self.mgrs_df['total_downloaded'] = self.mgrs_df[[f'downloaded_{year}' for year in range(2019, 2023)]].sum(axis=1)
+        # self.mgrs_df['total_downloaded'] = self.mgrs_df[[f'downloaded_{year}' for year in range(2019, 2023)]].sum(axis=1) # 
+        self.mgrs_df['total_downloaded'] = self.mgrs_df[[f'count_high_sens_{year}' for year in range(2019, 2023)]].sum(axis=1) # TODO: tmp for old data, when new sup data ready, use above line
         splits = self.splits + ['train']
         # for each split, e.g., test, reading index_df for each zone from test_index_table
         ntiles_per_split = {}
@@ -148,7 +155,7 @@ class DataSplitter:
             self.mgrs_df[f'ratio_{name}'] = self.mgrs_df[f'ratio_{name}'].replace(0, pd.NA)
         # self.mgrs_df = self.mgrs_df.fillna(value={f'count_{name}': 0 for name in splits})
         # sum_split = self.mgrs_df[[f'count_{name}' for name in splits]].sum(axis=1)
-        self.mgrs_df.to_parquet(self.save_dir / 'stats_mgrs.parquet')
+        self.mgrs_df.to_parquet(self.save_dir / 'mgrs_stats.parquet')
 
         # generate a summary
         stats = []
@@ -160,7 +167,7 @@ class DataSplitter:
         stats = pd.DataFrame(stats, index=splits, columns=['count', 'n_s2_cells'])
         stats['ratio'] = stats['count'] / stats['count'].sum()
         stats['n_image_tiles'] = pd.Series(ntiles_per_split)
-        stats.to_csv(self.save_dir / 'stats_splits.txt', sep=' ')
+        stats.to_csv(self.save_dir / 'split_stats.txt', sep=' ')
     
     def visualize_split(self, update=False):
         exists = len(list(self.save_dir.glob(f'split_ratio_map_*.png'))) == 4
@@ -190,7 +197,7 @@ class DataSplitter:
         plt.savefig(self.save_dir / 'splitted_s2_tiles.png')
 
         # Visualize the number of samples in each zone for each split
-        df = gpd.read_parquet(self.save_dir / 'stats_mgrs.parquet')
+        df = gpd.read_parquet(self.save_dir / 'mgrs_stats.parquet')
         df = df[df['total_downloaded']>0]
         df.crs = 'EPSG:4326'
         cmap = 'coolwarm'
@@ -298,7 +305,7 @@ def overlay_country_boundaries(ax):
 @dataclass
 class MyConfig:
     index_dir: Path = Path('~/data/GEDI/geo_index_table_with_sensitivity').expanduser()
-    mgrs_file: Path = Path('~/data/GEDI/mgrs_stats.parquet').expanduser()
+    mgrs_file: Path = Path('~/data/GEDI/mgrs_stats_v1.parquet').expanduser()
     s2_grid_file: Path = Path('~/data/GEDI/Sentinel-2_tilling_shp/sentinel_2_index_shapefile.shp').expanduser()
     test_ratio: float = 0.1
     val_ratio: float = 0.1
@@ -327,9 +334,8 @@ def main(cfg: DictConfig) -> None:
     print('Visualize...')
     splitter.visualize_split()
     print('Split h5 files...') 
-    # TODO: filter out low sensitivity samples before generating {split}.h5 to reduce time to convert to beton
     h5_dir = cfg.get('h5_dir', '~/data/GEDI/GEDI_S2_h5s_original')
-    index_dir = cfg.get('save_dir', splitter.save_dir)
+    index_dir = cfg.get('save_dir', splitter.save_dir) # index dir for each split
     save_dir = cfg.get('save_dir', splitter.save_dir)
     split_h5(h5_dir, index_dir, save_dir)
     print('Sample subset...')

@@ -1,3 +1,14 @@
+
+# From train*_filtered_v1
+LAT_MEAN = 12.7596
+LAT_STD = 25.6075
+LON_SIN_MEAN = 0.1098
+LON_SIN_STD = 0.7536
+LON_COS_MEAN = 0.3072
+LON_COS_STD = 0.5706
+SLOPE_MEAN = 6.5781
+SLOPE_STD = 8.9007
+
 ESA_WC = {
     'unknown': 0,
     'Tree cover': 10,

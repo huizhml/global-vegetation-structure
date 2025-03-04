@@ -139,43 +139,59 @@ class PredictionLogger(Callback):
         self.finished = []
         return super().on_train_epoch_end(trainer, pl_module)
     
-    @torch.no_grad()
-    def on_validation_epoch_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
-        self.finished = []
-        return super().on_validation_epoch_end(trainer, pl_module)
+    # @torch.no_grad()
+    # def on_validation_epoch_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
+    #     self.finished = []
+    #     return super().on_validation_epoch_end(trainer, pl_module)
     
 
-    @torch.no_grad()
-    def on_validation_batch_end(self, trainer: Trainer, pl_module: LightningModule, outputs, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> None:
-        current_epoch = trainer.current_epoch
-        if len(self.finished) == len(self.shot_numbers_val): # all logged, skip the rest batches in this epoch
-            return super().on_train_batch_end(trainer, pl_module, outputs, batch, batch_idx)
-        shot_numbers = [v for v in self.shot_numbers_val if v in outputs['shot_number']]
-        self.finished += shot_numbers
-        if check_if_log(current_epoch, self.log_every) and len(shot_numbers) > 0:
-            #NOTE: Currently visualized examples are from slope<=20
-            lc = outputs['lc'][..., 7,7].cpu().numpy() 
-            if outputs.get('lc_pred') is not None:
-                lc_pred = outputs['lc_pred'][..., 7,7].cpu().numpy()
-            for i in shot_numbers:
-                idx = torch.where(outputs['shot_number']==i)[0]
-                pred = torch.cat([outputs['rhs_hat'][idx], outputs['rhs'][idx]], dim=2).cpu().numpy()
-                n_features = outputs['rhs_hat'].shape[1]
-                n_predictions = outputs['rhs_hat'].shape[2]
-                slope = outputs['slope'][idx,7,7].cpu().numpy().round(2)
-                if outputs.get('lc_pred') is not None:
-                    lc_pred_name = ESA_WC_s[lc_pred[idx].item()].replace('/', '_')
-                else:
-                    lc_pred_name = None
-                lc_name = ESA_WC_s[lc[idx].item()].replace('/', '_')
-                title = f'[val] epoch{current_epoch}/{lc_name}-pred-{lc_pred_name}_slope{round(slope.item(), 2)} sample{i}'
-                line = wandb.plot.line_series(
-                            xs=range(n_features),
-                            ys=pred[0].T,
-                            keys=[f'Q{k}' for k in range(n_predictions)] + ['target'],
-                            xname='Relative Height (0-100)',
-                            title=title)
-                wandb.log({f'prediction/{title}': line})
-        return super().on_validation_batch_end(trainer, pl_module, outputs, batch, batch_idx, dataloader_idx)
+    # @torch.no_grad()
+    # def on_validation_batch_end(self, trainer: Trainer, pl_module: LightningModule, outputs, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> None:
+    #     current_epoch = trainer.current_epoch
+    #     if len(self.finished) == len(self.shot_numbers_val): # all logged, skip the rest batches in this epoch
+    #         return super().on_train_batch_end(trainer, pl_module, outputs, batch, batch_idx)
+    #     shot_numbers = [v for v in self.shot_numbers_val if v in outputs['shot_number']]
+    #     self.finished += shot_numbers
+    #     if check_if_log(current_epoch, self.log_every) and len(shot_numbers) > 0:
+    #         #NOTE: Currently visualized examples are from slope<=20
+    #         lc = outputs['lc'][..., 7,7].cpu().numpy() 
+    #         if outputs.get('lc_pred') is not None:
+    #             lc_pred = outputs['lc_pred'][..., 7,7].cpu().numpy()
+    #         for i in shot_numbers:
+    #             idx = torch.where(outputs['shot_number']==i)[0]
+    #             pred = torch.cat([outputs['rhs_hat'][idx], outputs['rhs'][idx]], dim=2).cpu().numpy()
+    #             n_features = outputs['rhs_hat'].shape[1]
+    #             n_predictions = outputs['rhs_hat'].shape[2]
+    #             slope = outputs['slope'][idx,7,7].cpu().numpy().round(2)
+    #             if outputs.get('lc_pred') is not None:
+    #                 lc_pred_name = ESA_WC_s[lc_pred[idx].item()].replace('/', '_')
+    #             else:
+    #                 lc_pred_name = None
+    #             lc_name = ESA_WC_s[lc[idx].item()].replace('/', '_')
+    #             title = f'[val] epoch{current_epoch}/{lc_name}-pred-{lc_pred_name}_slope{round(slope.item(), 2)} sample{i}'
+    #             line = wandb.plot.line_series(
+    #                         xs=range(n_features),
+    #                         ys=pred[0].T,
+    #                         keys=[f'Q{k}' for k in range(n_predictions)] + ['target'],
+    #                         xname='Relative Height (0-100)',
+    #                         title=title)
+    #             wandb.log({f'prediction/{title}': line})
+    #     return super().on_validation_batch_end(trainer, pl_module, outputs, batch, batch_idx, dataloader_idx)
 
     
+    def on_test_epoch_start(self, trainer, pl_module):
+        self.canopy_heights = []
+    
+    @torch.no_grad()
+    def on_test_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx = 0):
+        self.canopy_heights.append(outputs.cpu())
+        return super().on_test_batch_end(trainer, pl_module, outputs, batch, batch_idx, dataloader_idx)
+    
+
+    def on_test_epoch_end(self, trainer, pl_module):
+        self.canopy_heights = torch.cat(self.canopy_heights)
+        df = pd.DataFrame(self.canopy_heights, columns=['RH95_ours', 'RH98_ours', 'RH100_ours', 'RH95_GEDI', 'RH98_GEDI', 'RH100_GEDI', 'slope_mask', 'veg_mask'])
+        df.to_parquet(f'output/canopy_height_predictions_{trainer.logger._experiment.id}.parquet')
+        return super().on_test_epoch_end(trainer, pl_module)
+    
+

@@ -126,7 +126,8 @@ def calculate_s2_mean_std(beton_fp:str):
         for batch in tqdm(loader):
             img = batch[0]
             slope = torch.nan_to_num(batch[3], nan=0)
-            lat, lon = get_dense_latlon(batch[4])
+            lon = batch[4].unsqueeze(1).repeat(1, 15, 1)
+            lat = batch[5].unsqueeze(2).repeat(1, 1, 15)
             lon = lon * np.pi / 180
             lon_sin = torch.sin(lon)
             lon_cos = torch.cos(lon)
@@ -168,16 +169,52 @@ def calculate_s2_mean_std(beton_fp:str):
     np.savetxt('output/data_stats/lon_cos_std_filtered.txt', avg_lon_cos.std)
 
 
+def get_rhs_bin_counts(parquet_fp: str, rh_quantiles_fp: str, lower_q: str='1e-05', upper_q: str='0.9999', n_bins: int=20):
+    """
+    Get the counts of the rhs values in the bins defined by the bin_edges.
+    """
+    import pandas as pd
+    import dask.dataframe as dd
+    import dask.array as da
+    import dask
+    rh_quantiles_fp = Path(rh_quantiles_fp).expanduser()
+    df = pd.read_csv(rh_quantiles_fp)
+    pmin = df[lower_q].values
+    pmax = df[upper_q].values
+    bin_edges = np.linspace(pmin, pmax, n_bins+1)
+    parquet_fp = Path(parquet_fp).expanduser()
+    parquet_fp = parquet_fp.parent.glob(parquet_fp.name)
+    parquet_fp = [str(p) for p in parquet_fp] 
+    ddf = dd.read_parquet(parquet_fp)
+    counts = []
+    bins = []
+    for i in range(101):
+        arr = ddf[f'rh{i}'].to_dask_array()
+        arr = arr.compute()
+        bin_edg =  [-np.inf] + bin_edges[:, i].tolist() + [np.inf]
+        # c, b = da.histogram(arr, bin_edg) 
+        c, b = np.histogram(arr, bin_edg)
+        # assign the max count to 'outliers'
+        c[0] = max(c)
+        c[-1] = max(c)
+        counts.append(c)
+        bins.append(b)
+    counts, bins = dask.compute(counts, bins)
+    
+    import ipdb; ipdb.set_trace()
+
+
 @dataclass
 class Config:
-    beton_fp: str = '~/data/GEDI/train_subsets/train*_filtered_v1.beton'
+    beton_fp: str = '~/data/GVS/train_subsets/train*_filtered_v1.beton'
 
 cs = ConfigStore.instance()
 cs.store(name='config', node=Config)
 
 @hydra.main(config_name='config', version_base='1.2')
 def main(cfg: DictConfig):
-    calculate_s2_mean_std(cfg.beton_fp)
+    # calculate_s2_mean_std(cfg.beton_fp)
+    get_rhs_bin_counts('~/data/GVS/train_subsets/train*_filtered_v1.parquet', 'output/data_stats/quantile_distribution.csv')
 
 if __name__ == '__main__':
     main()

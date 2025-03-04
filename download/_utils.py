@@ -11,6 +11,11 @@ import geopandas as gpd
 from typing import Union, List
 from stackstac.raster_spec import RasterSpec
 from rasterio.errors import RasterioIOError
+from pyproj import Transformer
+import pystac_client
+import adlfs
+import pandas as pd
+
 from ._const import STAC_ITEM_KEYS
 from utils._stackstac import stack
 
@@ -194,3 +199,76 @@ def trim_memory() -> int:
     """
     libc = ctypes.CDLL("libc.so.6")
     return libc.malloc_trim(0)
+
+def utm_to_wgs84(bounds, utm_epsg=32632, wgs84_epsg=4326):
+    """
+    Convert bounds from UTM (EPSG:32632) to WGS84 (EPSG:4326).
+    
+    Parameters:
+    - bounds: Tuple of (min_x, min_y, max_x, max_y) in UTM coordinates.
+    - utm_epsg: EPSG code for the input UTM projection (default: 32632).
+    - wgs84_epsg: EPSG code for WGS84 (default: 4326).
+    
+    Returns:
+    - Tuple of (min_lon, min_lat, max_lon, max_lat) in WGS84.
+    """
+    transformer = Transformer.from_crs(utm_epsg, wgs84_epsg, always_xy=True)
+    
+    min_x, min_y, max_x, max_y = bounds
+    
+    # Transform all corners
+    bottom_left = transformer.transform(min_x, min_y)
+    bottom_right = transformer.transform(max_x, min_y)
+    top_left = transformer.transform(min_x, max_y)
+    top_right = transformer.transform(max_x, max_y)
+    
+    # Calculate new bounds
+    min_lon = min(bottom_left[0], bottom_right[0], top_left[0], top_right[0])
+    min_lat = min(bottom_left[1], bottom_right[1], top_left[1], top_right[1])
+    max_lon = max(bottom_left[0], bottom_right[0], top_left[0], top_right[0])
+    max_lat = max(bottom_left[1], bottom_right[1], top_left[1], top_right[1])
+    
+    return min_lon, min_lat, max_lon, max_lat
+
+
+def build_parquet_file_table(collection):
+    """
+    Sentinel-2 file is partitioned by week. 
+    Builds a table with three columns: file name, start date, and end date.
+    File names of Sentinel-2 geoparquet files are retrieved from Azure Blob Storage.
+    Each row is a STAC geoparquet item.
+
+    Parameters:
+    ------------
+    * collection: str: The name of the collection.
+
+    Returns:
+    ------------
+    * pandas.DataFrame: A DataFrame containing the file names, start dates, and end dates.
+    """
+    api = pystac_client.Client.open(stac_endpoint, modifier=planetary_computer.sign_inplace)
+    asset = api.get_collection(collection).assets['geoparquet-items']
+    fs = adlfs.AzureBlobFileSystem(
+        **asset.extra_fields["table:storage_options"]).ls("items/sentinel-2-l2a.parquet")
+    fs_df = pd.DataFrame(fs, columns=['fname'])
+    date_range = fs_df.fname.str.findall(r'\d{4}-\d{2}-\d{2}')
+    fs_df['start'] = pd.to_datetime(date_range.str[0])
+    fs_df['end'] = pd.to_datetime(date_range.str[1])
+    fs_df['fname'] = 'abfs://' + fs_df['fname']
+    return fs_df
+
+def filter_parquet_files(fs_df, start, end):
+    """
+    Filter Sentinel-2 STAC geoparquet items based on the given start and end timestamps.
+
+    Parameters:
+    ------------
+    * start (datetime): The start timestamp for filtering.
+    * end (datetime): The end timestamp for filtering.
+
+    Returns:
+    ------------
+    * list: A list of filtered file names.
+    """
+    filtered = fs_df[(fs_df['start'] < end) & (fs_df['end'] > start)]
+    return filtered['fname'].to_list()

@@ -5,80 +5,15 @@ from hydra.core.config_store import ConfigStore
 from omegaconf import DictConfig
 import hydra
 from sklearn.decomposition import PCA
-from sklearn.decomposition import IncrementalPCA
 import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
 import numpy as np
 import geopandas as gpd
-import torch
-from tqdm import tqdm
-import time
 import glob
 import joblib
-from ffcv.loader import Loader, OrderOption
-from download._const import gedi_attr_dtype
 from const import ESA_WC, BIOMES
 
-
-def aggregate_gedi_data(beton_fps: List[str]):
-    '''
-    Aggregate GEDI data (RHs + GEDI attributes) {train*}.beton to a single parquet file
-    '''
-    beton_fps = glob.glob(str(Path(beton_fps).expanduser()))
-    cols = [f'rh{i}' for i in range(101)] + ['wc', 'slope', 'lat', 'lon', 'sensitivity']
-    data_dir = Path(beton_fps[0]).parent.parent
-    ecoregions = gpd.read_file( '~/data/GEDI/ecoregions/wwf_terr_ecos.shp')
-    batch_size = 100 if 'debug' in beton_fps[0] else 4096
-    for fp in beton_fps:
-        file = Path(fp).with_suffix('.parquet')
-        if file.exists():
-            print('file exists', file)
-            continue
-        loader = Loader(fp, batch_size=batch_size, num_workers=4,
-                        distributed=False, batches_ahead=3,
-                        order=OrderOption.SEQUENTIAL, os_cache=False)
-
-        data = []
-        shot_numbers = []
-        for batch in tqdm(loader):
-            _, rhs, wc, slope, latlon, sensitivity, shot_number = batch
-            shot_numbers.append(shot_number.numpy().copy())
-            batch_ = np.concatenate([rhs, wc[...,7:8,7], slope[...,7:8,7], latlon, sensitivity], axis=1)
-            data.append(batch_)
-        data = np.concatenate(data, axis=0)
-        df = pd.DataFrame(data, columns=cols)
-        df['shot_number'] = np.concatenate(shot_numbers)
-        df = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.lon, df.lat))
-        df = df.set_crs(epsg=4326)
-        df = df.to_crs(epsg=3857)
-        df = gpd.sjoin(df, ecoregions, how='left', predicate='within')
-        df = df[cols + ['BIOME', 'shot_number']]
-        df.to_parquet(file)
-        print('saved to', file)
-    print('Grouping by biome')
-    df_fp = glob.glob(str(file.parent / '*.parquet'))
-    group_df_by_biome(df_fp)
-
-
-def group_df_by_biome(df_fps: List[str] = None):
-    """
-    Group the dataframe by biome, and save parquets for each biome
-    """
-    import dask.dataframe as dd
-    ddf = dd.read_parquet(df_fps)
-    data_dir = Path(df_fps[0]).parent
-    df = ddf.compute()
-    print(df.BIOME.unique())
-
-    def save_parquet(x):
-        print(x)
-        if x.name is not None and int(x.name) < 15:
-            name = f'rhs_attrs_{BIOMES[int(x.name)-1].replace(" ", "_").replace("&", "and")}.parquet'
-            x.to_parquet(data_dir / name)
-        else:
-            x.to_parquet(data_dir / f'rhs_attrs_biome_{x.name}.parquet')
-    df.groupby('BIOME').apply(save_parquet)
 
 
 def _get_param_from_filepath(filepath, param_name):
@@ -97,22 +32,23 @@ class PCAAnalysis:
     Run PCA analysis on the relative height data using {biome}.parquet file, one PCA model for each biome
     '''
 
-    def __init__(self, parquet_fp=None, model_path:str=None, output_dir: str = 'output', dtype='np.float64', method:str='multi', **kwargs) -> None:
+    def __init__(self, parquet_fp=None, model_path:str=None, output_dir: str = 'output/pca_analysis', dtype='np.float64', method:str='single', **kwargs) -> None:
         self.method = method
         self.dtype = eval(dtype)
         self.output_dir = Path(output_dir).expanduser()
         self.slope = _get_param_from_filepath(model_path, 'slope')
         self.parquet_fps = Path(parquet_fp).expanduser()
         if method == 'multi':
-            model_path = Path(f'output/pca_model_{self.parquet_fps.stem}.pkl')
+            model_path = self.output_dir / f'pca_model_{self.parquet_fps.stem}.pkl'
             self.biome_name = self.parquet_fps.stem
             if not self.parquet_fps.exists():
                 print('parquet file not found')
                 # raise here, generate the parquet file here will cause race condition if multiple processes of PCA analysis are running
-                raise f'{parquet_fp} not found, please run python -m datasets.pca_analysis task=aggregate_gedi_data first'
+                raise f'{parquet_fp} not found, please run python -m datasets._6_visual_check task=aggregate_gedi_by_biome first'
         else:
             model_path = Path(model_path).expanduser()
             self.parquet_fps = glob.glob(str(self.parquet_fps))
+            self.biome_name = ''
         if model_path.exists():
             print('Loading pca model from ', model_path)
             self.pca = joblib.load(model_path)
@@ -122,8 +58,8 @@ class PCAAnalysis:
 
     @property
     def mean(self):
-        if (self.output_dir / f'RHs_mean_slope{self.slope}_sens{self.sens}.npy').exists():
-            mean = np.load(self.output_dir / f'RHs_mean_slope{self.slope}_sens{self.sens}.npy')
+        if (self.output_dir / f'RHs_mean_slope{self.slope}.npy').exists():
+            mean = np.load(self.output_dir / f'RHs_mean_slope{self.slope}.npy')
         else:
             mean = self.aggregate_mean()
         mean = mean.astype(self.dtype)
@@ -146,7 +82,7 @@ class PCAAnalysis:
             avg = (N_old * avg + n * m) / N
         print('mean of the data')
         print(avg, avg.dtype)
-        np.save(self.output_dir / f'RHs_mean_slope{self.slope}_sens{self.sens}.npy', avg)
+        np.save(self.output_dir / f'RHs_mean_slope{self.slope}.npy', avg)
         return avg
 
     def fit_pca(self, save_path, verify: bool = False):
@@ -323,7 +259,7 @@ class PCAAnalysis:
             c = stats.pearsonr(projected_pc1, rhs[:, i])
             corr.append(c)
             print(f'corr between PC1 and RH{i}: {corr[i]}')
-        np.savetxt(self.output_dir / f'pearson_corr_PC1_RHs_{data_name}_sens{self.sens}.csv', corr, delimiter=',')
+        np.savetxt(self.output_dir / f'pearson_corr_PC1_RHs_{data_name}.csv', corr, delimiter=',')
         plt.figure()
         plt.plot(corr, '-o', markersize=4)
         plt.xticks(ticks=np.arange(0, 101, 10), labels=np.arange(0, 101, 10))
@@ -331,9 +267,9 @@ class PCAAnalysis:
         plt.grid()
         plt.xlabel('Relative Height')
         plt.ylabel('Pearson correlation between PC1 and RH')
-        plt.savefig(self.output_dir / f'pearson_corr_PC1_RHs_{data_name}_sens{self.sens}.png')
+        plt.savefig(self.output_dir / f'pearson_corr_PC1_RHs_{data_name}.png')
 
-    def plot_cohend_matrix(self, cohend_matrix, data_name: str = None, sens: str = None, group_method: str = 'Biome'):
+    def plot_cohend_matrix(self, cohend_matrix, data_name: str = None, group_method: str = 'Biome'):
         cohend_matrix_dict = {}
         cohend_matrix_dict['max_idx_all'] = cohend_matrix.argmax(axis=0)
         cohend_matrix_dict['max_value_all'] = cohend_matrix.max(axis=0)
@@ -364,7 +300,7 @@ class PCAAnalysis:
             plt.title(title)
             plt.tight_layout()
             plt.show()
-            plt.savefig(self.output_dir / f'{group_method.lower}_effect_size_matrix_{data_name}{sens}_max_{name}.png')
+            plt.savefig(self.output_dir / f'{group_method.lower}_effect_size_matrix_{data_name}_max_{name}.png')
 
         # Biome effect size matrix for PC1, PC2, PC3, RH98, RH100
         names = ['PC1', 'PC2', 'PC3', 'RH98', 'RH100']
@@ -376,7 +312,7 @@ class PCAAnalysis:
             plt.colorbar()
             plt.title(f'{group_method} effect size matrix for {names[i]}')
             plt.tight_layout()
-            plt.savefig(self.output_dir / f'{group_method.lower()}_effect_size_matrix_{data_name}{sens}_{names[i]}.png')
+            plt.savefig(self.output_dir / f'{group_method.lower()}_effect_size_matrix_{data_name}_{names[i]}.png')
 
         # relative Cohen's d betweem RH98 and PC1-3
         for col in range(3):
@@ -388,7 +324,7 @@ class PCAAnalysis:
             plt.colorbar()
             plt.title(f'{group_method} effect size matrix for max(0, |d(PC{col+1}| - |d(RH98)|)')
             plt.tight_layout()
-            plt.savefig(self.output_dir / f'{group_method.lower()}_effect_size_matrix_{data_name}{sens}_PC{col+1}-RH98.png')
+            plt.savefig(self.output_dir / f'{group_method.lower()}_effect_size_matrix_{data_name}_PC{col+1}-RH98.png')
 
         # relative Cohen's d betweem PC1 and PC2-3
         for col in range(1, 3):
@@ -400,17 +336,17 @@ class PCAAnalysis:
             plt.colorbar()
             plt.title(f'{group_method} effect size matrix for max(0, |d(PC{col+1}| - d(PC1))')
             plt.tight_layout()
-            plt.savefig(self.output_dir / f'{group_method.lower()}_effect_size_matrix_{data_name}{sens}_PC{col+1}-PC1.png')
+            plt.savefig(self.output_dir / f'{group_method.lower()}_effect_size_matrix_{data_name}_PC{col+1}-PC1.png')
 
     def run_biome_effect_size_analysis(self):
         print('Run biome effect size analysis')
         import pandas as pd
         import geopandas as gpd
-        data_dir = Path(self.data_fps[0]).parent.parent
+        data_dir = Path(self.parquet_fps[0]).parent.parent
         ecoregions = gpd.read_file(data_dir / 'ecoregions/wwf_terr_ecos.shp')
         ecoregions = ecoregions[ecoregions['BIOME'] < 15]
         pc_cols = [f'PC{i+1}' for i in range(101)]
-        rh_cols = [f"RH{i}" for i in range(101)]
+        rh_cols = [f"rh{i}" for i in range(101)]
         cols = pc_cols + rh_cols
         mean_df = pd.DataFrame(columns=cols, index=range(1, len(BIOMES)+1))
         mean_df = mean_df.replace(np.nan, 0)
@@ -418,7 +354,7 @@ class PCAAnalysis:
         var_df = var_df.replace(np.nan, 0)
         mean_rh_x_pc1 = np.zeros(101)
         biome_n = pd.Series(index=range(1, len(BIOMES)+1), data=0)
-        for fp in self.data_fps:
+        for fp in self.parquet_fps:
             data_name = Path(fp).stem
             print('loading data from ', fp)
             df = pd.read_parquet(fp)
@@ -426,8 +362,8 @@ class PCAAnalysis:
             latlon = df[['lat', 'lon']].values
             print(rhs.shape)
             rhs_projected = self.pca.transform(rhs)
-            latlon = np.concatenate(latlon)
             data = np.concatenate([rhs_projected, rhs, latlon], axis=1)
+            
             df = pd.DataFrame(data, columns=cols + ['lat', 'lon'])
             df = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.lon, df.lat))
             df = df.set_crs(epsg=4326)
@@ -447,10 +383,9 @@ class PCAAnalysis:
             rh_x_pc1 = rhs_with_biomes[rh_cols].mul(rhs_with_biomes['PC1'], axis=0)
             mean_rh_x_pc1 += rh_x_pc1.sum(axis=0)
 
-        sens = f'{self.sens}' if self.sens else ''
         N = biome_n.sum()
         cohend_matrix_dict = {}
-        data_name = 'train' if len(self.data_fps) > 1 else data_name
+        data_name = 'train' if len(self.parquet_fps) > 1 else data_name
         mean_per_biome = mean_df.div(biome_n, axis=0)
         var_all_biomes = var_df.sum() / (N-1)
         std_all_biomes = np.sqrt(var_all_biomes - mean_df.sum()**2/N/(N-1)) # per col mean
@@ -464,10 +399,10 @@ class PCAAnalysis:
         cohend_matrix_dict['max_value_rhs'] = cohend_matrix[101:].max(axis=0)
         print('Unique max(d(PC)): ', np.unique(cohend_matrix_dict['max_idx_pcs']))
         print('Unique max(d(RH)): ', np.unique(cohend_matrix_dict['max_idx_rhs']))
-        biome_n.to_csv(self.output_dir / f'biome_n_{data_name}{sens}.csv')
-        mean_per_biome.to_csv(self.output_dir / f'biome_mean_{data_name}{sens}.csv')
-        std_all_biomes.to_csv(self.output_dir / f'biome_effect_size_std_{data_name}{sens}.csv')
-        np.save(self.output_dir / f'biome_effect_size_matrix_{data_name}{sens}.npy', cohend_matrix)
+        biome_n.to_csv(self.output_dir / f'biome_n_{data_name}.csv')
+        mean_per_biome.to_csv(self.output_dir / f'biome_mean_{data_name}.csv')
+        std_all_biomes.to_csv(self.output_dir / f'biome_effect_size_std_{data_name}.csv')
+        np.save(self.output_dir / f'biome_effect_size_matrix_{data_name}.npy', cohend_matrix)
 
         for name in ['all', 'pcs', 'rhs']:
             plt.figure(figsize=(12, 12))
@@ -488,7 +423,7 @@ class PCAAnalysis:
             plt.title(title)
             plt.tight_layout()
             plt.show()
-            plt.savefig(self.output_dir / f'biome_effect_size_matrix_{data_name}{sens}_max_{name}.png')
+            plt.savefig(self.output_dir / f'biome_effect_size_matrix_{data_name}_max_{name}.png')
 
         # Biome effect size matrix for PC1, PC2, PC3, RH98, RH100
         names = ['PC1', 'PC2', 'PC3', 'RH98', 'RH100']
@@ -500,7 +435,7 @@ class PCAAnalysis:
             plt.colorbar()
             plt.title(f'Biome effect size matrix for {names[i]}')
             plt.tight_layout()
-            plt.savefig(self.output_dir / f'biome_effect_size_matrix_{data_name}{sens}_{names[i]}.png')
+            plt.savefig(self.output_dir / f'biome_effect_size_matrix_{data_name}_{names[i]}.png')
 
         # For Pearson correlation between PC1 and RH0-100
         mean_pc1 = mean_df['PC1'].sum()/N
@@ -515,7 +450,7 @@ class PCAAnalysis:
         plt.grid()
         plt.xlabel('Relative Height')
         plt.ylabel('R square between PC1 and RH')
-        plt.savefig(self.output_dir / f'pearson_corr_PC1_RHs_{data_name}{sens}.png')
+        plt.savefig(self.output_dir / f'pearson_corr_PC1_RHs_{data_name}.png')
 
         # relative Cohen's d betweem RH98 and PC1-3
         for col in range(3):
@@ -527,7 +462,7 @@ class PCAAnalysis:
             plt.colorbar()
             plt.title(f'Biome effect size matrix for max(0, |d(PC{col+1}| - |d(RH98)|)')
             plt.tight_layout()
-            plt.savefig(self.output_dir / f'biome_effect_size_matrix_{data_name}{sens}_PC{col+1}-RH98.png')
+            plt.savefig(self.output_dir / f'biome_effect_size_matrix_{data_name}_PC{col+1}-RH98.png')
 
         # relative Cohen's d betweem PC1 and PC2-3
         for col in range(1, 3):
@@ -539,13 +474,14 @@ class PCAAnalysis:
             plt.colorbar()
             plt.title(f'Biome effect size matrix for max(0, |d(PC{col+1}| - d(PC1))')
             plt.tight_layout()
-            plt.savefig(self.output_dir / f'biome_effect_size_matrix_{data_name}{sens}_PC{col+1}-PC1.png')
+            plt.savefig(self.output_dir / f'biome_effect_size_matrix_{data_name}_PC{col+1}-PC1.png')
 
 
 
 @dataclass
 class MyConfig:
-    parquet_fp: str = '~/data/GEDI/train_subsets/rhs_attrs_*.parquet'
+    parquet_fp: str = '~/data/GEDI/train_subsets/train*_filtered_v3.parquet'
+    model_path: str = 'output/pca_model.pkl'
     output_dir: str = 'output'
     task: str = 'run_pca_on_rhs'
 
@@ -564,14 +500,13 @@ def main(cfg: DictConfig) -> None:
     # find_sensitivity_beam_cor(glob.glob(cfg.parquet_fp))
     # find_sensitivity_biome_cor(glob.glob(cfg.parquet_fp))
     print(task)
-    if task == 'aggregate_gedi_data':
-        beton_fps = cfg.get('beton_fps', '~/data/GEDI/train_subsets/train*_filtered_v1.beton')
-        aggregate_gedi_data(beton_fps)
-    else:
-        model = PCAAnalysis(**cfg)
-        model.plot_explained_variance()
-        model.plot_components()
-        # model.run_land_cover_effect_size_analysis()
+
+    model = PCAAnalysis(**cfg)
+    model.plot_explained_variance()
+    model.plot_components()
+    model.run_biome_effect_size_analysis()
+
+    # model.run_land_cover_effect_size_analysis()
 
     print(f'time taken for running {cfg.task}: {time.time() - t0}')
 

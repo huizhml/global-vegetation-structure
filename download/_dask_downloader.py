@@ -20,21 +20,24 @@ class DaskDownloader:
         """
         Schedule Dask tasks manually to control the level of parallelism and enable retry for failed tasks.
         """
-        assert isinstance(ddf, pd.DataFrame) and callable(delayed_tasks) or isinstance(ddf, (dd.DataFrame, dd.Series)), \
-                'when delayed_tasks is not none, ddf must be pd.DataFrame'
+        # assert isinstance(ddf, pd.DataFrame) and callable(delayed_tasks) or isinstance(ddf, (dd.DataFrame, dd.Series)), \
+        #         'when delayed_tasks is not none, ddf must be pd.DataFrame'
         client = get_client()
         futures = []
-        if isinstance(ddf, (dd.DataFrame, dd.Series)):
-            n_parallel = min(self.n_parallel, ddf.npartitions)
-            total_tasks = ddf.npartitions
-        elif isinstance(ddf, pd.DataFrame):
-            n_parallel = min(self.n_parallel, len(ddf))
-            total_tasks = len(ddf)
+        if ddf is not None:
+            if isinstance(ddf, (dd.DataFrame, dd.Series)):
+                n_parallel = min(self.n_parallel, ddf.npartitions)
+                total_tasks = ddf.npartitions
+            elif isinstance(ddf, pd.DataFrame):
+                n_parallel = min(self.n_parallel, len(ddf))
+                total_tasks = len(ddf)
+        elif delayed_tasks is not None:
+            n_parallel = self.n_parallel
+            total_tasks = len(delayed_tasks)
 
         for i in range(n_parallel):
             if delayed_tasks:
-                row = ddf.iloc[i]
-                future = client.compute(delayed_tasks(row, *args))
+                future = client.compute(delayed_tasks[i])
             else:
                 future = client.compute(ddf.get_partition(i))
             futures.append(future)
@@ -43,6 +46,7 @@ class DaskDownloader:
         n_left = total_tasks - n_parallel
         retry_counter: Dict[str, int] = defaultdict(int)
         nfailed = 0
+        results = []
         while futures_monitor.count() > 0:
             f = next(futures_monitor)
             if f.status == 'error':
@@ -62,11 +66,12 @@ class DaskDownloader:
                     logger.info(f'Failed to download {f.key} after {self.max_retries} retries.')
                     nfailed += 1
 
+            else: # f.status == 'finished'
+                results.append(f.result())
             f.release()
             if n_left > 0:
                 if delayed_tasks:
-                    row = ddf.iloc[total_tasks - n_left]
-                    future = client.compute(delayed_tasks(row, *args))
+                    future = client.compute(delayed_tasks[total_tasks - n_left])
                 else:
                     future = client.compute(
                         ddf.get_partition(total_tasks - n_left))
@@ -77,4 +82,4 @@ class DaskDownloader:
             else:
                 logger.info(f'************ all partitions submitted ****************')
                 logger.info(f'{futures_monitor.count()} in processing, 0 waiting')
-        return nfailed
+        return nfailed, results

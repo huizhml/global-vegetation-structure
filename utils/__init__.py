@@ -3,6 +3,7 @@ import sys
 import logging
 from datetime import datetime
 from pyproj import Transformer
+import torch
 
 def setup_default_logging(log_path, string = 'Train', default_level=logging.INFO,
                           format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s"):
@@ -62,33 +63,84 @@ def get_class(name):
     args_class = getattr(module, class_name)
     return args_class
 
+def get_dense_latlon(central_coords_array, resolution=10, grid_size=15):
+    """
+    Calculate densified latitude and longitude tensors for grids around multiple central points.
 
-def utm_to_wgs84(bounds, utm_epsg=32632, wgs84_epsg=4326):
-    """
-    Convert bounds from UTM (EPSG:32632) to WGS84 (EPSG:4326).
-    
     Parameters:
-    - bounds: Tuple of (min_x, min_y, max_x, max_y) in UTM coordinates.
-    - utm_epsg: EPSG code for the input UTM projection (default: 32632).
-    - wgs84_epsg: EPSG code for WGS84 (default: 4326).
-    
+    - central_coords_array: List of tuples (latitude, longitude) for the central pixels.
+    - resolution: Spatial resolution of the pixels in meters.
+    - grid_size: Size of the grid (default is 15x15).
+
     Returns:
-    - Tuple of (min_lon, min_lat, max_lon, max_lat) in WGS84.
+    - Two tensors of size (n, 15, 15) for latitude and longitude.
     """
-    transformer = Transformer.from_crs(utm_epsg, wgs84_epsg, always_xy=True)
+    # Convert central coordinates to a tensor
+    n_points = central_coords_array.size(0)
+    device = central_coords_array.device
+
+    # Prepare grid offsets
+    half_grid = grid_size // 2
+    offsets = torch.arange(-half_grid, half_grid + 1, dtype=torch.float32, device=device)
+    row_offsets, col_offsets = torch.meshgrid(offsets, offsets, indexing="ij")  # Shape: (15, 15)
     
-    min_x, min_y, max_x, max_y = bounds
+    # Flatten the grid offsets for easy broadcasting
+    row_offsets = row_offsets.flatten()  # Shape: (15*15,)
+    col_offsets = col_offsets.flatten()  # Shape: (15*15,)
+
+    # Extract central latitudes and longitudes
+    central_lats = central_coords_array[:, 0].unsqueeze(1)  # Shape: (n, 1)
+    central_lons = central_coords_array[:, 1].unsqueeze(1)  # Shape: (n, 1)
+
+    # Compute conversion factors for degrees per meter
+    central_lats_radians = central_lats * (torch.pi / 180)  # Convert degrees to radians
+    meters_per_degree_lat = 111132.92  # Approximate mean value for latitude
+    meters_per_degree_lon = 111320 * torch.cos(central_lats_radians)  # Adjust for latitude
+
+    degree_per_pixel_lat = resolution / meters_per_degree_lat  # Shape: (n, 1)
+    degree_per_pixel_lon = resolution / meters_per_degree_lon  # Shape: (n, 1)
+
+    # Broadcast and compute lat/lon offsets for all points
+    lat_offsets = row_offsets.unsqueeze(0) * degree_per_pixel_lat  # Shape: (n, 15*15)
+    lon_offsets = col_offsets.unsqueeze(0) * degree_per_pixel_lon  # Shape: (n, 15*15)
+
+    # Add offsets to central coordinates
+    lat_pixels = central_lats + lat_offsets  # Shape: (n, 15*15)
+    lon_pixels = central_lons + lon_offsets  # Shape: (n, 15*15)
+
+    # Reshape into (n, 15, 15)
+    latitudes = lat_pixels.view(n_points, grid_size, grid_size)
+    longitudes = lon_pixels.view(n_points, grid_size, grid_size)
+
+    return latitudes, longitudes
+
+
+def get_deep_size(obj, seen=None):
+    """Recursively calculates the deep memory usage of an object."""
+    if seen is None:
+        seen = set()
+    obj_id = id(obj)
+    if obj_id in seen:
+        return 0
+    seen.add(obj_id)
+    size = sys.getsizeof(obj)
     
-    # Transform all corners
-    bottom_left = transformer.transform(min_x, min_y)
-    bottom_right = transformer.transform(max_x, min_y)
-    top_left = transformer.transform(min_x, max_y)
-    top_right = transformer.transform(max_x, max_y)
+    # Handle containers (lists, tuples, sets, etc.)
+    if isinstance(obj, (list, tuple, set, frozenset)):
+        for item in obj:
+            size += get_deep_size(item, seen)
+    elif isinstance(obj, dict):
+        for key, value in obj.items():
+            size += get_deep_size(key, seen)
+            size += get_deep_size(value, seen)
     
-    # Calculate new bounds
-    min_lon = min(bottom_left[0], bottom_right[0], top_left[0], top_right[0])
-    min_lat = min(bottom_left[1], bottom_right[1], top_left[1], top_right[1])
-    max_lon = max(bottom_left[0], bottom_right[0], top_left[0], top_right[0])
-    max_lat = max(bottom_left[1], bottom_right[1], top_left[1], top_right[1])
+    # Handle objects with __dict__ (e.g., class instances)
+    try:
+        # Directly access __dict__ values to avoid triggering descriptors
+        if hasattr(obj, '__dict__'):
+            for attr_value in obj.__dict__.values():
+                size += get_deep_size(attr_value, seen)
+    except AttributeError:
+        pass  # Skip if __dict__ is inaccessible
     
-    return min_lon, min_lat, max_lon, max_lat
+    return size

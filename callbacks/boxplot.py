@@ -15,16 +15,16 @@ def boxplot_from_stats(name, table):
     boxplot_data = {}
     for col in table.columns:
         boxplot_data[col] = {
-            'whisker_low': table.loc['10%', col],
-            'whisker_high': table.loc['90%', col],
+            'whislo': table.loc['10%', col],
+            'whishi': table.loc['90%', col],
             'q1': table.loc['25%', col],
             'q3': table.loc['75%', col],
-            'mean': table.loc['50%', col]
+            'med': table.loc['50%', col]
         }
     fig, ax = plt.subplots()
     for idx, (column, stats) in enumerate(boxplot_data.items()):
-        ax.boxplot(
-            [stats['q1'], stats['mean'], stats['q3']],
+        ax.bxp(
+            [stats],
             positions=[idx + 1],
             widths=0.5,
             showfliers=False  # Exclude outliers
@@ -61,8 +61,8 @@ class BoxplotLogger(Callback):
         current_epoch = trainer.current_epoch
         if check_if_log(current_epoch, self.log_every):
             veg_mask = outputs['veg_mask']
-            idx = 1 if outputs['rhs_hat'].shape[2] > 1 else 0
-            residuals = outputs['rhs_hat'][veg_mask, :, idx:idx+1] - outputs['rhs'][veg_mask]
+            rhs_hat = outputs['rhs_hat'][veg_mask, :, 1] if len(outputs['rhs_hat'].shape) > 2 else outputs['rhs_hat'][veg_mask, :]
+            residuals =  rhs_hat - outputs['rhs'][veg_mask]
             avg_residuals = residuals.mean(dim=1)
             self.residuals.append(residuals[:, self.rh_idx])
             self.avg_residuals.append(avg_residuals)

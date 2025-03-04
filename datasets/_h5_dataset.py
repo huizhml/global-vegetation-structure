@@ -4,10 +4,17 @@ from pathlib import Path
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
 import h5py
-
+from utils import get_dense_latlon
 
 coverage_beams = ['BEAM0000', 'BEAM0001', 'BEAM0010', 'BEAM0011']
 power_beams = ['BEAM0101', 'BEAM0110', 'BEAM1000', 'BEAM1011']
+
+def get_epsg_from_tile(tile_name):
+    zone = int(tile_name[:2])
+    band = tile_name[2]
+    hemisphere = 'south' if band <= 'M' else 'north'
+    epsg = 32700 + zone if hemisphere == 'south' else 32600 + zone
+    return epsg
 
 class S2Dataset(Dataset):
 
@@ -41,7 +48,9 @@ class S2Dataset(Dataset):
         slope = self.h5_file[f'{row.path}/slope'][row.in_partition_idx]
         slope = slope.astype(np.float32)
         latlon = self.h5_file[f'{row.path}/latlon'][row.in_partition_idx]
-        sensitivity = self.h5_file[f'{row.path}/gedi_attrs'][row.in_partition_idx, 24]
+        epsg = get_epsg_from_tile(row.s2_tile)
+        lon_vector, lat_vector = get_dense_latlon(latlon, epsg, resolution=10, grid_size=15)
+        # sensitivity = self.h5_file[f'{row.path}/gedi_attrs'][row.in_partition_idx, 24]
         shot_number = self.h5_file[f'{row.path}/shot_number'][row.in_partition_idx]
         if int(shot_number) != int(row.shot_number):
             raise ValueError(f'Error: something wrong with the index table, {shot_number} != {row.shot_number}')
@@ -49,7 +58,7 @@ class S2Dataset(Dataset):
         if self.transform:
             image = self.transform(image)
         # self.h5_file.close()
-        return image, label, wc, slope, latlon, sensitivity, shot_number
+        return image, label, wc, slope, lon_vector, lat_vector
     
     def __del__(self):
         if hasattr(self, 'h5_file'):
@@ -59,15 +68,18 @@ class S2Dataset(Dataset):
 
 if __name__ == '__main__':
     import pandas as pd
-    h5_files = Path.home() / 'data/GEDI/train.h5'
-    index_table = Path.home() / 'data/GEDI/index_table_train_subsets/train0_v1.parquet'
-    index_table = pd.read_parquet(index_table)
+    import dask.dataframe as dd
+    h5_files = Path.home() / 'data/GVS/train.h5'
+    index_table = Path.home() / 'data/GVS/index_table_train_subsets/train0_v1.parquet'
+    # index_table = [str(p) for p in index_table.glob('*.parquet')]
+    index_table = pd.read_parquet(index_table)#.compute()
     dataset = S2Dataset(h5_files, index_table)
     
     for i in range(len(dataset)):
-        img = dataset[i][0]
-        print(img.shape)
+        lon = dataset[i][4]
         import ipdb; ipdb.set_trace()
+        if np.isinf(lon).any():
+            print(i)
     dataset.h5_file.close()
 
 

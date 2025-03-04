@@ -1,11 +1,10 @@
 from pathlib import Path
 import hydra
-import h5py
-import json
 from typing import Iterable
 from dataclasses import dataclass, field
 from hydra.core.config_store import ConfigStore
 from omegaconf import DictConfig
+import h5py
 import numpy as np
 import pandas as pd
 import geopandas as gpd
@@ -13,15 +12,10 @@ import matplotlib.pyplot as plt
 import matplotlib.cbook as cbook
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from matplotlib.ticker import ScalarFormatter, MaxNLocator
+from matplotlib.ticker import FormatStrFormatter
 import matplotlib.colors as colors
-from torch.utils.data import DataLoader
-import seaborn as sns
-import dask.bag as db
-import dask.array as da
-from dask.utils import natural_sort_key
 import dask.dataframe as dd
-from datatree.io import _iter_nc_groups
-from h5netcdf.legacyapi import Dataset as h5Dataset
+from dask.utils import natural_sort_key
 from const import ESA_WC
 import os
 import json
@@ -53,11 +47,8 @@ class AverageMeter:
 
 
 class Stats:
-    def __init__(self, h5_dir:str='~/data/GEDI', save_dir:str='~/scratch/data/split_test0.1_cal0.1_val0.1_seed42'):
-        self.h5_dir = Path(h5_dir).expanduser()
-        # self.index_dir = Path(index_dir).expanduser()
-        self.save_dir = Path(save_dir).expanduser()
-        self.save_dir.mkdir(parents=True, exist_ok=True)
+    def __init__(self, rh_table_fps:str=None):
+        self.rh_table_fps = Path(rh_table_fps).expanduser()
 
     def plot_sample_map(self, mgrs_file:str='~/scratch/sample_stats.parquet'):
         if os.path.exists(mgrs_file):
@@ -130,23 +121,6 @@ class Stats:
                 plt.tight_layout()
                 plt.savefig(f'outputs/{titles[r]}_{year}.png', dpi=300, bbox_inches='tight', transparent=False)
 
-    def _check_s2_values(self, h5_file):
-        print('checking file: ', h5_file)
-        with h5Dataset(h5_file, mode='r') as ncds:
-            with h5py.File(h5_file) as data:
-                for group in _iter_nc_groups(ncds):
-                    if len(group.split('/')) == 3:
-                        img = data[f'{group}/image'][:]
-                        if (img<0).any():
-                            print(group)
-                            print(img.min())
-
-    def check_s2_values(self, h5_dir:str='~/data/GEDI'):
-        h5_dir = Path(h5_dir).expanduser()
-        h5_files = h5_dir.glob('*.h5')
-        h5_db = db.from_sequence(h5_files, npartitions=16)
-        h5_db.map(self._check_s2_values).compute()
-
     
     def sample_stats(self, index_table:str='~/scratch/data/index_table', mgrs_file:str='~/scratch/mgrs_with_nbest_v2.parquet'):
         from dask.distributed import Client, LocalCluster
@@ -171,142 +145,45 @@ class Stats:
         mgrs_df.to_parquet('~/scratch/sample_stats.parquet')
         return mgrs_df
         
-    def _get_rh(self, group, rh_id):
-        group.sort_values('in_partition_idx', inplace=True)
-        idx = group['in_partition_idx'].to_list()
-        zone = group.name[1:4]
-        with h5py.File(self.h5_dir/f'{zone}.h5') as h5_file:
-            data = h5_file[f'{group.name[4:]}/rhs'][idx, rh_id]
-        data = pd.DataFrame(data, columns=[f'rh_{rh_id}'], index=group.index)
-        group = pd.concat([group, data], axis=1)
-        return group
     
-    def _agg_rhs_per_zone(self, index_df, rh_id, partition_info:dict=None):
-        part_idx = partition_info['number']
-        # h5_file = h5py.File(self.h5_dir/f'{zone}.h5')
-        index_df = index_df.reset_index(drop=True)
-        # ddf = dd.from_pandas(index_df, npartitions=8)
+    def plot_rh_distribution(self, rh_idx:int=None):
+        name = self.rh_table_fps.name.split('_')[0]
+        df = dd.read_parquet(self.rh_table_fps, columns=[f'rh{rh_idx}'])
+        df = df.compute()
+        rh = df[f'rh{rh_idx}'].values
+        fig, ax = plt.subplots(1, 1, figsize=(10, 6))
+        bins = np.arange(0, 55, 5)
+        counts, bin_edges = np.histogram(rh, bins=bins)
+        counts_normalized = counts / counts.sum()
+        ax.hist(bin_edges[:-1], bins=bins, weights=counts_normalized, alpha=0.5, label=f'RH{rh_idx}')
+
+        # Normalize the counts so that they sum to 1
         
-        meta = {'path': str, 'in_partition_idx': int, f'rh_{rh_id}': float}
-        ddf = index_df.groupby('path').apply(self._get_rh, rh_id, include_groups=False)
-        # ddf = ddf.groupby('path').apply(self._get_rh, rh_id, meta=meta).compute()
-        print('finish partition: ', part_idx)
-        # print(ddf)
-        ddf = ddf.reset_index(1).set_index('level_1')
-        ddf = ddf.drop(columns=['in_partition_idx'])
-        index_df = pd.concat([index_df, ddf], axis=1)
 
-        # h5_file.close()
-        return index_df
+        # Display the normalized counts for each bin
+        for count_norm, bin_edge in zip(counts_normalized, bin_edges[:-1]):
+            # Position the text at the center of the bin and slightly above the bar
+            x_pos = bin_edge + (bins[1] - bins[0]) / 2  # Center of the bin
+            y_pos = count_norm + 0.01  # Slightly above the bar
+            ax.text(x_pos, y_pos, f'{count_norm:.3f}', ha='center', va='bottom', fontsize=9)
 
-    def plot_boxplots(self, splits: Iterable=None, boxplot_dir: str=None, **kwargs):
-        """
-        Using bootstrap method to plot the boxplot of the relative heights.
-        Extracts the relative heights from the h5 files and saves them as parquet files.
-        Then plots the boxplot/violin plot of the relative heights.
+        # Customize x and y ticks
+        ax.set_xticks(bins)  # Set x-ticks at bin edges
+        ax.set_yticks(np.arange(0, max(counts_normalized)+0.1, 0.1))
 
-        """
-        boxplot_dir = Path(boxplot_dir).expanduser()
-        import time
-        from dask.distributed import Client, LocalCluster
-        cluster = LocalCluster()
-        client = Client(cluster)
-        print(client)
+        # Add labels and title
+        ax.set_xlabel('Relative height', fontsize=12)
+        ax.set_ylabel('Normalized Counts', fontsize=12)
+        ax.set_title('RH98 distribution', fontsize=14)
+        ax.legend()
+        plt.savefig(f'output/rh{rh_idx}_distribution_{name}.png', dpi=300, bbox_inches='tight', transparent=False)
+
+
+    def plot_split_distribution(self, splits: Iterable=None, split_dir:str=None):
+        split_dir = Path(split_dir).expanduser()
         for split in splits:
-            print(split)          
-            if exists := os.path.exists(f'{str(self.save_dir)}/boxplot_stats_rhs_{split}.json'):
-                print('loading RHs from json')
-                with open(f'boxplot_stats_rhs_{split}.json', 'r') as f:
-                    stats = json.load(f)
-            else:
-                data_dir = f'{str(self.save_dir)}/index_table_{split}'
-                index_df_files = [f"{data_dir}/{f}" for f in os.listdir(data_dir)]
-                self.index_df_files = sorted(index_df_files, key=natural_sort_key)
-                if kwargs.get('debug', False):
-                    self.index_df_files = self.index_df_files[:2]
-                index_df = dd.read_parquet(self.index_df_files, columns=['path', 'in_partition_idx'], aggregate_files=False)
-
-                for i in range(101):
-                    meta = {'path': str, 'in_partition_idx': int, f'rh_{i}': float}
-                    rhs = index_df.map_partitions(self._agg_rhs_per_zone, rh_id=i, meta=meta).compute()
-                    rhs = rhs.dropna()
-                    rhs = rhs.drop(columns=['path', 'in_partition_idx'])
-                    # too many outliers, only keep the size of the outliers
-                    stats = cbook.boxplot_stats(rhs, labels=[f'rh_{i}'])
-                    stats = stats[0]
-                    stats['fliers'] = len(stats['fliers'])
-
-                    print(f'finish rh_{i}\n', stats)
-                    file = boxplot_dir/f'boxplot_stats_rhs_{split}_.json'
-                    if file.exists():
-                        with open(file, 'r+') as f:
-                            old = json.load(f)
-                            old.append(stats)
-                            # Move the file pointer to the beginning
-                            f.seek(0)
-                            # Write the new data, overwriting the old content
-                            json.dump(old, f, indent=4, default=convert_to_serializable)
-                            # Truncate the file to remove any leftover old content
-                            f.truncate()
-                    else:
-                        with open(file, 'w') as f:
-                            json.dump([stats], f, indent=4, default=convert_to_serializable)
-            fig, ax = plt.subplots()
-            ax.bxp(stats, patch_artist=True, boxprops={'facecolor': 'bisque'})
-            plt.savefig(f'{boxplot_dir}/RHs_boxplot_{split}.png')
-
-    def plot_violins(self, splits: Iterable=None, **kwargs):
-        """
-        Using bootstrap method to plot the boxplot of the relative heights.
-        Extracts the relative heights from the h5 files and saves them as parquet files.
-        Then plots the boxplot/violin plot of the relative heights.
-
-        """
-        import time
-        from dask.distributed import Client, LocalCluster
-        cluster = LocalCluster()
-        client = Client(cluster)
-        print(client)
-        for split in splits:
-            print(split)          
-            if exists := os.path.exists(f'{str(self.save_dir)}/rhs_{split}.csv'):
-                print('loading RHs from csv')
-                rhs = pd.read_csv(f'{str(self.save_dir)}/rhs_{split}.csv')
-                plt.figure(figsize=(24,6))
-                ax = sns.violinplot(data=rhs)
-            else:
-                data_dir = f'{str(self.save_dir)}/index_table_{split}'
-                index_df_files = [f"{data_dir}/{f}" for f in os.listdir(data_dir)]
-                self.index_df_files = sorted(index_df_files, key=natural_sort_key)
-                index_df = dd.read_parquet(self.index_df_files, columns=['path', 'in_partition_idx'])
-
-                for i in range(101): # not enough RAM for aggragating 101 RHs all at once
-                    meta = {'path': str, 'in_partition_idx': int, f'rh_{i}': float}
-                    rhs = index_df.map_partitions(self._agg_rhs_per_zone, rh_id=i, meta=meta).compute()
-                    rhs = rhs.dropna()
-                    rhs = rhs.drop(columns=['path', 'in_partition_idx'])
-                    fig, ax = plt.subplots()
-                    sns.violinplot(data=rhs, ax=ax)
-
-                    violin_data = get_violin_stats(ax)
-                    violin_data.to_csv(f'{str(self.save_dir)}/violin_data_{split}_rh{i}.csv', index=False)
-                    plt.savefig(f'{self.save_dir}/RHs_violin_{split}_rh{i}.png')  
-
-    def agg_rhs(self, zone, save_dir:Path):
-        rhs = []
-        with h5Dataset(self.h5_dir/f'{zone}.h5', mode='r') as ncds:
-            with h5py.File(self.h5_dir/f'{zone}.h5',) as data:
-                for group in _iter_nc_groups(ncds):
-                    if len(group.split('/')) == 3:
-                        rhs.append(data[f'{group}/rhs'][:])
-        res = np.concatenate(rhs, axis=0)
-        df = pd.DataFrame(res, columns=[f'rh{i}' for i in range(101)])
-        df.to_parquet(f'{save_dir}/{zone}.parquet')
-        return
-    
-    def plot_histgram(self, splits: Iterable=None):
-        for split in splits:
-            data = self._get_hist_counts(self.save_dir /f'hist_data_{split}.json', self.save_dir /f'index_table_{split}')
+            self.h5_dir = split_dir / f'{split}_h5s'
+            data = self._get_hist_counts(split_dir /f'{split}_distribution_hist_data.json', split_dir /f'index_table_{split}')
             for k, m in data.items():
                 name = HIST_PARAMS[k]['name']
                 bins = m['bins']
@@ -325,7 +202,7 @@ class Stats:
                     plt.xticks(rotation=45, ha='right')
                     plt.tick_params(axis='x', labelsize=8)
                 plt.tight_layout()
-                plt.savefig(self.save_dir/ f'histogram_{name}_{split}.png')
+                plt.savefig(split_dir/ f'histogram_{name}_{split}.png')
 
     def _get_hist_counts(self, file:Path, index_dir:Path):
         if file.exists():
@@ -336,8 +213,13 @@ class Stats:
 
         index_df_files = [str(index_dir/f) for f in os.listdir(index_dir)]
         self.index_df_files = sorted(index_df_files, key=natural_sort_key)
+        # self.index_df_files = [str(f) for f in self.index_df_files if '04L' in f]
         index_df = dd.read_parquet(self.index_df_files, columns=['path', 'in_partition_idx'])
         meta = ('rhs', 'object')
+        # index_df = index_df.get_partition(0).compute()
+        # index_df = index_df.compute()
+        # test = self._agg_zone(index_df, HIST_PARAMS, partition_info={'number': 0})
+        # import ipdb; ipdb.set_trace()
         data = index_df.map_partitions(self._agg_zone, HIST_PARAMS, meta=meta).compute()
         
         # Following was used for aggregating data for the whole dataset, updated one is able to handle subsets
@@ -370,19 +252,28 @@ class Stats:
         Walk through all groups in given zone.h5, 
         and aggregate data/cols specified by hist_params for histogram plot.
         """
-        part_idx = partition_info['number']
-        zone = os.path.basename(self.index_df_files[part_idx]).split('.')[0]
+        if index_df.empty:
+            return []
+        
+        index_df = index_df.sort_values(['path', 'in_partition_idx'])
+        index_df['in_partition_idx'] = index_df.groupby('path').cumcount()
         metrics = []
         for name, params in hist_params.items():
             metric = AverageMeter(bins=params['bins'], name=name)
             metrics.append(metric)
-        with h5py.File(self.h5_dir/f'{zone}.h5',) as data:
-            for name, group in index_df.groupby('path'):
+        for name, group in index_df.groupby('path'):
+            zone = name[1:4]
+            with h5py.File(self.h5_dir/f'{zone}.h5',) as data:
                 idx = group['in_partition_idx'].to_list()
                 idx = sorted(idx)
                 for m in metrics:
                     slic = hist_params[m.name]['slices']
-                    m.update(data[f'{name[4:]}/{m.name}'][(idx, *slic)])   
+                    try:
+                        m.update(data[f'{name[4:]}/{m.name}'][(idx, *slic)]) 
+                    except KeyError:
+                        # import ipdb; ipdb.set_trace()
+                        print(f'{name}/{m.name} not found', self.h5_dir/f'{zone}.h5')
+                        raise ValueError
         
         # Following was used for aggregating data for the whole dataset, updated one is able to handle subsets
         # with h5Dataset(self.h5_dir/f'{zone}.h5', mode='r') as ncds:
@@ -394,49 +285,12 @@ class Stats:
         #                     m.update(data[f'{group}/{m.name}'][slic])                                                
         return metrics
 
-def convert_to_serializable(obj):
-    if isinstance(obj, np.ndarray):
-        return obj.tolist()  # Convert the numpy array to a list
-    if isinstance(obj, np.float32):
-        return float(obj)  # Convert float32 to Python float
-    raise TypeError(f"Object of type {type(obj)} is not JSON serializable") 
-
-def get_violin_stats(ax):
-    # Extract data from the violin plot
-    violin_data = []
-    for i, artist in enumerate(ax.findobj(lambda x: hasattr(x, 'get_paths'))):
-        for path in artist.get_paths():
-            vertices = path.vertices
-            for vert in vertices:
-                violin_data.append([i, vert[0], vert[1]])
-
-    # Convert the data to a DataFrame
-    df = pd.DataFrame(violin_data, columns=['violin', 'x', 'y'])
-    return df
-
-def plot_from_violin_stats(df):
-    fig, ax = plt.subplots()
-
-    # Plot each violin body using the saved data
-    for i in df['violin'].unique():
-        subset = df[df['violin'] == i]
-        ax.fill(subset['x'], subset['y'], alpha=0.8, color=sns.color_palette("deep")[0], edgecolor="black", linewidth=1)
-
-    # Match the Seaborn axis and grid style
-    sns.despine(left=True)
-    ax.set_axisbelow(True)
-    ax.yaxis.grid(True, color='gray', linestyle='dashed', linewidth=0.5)
-    ax.xaxis.grid(False)
-
-    return ax
 
 @dataclass
 class MyConfig:
     # index_dir: str = '~/scratch/data/split_test0.1_cal0.1_val0.1_seed42/test_index_table'#
-    h5_dir: str = '~/data/GEDI'
-    save_dir: str = '~/scratch/data/split_test0.1_cal0.1_val0.1_seed42'
-    splits: list = field(default_factory=lambda: ['test', 'cal', 'val', 'train'])
-    task: str = 'histogram'
+    rh_table_fps: str = '~/data/train_subsets/train*_filtered_v1.parquet'
+    task: str = 'plot_rh_distribution'
 
 cs = ConfigStore.instance()
 cs.store(name="my_config", node=MyConfig)
@@ -446,10 +300,12 @@ def main(cfg: DictConfig) -> None:
     print(cfg)
     import time
     t0 = time.time()
-    stats = Stats(cfg.h5_dir, cfg.save_dir)
+    stats = Stats(cfg.rh_table_fps)
     # stats.check_s2_values(cfg.h5_dir)
-    if hasattr(stats, cfg.task):
-        getattr(stats, cfg.task)(**cfg)
+    # if hasattr(stats, cfg.task):
+    #     getattr(stats, cfg.task)(rh_idx = 98)
+    split_dir = '~/data/GVS/split_test0.1_cal0.1_val0.1_seed42_v1'
+    stats.plot_split_distribution(splits=['train', 'cal', 'val', 'test'], split_dir=split_dir)
 
 
     print(f'time taken: {time.time() - t0}')

@@ -186,9 +186,10 @@ def write_beton(out_file, dataset, shuffle_indices=False):
         'rhs': NDArrayField(dtype=np.dtype("float32"), shape=(101,)),
         'wc': NDArrayField(dtype=np.dtype("int16"), shape=(15, 15)), #IntField(),
         'slope':  NDArrayField(dtype=np.dtype("float32"), shape=(15, 15)),
-        'latlon': NDArrayField(dtype=np.dtype("float64"), shape=(2,)),
-        'sensitivity': FloatField(),
-        'shot_number': IntField()
+        'lon_vector': NDArrayField(dtype=np.dtype("float64"), shape=(15,)),
+        'lat_vector': NDArrayField(dtype=np.dtype("float64"), shape=(15,)),
+        # 'sensitivity': FloatField(),
+        # 'shot_number': IntField()
     })
 
     # Write dataset
@@ -237,8 +238,8 @@ def check_s2_value(train_fp: Path):
 @dataclass
 class MyConfig:
     index_table: str = '~/data/GEDI/split_test0.1_cal0.1_val0.1_seed42_v1/index_table_train'
-    h5_file: str = '~/data/GEDI/train.h5'
-    out_idx_dir: str = '~/data/GEDI/index_table_train_subsets'
+    h5_file: str = '~/data/GVS/train.h5'
+    out_idx_dir: str = '~/data/GVS/index_table_train_subsets'
     nsplit: int= 5
     split_idx: int = 0
     seed: int = 42
@@ -271,7 +272,7 @@ def main(cfg: DictConfig):
         if not out_file.exists():
             index_ = pd.read_parquet(out_idx_dir / f'train{cfg.split_idx}_v{cfg.version}.parquet')
             if cfg.get('debug', False):
-                size = 4096 * 28 # 1% of one subset
+                size = 4096 * 2
                 index_ = index_.iloc[:size]
             print(f'size of training subset {cfg.version}:', len(index_))
             dataset = S2Dataset(h5_file, index_)
@@ -282,7 +283,7 @@ def main(cfg: DictConfig):
         
         if cfg.get('create_subset'):
             subset_sizes = [1000000, 5000000, 10000000]
-            out_files = [h5_file.parent / f'train_subsets/{split}_filtered_v{cfg.version}_{str(size//1000000)}m.beton' for size in subset_sizes]
+            out_files = [out_idx_dir.parent / f'train_subsets/{split}_filtered_v{cfg.version}_{str(size//1000000)}m.beton' for size in subset_sizes]
             out_files = [(Path(file), subset_sizes[i]) for i, file in enumerate(out_files) if not Path(file).exists()]
             if len(out_files) > 0:
                 index_table = dgp.read_parquet(index_dir/'*.parquet', gather_spatial_partitions=False).compute()
@@ -290,16 +291,16 @@ def main(cfg: DictConfig):
                 # we use val.h5, the orignal whole data is too large
                 index_table = index_table.sort_values(['path', 'in_partition_idx'])
                 index_table['in_partition_idx'] = index_table.groupby('path').cumcount()
-
+            print('total number of samples (high sensitivity): ', len(index_table))
             for out_file, size in out_files:
                 print(f'Generating {out_file} from {h5_file}...')
-                index_table = index_table.sample(frac=1).iloc[:size]
-                print(f'number of {split} subset {size} samples (high sensitivity): ', len(index_table))
-                dataset = S2Dataset(h5_file, index_table)
+                index_table_ = index_table.sample(frac=1).iloc[:size]
+                print(f'number of {split} subset {size} samples (high sensitivity): ', len(index_table_))
+                dataset = S2Dataset(h5_file, index_table_)
                 write_beton(out_file, dataset, shuffle_indices=False)
 
         else:
-            out_file = h5_file.parent / f'train_subsets/{split}_filtered_v{cfg.version}.beton'
+            out_file = out_idx_dir.parent / f'train_subsets/{split}_filtered_v{cfg.version}.beton'
             if not Path(out_file).exists():
                 print(f'Generating {out_file} from {h5_file}...')
                 index_table = dgp.read_parquet(index_dir/'*.parquet', gather_spatial_partitions=False).compute()
@@ -310,7 +311,7 @@ def main(cfg: DictConfig):
                 print(f'number of {split} samples (high sensitivity): ', len(index_table))
                 dataset = S2Dataset(h5_file, index_table)
                 write_beton(out_file, dataset, shuffle_indices=False)
-    check_s2_value(out_file)
+    # check_s2_value(out_file)
 
 if __name__ == '__main__':
     print('Running main')

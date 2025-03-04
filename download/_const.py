@@ -38,7 +38,7 @@ latlon_dtype = {
     'lat_highestreturn': 'float64',
     'lon_highestreturn': 'float64',
 }
-dtypes = {**gedi_attr_dtype, **latlon_dtype, **rh_dtype}
+dtypes = {'shot_number': 'uint64', **gedi_attr_dtype, **latlon_dtype, **rh_dtype}
 # %%
 STAC_ITEM_KEYS = [
     'id', 'geometry', 'bbox', 'assets'

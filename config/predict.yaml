@@ -1,0 +1,84 @@
+seed_everything: 42
+correct_bias: False
+optimizer:
+  class_path: torch.optim.Adam
+  init_args:
+    lr: 0.001
+    weight_decay: 0.0001
+lr_scheduler:
+  class_path:  models._scheduler.CosineScheduler # torch.optim.lr_scheduler.StepLR
+  init_args:
+    num_warmup_steps: 27930
+    # num_training_steps: 279300
+    # gamma: 0.5
+    # step_size: 30
+
+data:
+  class_path: datasets._zarr_dataset_deploy.DeployDataModel
+  init_args: 
+    pred_fp: ~/data/GVS/Deploy/inference_2020.zarr 
+    tile_id: 32MQE
+    num_workers: 8
+    prediction_dir: ~/data/GVS/Deploy/2020/predictions
+
+model:
+  class_path: models.unet.UNet
+  init_args:
+    out_channels: 101
+    patch_size: 15
+    norm_layer_up: torch.nn.BatchNorm2d
+    up_block: models.modules.standard.DoubleConvSkip
+    last_opt: torch.nn.Identity
+    encoder:
+      class_path: models.modules.standard.StandardNet
+      init_args:
+        in_channels: 12
+        depths: [64, 128, 256, 512]
+        kernal_sizes: [3, 3]
+        initial_stride: 1
+        norm_layer: torch.nn.BatchNorm2d
+        activation_layer: 
+          class_path: torch.nn.ELU
+          init_args:
+            inplace: True
+            alpha: 0.54
+        block: models.modules.standard.DoubleConvSkip
+        
+    upsampling: nearest
+    blur_final: False
+    blur: False
+    final_skip: False
+    self_attention: False
+    # used in the base model (_base_pl_model.py)
+    transform: datasets.transforms.Normalize
+    loss_fc: 
+      class_path: models.losses.base.MaskedL1Loss #torch.nn.BCELoss # 
+
+trainer:
+  accelerator: gpu
+  # strategy: auto
+  devices: auto
+  default_root_dir: logs/wandb
+  # val_check_interval: 100000
+  # check_val_every_n_epoch: 1
+  max_epochs: 100
+  num_sanity_val_steps: 0
+  reload_dataloaders_every_n_epochs: 1
+  # fast_dev_run: 10000
+  # profiler: advanced
+  # profiler: simple
+  #   class_path: lightning.pytorch.profilers.PyTorchProfiler
+  #   init_args:
+  #     sort_by_key: self_cpu_memory_usage
+  sync_batchnorm: True
+  # enable_checkpointing: False
+
+  logger:
+      class_path: callbacks.wandb_logger.WandbLogger
+      init_args:
+        project: global-vegetation-structure-v1
+        name: test
+        job_type: train
+        save_dir: logs
+        log_model: True # 'all' would log the model after each epoch
+        id:

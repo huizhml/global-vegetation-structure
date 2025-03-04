@@ -1,5 +1,7 @@
 import time
 import os
+
+import hydra
 import ee
 import re
 import json
@@ -7,6 +9,8 @@ import logging
 from typing import Any, Dict
 from pathlib import Path
 from collections import Counter, defaultdict
+from hydra.core.config_store import ConfigStore
+from dataclasses import dataclass, field
 import json
 import pandas as pd
 import dask.dataframe as dd
@@ -79,7 +83,7 @@ class MGRS:
             Update the MGRS data to include all GEDI assets.
     """
 
-    def __init__(self, mgrs_file:Path, missing_file:Path=None, use_dask:bool=False, npartitions=60):
+    def __init__(self, mgrs_file:str,zone_count_tmp:str=None, version:int=1, missing_file:str=None, gee_asset:str=None, use_dask:bool=False, npartitions=60, **kwargs):
         """
         Initialize the MGRS object.
 
@@ -89,11 +93,14 @@ class MGRS:
             use_dask (bool, optional): Flag indicating whether to use Dask for reading the file. Defaults to False.
             npartitions (int, optional): The number of partitions to use when using Dask. Defaults to 60.
         """
-        self.gee_asset = 'projects/gisproject-1/assets/mgrs_with_landmass_and_gedi_counts'
-        self.mgrs_file = mgrs_file
+        self.gee_asset = gee_asset
+        self.mgrs_file = Path(mgrs_file).expanduser()
+        self.zone_count_tmp = Path(zone_count_tmp).expanduser()
+        self.zone_count_tmp.mkdir(exist_ok=True, parents=True)
         self.use_dask = use_dask
         self.npartitions = npartitions
         self.missing_file = missing_file
+        self.version = version
 
     def get_mgrs(self):
         """
@@ -111,6 +118,7 @@ class MGRS:
             mgrs = ee.FeatureCollection(self.gee_asset)
             mgrs_df = ee.data.computeFeatures({'expression': mgrs, 'fileFormat': 'GEOPANDAS_GEODATAFRAME'})
             mgrs_df = self.update_mgrs(mgrs_df, self.missing_file)
+            mgrs_df = self.remove_empty_tracks(mgrs_df)
         else:
             mgrs_df = gpd.read_parquet(self.mgrs_file)
         if self.use_dask:
@@ -138,6 +146,7 @@ class MGRS:
         meta = {'geometry': 'object', 'MGRS_UTM': 'str', 'landmass': 'uint16', 'tracks': 'object'}
         mgrs_df = mgrs_df[['geometry', 'MGRS_UTM', 'landmass', 'tracks']].apply(add_missing_fc, axis=1, args=(missing_df,), meta=meta).compute()
         mgrs_df.to_parquet(self.mgrs_file)
+        return mgrs_df
 
     def remove_empty_tracks(self, mgrs_df):
         """
@@ -156,8 +165,17 @@ class MGRS:
         mgrs_df.to_parquet(self.mgrs_file)
         return mgrs_df
 
-    def add_gedi_count(self, row):
-        zone_file = Path.home() / f'GEDI/{row["MGRS_UTM"]}.csv'
+    def add_gedi_count(self):
+        mgrs_df = dgd.read_parquet(self.mgrs_file)[['geometry', 'MGRS_UTM', 'landmass', 'tracks']]
+        mgrs_df = mgrs_df.repartition(npartitions=100)
+        meta={'geometry': 'geometry', 'MGRS_UTM': 'object', 'landmass': 'float64', 'tracks': 'object', 'count_2019': 'int64', 'count_2020': 'int64', 'count_2021': 'int64', 'count_2022': 'int64', 'count_2023': 'int64', 'tracks_2019': 'object', 'tracks_2020': 'object', 'tracks_2021': 'object', 'tracks_2022': 'object', 'tracks_2023': 'object'}
+        new_df = mgrs_df.apply(self._add_gedi_count, axis=1, meta=meta).compute()
+        new_df.to_parquet(self.mgrs_file.with_name(f'mgrs_stats_v{self.version}.parquet'))
+        new_df.to_csv(self.mgrs_file.with_name(f'mgrs_stats_v{self.version}.csv'))
+
+
+    def _add_gedi_count(self, row):
+        zone_file = self.zone_count_tmp / f'{row["MGRS_UTM"]}.csv'
         # if zone_file.exists():
         #     row = pd.read_csv(zone_file)
         #     return row
@@ -175,7 +193,7 @@ class MGRS:
         for asset_id in row['tracks']:
             year = asset_id[33:37]
             fc_size = ee.FeatureCollection(asset_id).filterBounds(geom) \
-                            .filter("quality_flag==1 && degrade_flag==0 && region_class > 0 && leaf_off_flag != 1") \
+                            .filter("quality_flag==1 && degrade_flag==0 && region_class > 0 && leaf_off_flag != 1 && sensitivity>=0.95") \
                             .size().getInfo()          
             if fc_size > 0:
                 new_tracks[year].append(asset_id)
@@ -193,23 +211,34 @@ class MGRS:
 
 authenticate()
 
-if __name__ == '__main__':
+@dataclass
+class MyConfig:
+    gee_asset: str = 'projects/gisproject-1/assets/mgrs_with_landmass_and_gedi_counts_high_sens'
+    mgrs_file: str = '~/data/GEDI/mgrs_with_nbest_v2.parquet'
+    missing_file: str = '~/data/GEDI/missing.csv'
+    zone_count_tmp: str = '~/data/GEDI/zone_count_tmp'
+    version: int = 3
+    debug: bool = False
+
+cs = ConfigStore.instance()
+cs.store(name="config", node=MyConfig)
+
+
+@hydra.main(config_name='config', version_base='1.2')
+def main(cfg):
     from dask.distributed import Client, LocalCluster
     from dask import config
     config.set({'interface': 'lo'})
     cluster = LocalCluster()
     client = Client(cluster)  # timeout
-    data_dir = 'GEDI'
-    mgrs_file = Path.home() /data_dir/ 'mgrs_with_tracks_and_count.parquet'
-    missing_df = Path.home() /data_dir/ 'missing.csv'
-    mgrs = MGRS(mgrs_file, missing_df)
+
+    mgrs = MGRS(**cfg)
+    mgrs.add_gedi_count()
     # mgrs_df = mgrs.get_mgrs()
     # mgrs.remove_empty_tracks(mgrs_df)
-    mgrs_df = dgd.read_parquet(mgrs_file)[['geometry', 'MGRS_UTM', 'landmass', 'tracks']]
-    mgrs_df = mgrs_df.repartition(npartitions=100)
-    meta={'geometry': 'geometry', 'MGRS_UTM': 'object', 'landmass': 'float64', 'tracks': 'object', 'count_2019': 'int64', 'count_2020': 'int64', 'count_2021': 'int64', 'count_2022': 'int64', 'count_2023': 'int64', 'tracks_2019': 'object', 'tracks_2020': 'object', 'tracks_2021': 'object', 'tracks_2022': 'object', 'tracks_2023': 'object'}
-    new_df = mgrs_df.apply(mgrs.add_gedi_count, axis=1, meta=meta).compute()
-    new_df.to_parquet(Path.home() /data_dir/ 'mgrs_with_count_and_orbits.parquet')
-    new_df.to_csv(Path.home() /data_dir/ 'mgrs_with_count_and_orbits.csv')
+
     # mgrs.remove_empty_tracks(mgrs_df)
     # logger.info(mgrs_df.head())
+
+if __name__ == '__main__':
+    main()

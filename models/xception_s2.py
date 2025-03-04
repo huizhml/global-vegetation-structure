@@ -1,121 +1,13 @@
 import os.path
+from typing import List
+from collections import OrderedDict
 import torch
 import torch.nn as nn
 import lightning as L
 from torch.hub import download_url_to_file
 from ._base_pl_model import BaseModel
-
-
-def conv3x3(in_channels, out_channels, stride=1, groups=1, dilation=1):
-    """3x3 convolution with padding"""
-    return nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=3, stride=stride,
-                     padding=dilation, groups=groups, bias=True, dilation=dilation)
-
-
-def conv1x1(in_channels, out_channels, stride=1):
-    """1x1 convolution"""
-    return nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=1, stride=stride, bias=True)
-
-
-class SeparableConv2d(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, padding=1, dilation=1):
-        super(SeparableConv2d, self).__init__()
-
-        self.depthwise = nn.Conv2d(in_channels=in_channels, out_channels=in_channels, kernel_size=kernel_size,
-                                   stride=stride, padding=padding, dilation=dilation, groups=in_channels, bias=False)
-
-        self.pointwise = nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=1, stride=1,
-                                   padding=0, dilation=1, groups=1, bias=False)
-
-    def forward(self, x):
-        x = self.depthwise(x)
-        x = self.pointwise(x)
-        return x
-
-
-class PointwiseBlock(nn.Module):
-
-    def __init__(self, in_channels, filters, norm_layer=nn.BatchNorm2d):
-        super(PointwiseBlock, self).__init__()
-
-        self.in_channels = in_channels
-        self.filters = filters
-
-        self.conv1 = conv1x1(in_channels, filters[0])
-        self.bn1 = norm_layer(filters[0])
-
-        self.conv2 = conv1x1(filters[0], filters[1])
-        self.bn2 = norm_layer(filters[1])
-
-        self.conv3 = conv1x1(filters[1], filters[2])
-        self.bn3 = norm_layer(filters[2])
-
-        self.relu = nn.ReLU(inplace=True)
-        self.conv_shortcut = conv1x1(in_channels, filters[2])
-        self.bn_shortcut = norm_layer(filters[2])
-
-    def forward(self, x):
-        if self.in_channels == self.filters[-1]:
-            # identity shortcut
-            shortcut = x
-        else:
-            shortcut = self.conv_shortcut(x)
-            shortcut = self.bn_shortcut(shortcut)
-
-        out = self.conv1(x)
-        out = self.bn1(out)
-        out = self.relu(out)
-
-        out = self.conv2(out)
-        out = self.bn2(out)
-        out = self.relu(out)
-
-        out = self.conv3(out)
-        out = self.bn3(out)
-
-        out = out + shortcut
-        out = self.relu(out)
-
-        return out
-
-
-class SepConvBlock(nn.Module):
-
-    def __init__(self, in_channels, filters, norm_layer=nn.BatchNorm2d):
-        super(SepConvBlock, self).__init__()
-
-        self.in_channels = in_channels
-        self.filters = filters
-
-        self.sepconv1 = SeparableConv2d(in_channels=in_channels, out_channels=filters[0], kernel_size=3)
-        self.bn1 = norm_layer(filters[0])
-
-        self.sepconv2 = SeparableConv2d(in_channels=in_channels, out_channels=filters[0], kernel_size=3)
-        self.bn2 = norm_layer(filters[1])
-
-        self.relu = nn.ReLU(inplace=False)
-        self.conv_shortcut = conv1x1(in_channels, filters[1])
-        self.bn_shortcut = norm_layer(filters[1])
-
-    def forward(self, x):
-        if self.in_channels == self.filters[-1]:
-            # identity shortcut
-            shortcut = x
-        else:
-            shortcut = self.conv_shortcut(x)
-            shortcut = self.bn_shortcut(shortcut)
-
-        out = self.relu(x)
-        out = self.sepconv1(out)
-        out = self.bn1(out)
-
-        out = self.relu(out)
-        out = self.sepconv2(out)
-        out = self.bn2(out)
-
-        out = out + shortcut
-
-        return out
+from models.modules.xception_blocks import PointwiseBlock, DoubleSepConvBlock, conv1x1
+from utils import get_class
 
 
 class ResLayer(nn.Module):
@@ -211,152 +103,87 @@ class XceptionS2(BaseModel):
     """
 
     def __init__(self, 
-                 in_channels:int, out_channels:int=1, 
-                 num_sepconv_blocks:int=8, num_sepconv_filters:int=728, 
-                 returns:str="targets",
-                 var_activation:str='relu', 
-                 min_var:float=0.0, detach_var_input:bool=False, 
-                 long_skip:bool=False, manual_init:bool=False,
-                 freeze_features:bool=False, freeze_last_mean:bool=False, freeze_last_var:bool=False, 
-                 geo_shift:bool=False, geo_scale:bool=False,
-                 separate_lat_lon:bool=False, model_weights_path:str=None, **kwargs):
+                 
+                 activation_layer: nn.Module,
+                 norm_layer: str,
+                 mid_block: str,
+                 sepconv_block: str,
+                 nonlin_block: str,
+                 in_channels:int, 
+                 entry_block_filters:List[int]=[64, 128],
+                 out_channels:int=1, 
+                 num_nonlin_blocks:int=2,
+                 num_sepconv_blocks:int=8, 
+                 num_sepconv_filters:int=728, 
+                 long_skip:bool=False, manual_init:bool=False, restrict_rf:bool=True, mlp_skip:bool=False,**kwargs):
 
         yhat_transform = lambda x: x
         super(XceptionS2, self).__init__(**kwargs, yhat_transform=yhat_transform)
 
-        self.var_activation_dict = {'relu': nn.ReLU(inplace=False),
-                                    'elu': ELUplus1,
-                                    'exp': clamp_exp}
+        self.activation_layer = activation_layer
+        self.norm_layer = norm_layer
 
-        self.freeze_features = freeze_features
-        self.freeze_last_mean = freeze_last_mean  # freeze the last linear regression layers (mean)
-        self.freeze_last_var = freeze_last_var  # freeze the last linear regression layers (var)
-        self.geo_shift = geo_shift
-        self.geo_scale = geo_scale
-        self.separate_lat_lon = separate_lat_lon
-        if separate_lat_lon:
-            in_channels = 12
+        self.in_channels = in_channels
+        self.out_channels = out_channels
 
         self.num_sepconv_blocks = num_sepconv_blocks
         self.num_sepconv_filters = num_sepconv_filters
-        self.returns = returns
-        self.min_var = min_var
-        self.detach_var_input = detach_var_input
         self.long_skip = long_skip
+        self.mlp_skip = mlp_skip
+        self.entry_block = PointwiseBlock(activation_layer, in_channels=in_channels, filters=entry_block_filters, out_channels=num_sepconv_filters, norm_layer=norm_layer)
+        self.sepconv_blocks = self._make_sepconv_blocks(block=sepconv_block, num_blocks=num_sepconv_blocks)
+        if restrict_rf:
+            mid_block = get_class(mid_block)
+            self.mid_block = mid_block(self.activation_layer, in_channels=self.num_sepconv_filters, out_channels=self.num_sepconv_filters, norm_layer=self.norm_layer)
+            self.nonlin_blocks = self._make_sepconv_blocks(block=nonlin_block, kernerl_sizes=(1, 1), num_blocks=num_nonlin_blocks)
+        else:
+            self.mid_block = nn.Identity()
+            self.nonlin_blocks = nn.Identity()
 
-        self.entry_block = PointwiseBlock(in_channels=in_channels, filters=[128, 256, num_sepconv_filters])
-        self.sepconv_blocks = self._make_sepconv_blocks()
-
-        self.predictions = conv1x1(in_channels=num_sepconv_filters, out_channels=out_channels)
-        self.variances = conv1x1(in_channels=num_sepconv_filters, out_channels=out_channels)
-        self.second_moments = conv1x1(in_channels=num_sepconv_filters, out_channels=out_channels)
-
-        self.var_activation = self.var_activation_dict[var_activation]
-
-        self.model_weights_path = model_weights_path
-
-        # branch that learns to scale and shift based on geographical coordinate
-        if self.geo_shift or self.geo_scale:
-            print('Init GeoPriorNet...')
-            self.geo_prior_net = GeoPriorNet(in_channels=3, filters=256)
+        self.last_conv = conv1x1(in_channels=num_sepconv_filters, out_channels=out_channels)
 
         # initialize parameters
         if manual_init:
             self._manual_init()
 
-        if self.freeze_features:
-            print('Freezing feature extractor... args.freeze_features={}'.format(self.freeze_features))
-            # do not train the backbone of the image network
-            for param in self.parameters():
-                param.requires_grad = False
-            # train geo_prior_net
-            if self.geo_shift or self.geo_scale:
-                for param in self.geo_prior_net.parameters():
-                    param.requires_grad = True
-
             # train (unfreeze) the last layer(s) of the linear regressor
             if not self.freeze_last_mean:
                 print('Unfreeze last layer (mean regressor)... args.freeze_last_mean={}'.format(self.freeze_last_mean))
-                for param in self.predictions.parameters():
-                    param.requires_grad = True
-            if not self.freeze_last_var:
-                print('Unfreeze last layer (var regressor)... args.freeze_last_mean={}'.format(self.freeze_last_var))
-                for param in self.variances.parameters():
+                for param in self.last_conv.parameters():
                     param.requires_grad = True
 
-        if self.model_weights_path is not None:
-            print('Loading pretrained model weights from:')
-            print(self.model_weights_path)
-            self._load_model_weights(self.model_weights_path)
+
 
     def forward(self, x):
         """
         Args:
             x: input tensor: first 12 channels are sentinel-2 bands, last 3 channels are lat lon encoding
         """
-        if self.geo_shift or self.geo_scale:
-            # extract lat lon layers from input (last three channels)
-            lat_lon_inputs = x[:, 12:15, :, :]
-            # compute geo_shift, geo_scale
-            geo_scale, geo_shift = self.geo_prior_net(lat_lon_inputs)
-
-        if self.separate_lat_lon:
-            # pass only sentinel-2 bands to the xception backbone
-            x = x[:, :12, :, :]
-
         x = self.entry_block(x)
         if self.long_skip:
             shortcut = x
         x = self.sepconv_blocks(x)
+        x = self.mid_block(x)
+        if self.mlp_skip:
+            conv_features = x
+        x = self.nonlin_blocks(x)
         if self.long_skip:
             x = x + shortcut
-        predictions = self.predictions(x)
+        if self.mlp_skip:
+            x = x + conv_features
+        predictions = self.last_conv(x)
 
-        if self.geo_shift and self.geo_scale:
-            predictions = predictions * geo_scale + geo_shift
-        elif self.geo_shift:
-            predictions = predictions + geo_shift
+        return predictions
+    
 
-        if self.returns == "targets":
-            return predictions
-
-        elif self.returns in ["variances_exp", "variances_exp_geo_shift_scale"]:
-            log_variances = self.variances(x)
-
-            if self.geo_scale:
-                # equivalent to: log(var) = log(var_normalized * geo_scale**2) = log(var_normalized) + log(geo_scale**2)
-                log_variances = log_variances + torch.log(geo_scale**2)
-
-            variances = clamp_exp(log_variances)
-
-            if self.returns == 'variances_exp_geo_shift_scale':
-                return predictions, variances, geo_shift, geo_scale
-            else:
-                return predictions, variances
-
-        elif self.returns == "variances":
-            if self.detach_var_input:
-                x = x.detach()
-            variances_tmp = self.variances(x)
-            variances = self._constrain_variances(variances_tmp)
-            return predictions, variances
-
-        elif self.returns == "var_from_second_moments":
-            if self.detach_var_input:
-                x = x.detach()
-            second_moments = self.second_moments(x)
-            variances_tmp = second_moments - predictions**2
-            variances = self._constrain_variances(variances_tmp)
-            return predictions, variances, second_moments
-
-        else:
-            raise ValueError("XceptionS2 model output is undefined for: returns='{}'".format(self.returns))
-
-    def _make_sepconv_blocks(self):
+    def _make_sepconv_blocks(self,kernerl_sizes=(3, 3), block:str='DoubleSepConvBlock', num_blocks:int=None):
+        block = get_class(block)
         blocks = []
-        for i in range(self.num_sepconv_blocks):
-            blocks.append(SepConvBlock(in_channels=self.num_sepconv_filters,
-                                       filters=[self.num_sepconv_filters, self.num_sepconv_filters]))
+        for i in range(num_blocks):
+            blocks.append(block(self.activation_layer, self.norm_layer, 
+                                       in_channels=self.num_sepconv_filters,
+                                       filters=[self.num_sepconv_filters, self.num_sepconv_filters],
+                                       kernel_sizes=kernerl_sizes))
         return nn.Sequential(*blocks)
 
     def _manual_init(self):
@@ -370,11 +197,161 @@ class XceptionS2(BaseModel):
             elif isinstance(m, nn.BatchNorm2d):
                 nn.init.constant_(m.weight, 1)  # gamma
                 nn.init.constant_(m.bias, 0)  # beta
+    
 
-    def _constrain_variances(self, variances_tmp):
-        variances_tmp = self.var_activation(variances_tmp)
-        variances = variances_tmp + self.min_var
-        return variances
+class XceptionS2MixOrder(BaseModel):
+    """ A custom fully convolutional neural network designed for pixel-wise analysis of Sentinel-2 satellite images.
+
+    "XceptionS2" builds on the separable convolution described by Chollet (2017) who proposed the Xception network.
+    Any kind of down sampling is avoided (no pooling, striding, etc.).
+
+    This architecture is adapted from:
+    Lang, N., Schindler, K., Wegner, J.D.: Country-wide high-resolution vegetation height mapping with Sentinel-2,
+    Remote Sensing of Environment, vol. 233 (2019) <https://arxiv.org/abs/1904.13270>
+
+    Here, we extend the model class XceptionS2 with the option to estimate pixel-wise uncertainties in regression tasks
+    and include an option to add a long skip connection.
+    These options are used in:
+    Lang, N., Jetz, W., Schindler, K., & Wegner, J. D. (2022). A high-resolution canopy height model of the Earth.
+    arXiv preprint arXiv:2204.08322.
+
+    Args:
+        in_channels (int): Number of input channels
+        out_channels (int): Number of output channels (Set >1 for multi-task learning)
+        num_sepconv_blocks (int): Number of blocks
+        num_sepconv_filters (int): Number of filters
+        returns (string): Key specifying the return. Choices: ['targets', 'variances_exp', 'variances']
+        var_activation (string): Set which activation is applied on output variance. Choices ['relu', 'elu', 'exp']
+        min_var (float): Shift the output variance by adding min_var.
+        detach_var_input (bool): Detach graph before computing the variance. (obsolete)
+        long_skip (bool): Add a long skip (residual) connection from the entry block features to the last features.
+        manual_init (bool): Option to use a custom initialization setting.
+        freeze_features (bool): Option to freeze feature extractor.
+        freeze_last_mean (bool): Option to freeze last linear layer that outputs the mean
+        freeze_last_var (bool):  Option to freeze last linear layer that outputs the variance
+        geo_shift (bool): Option to shift the prediction by a learned shifting prior given latitude longitude
+        geo_scale (bool): Option to scale the prediction by a learned scaling prior given latitude longitude
+        separate_lat_lon (bool): Option to learn an image encoder (without latitude longitude) and a separate lat lon encoder.
+        model_weights_path (string): Path to load pretrained model weights used to initialize
+    """
+
+    def __init__(self, 
+                 
+                 activation_layer: nn.Module,
+                 norm_layer: str,
+                 mid_block: str,
+                 sepconv_block: str,
+                 nonlin_block: str,
+                 in_channels:int, 
+                 entry_block_filters:List[int]=[64, 128],
+                 out_channels:int=1, 
+                 num_nonlin_blocks:int=2,
+                 num_sepconv_blocks:int=8, 
+                 num_sepconv_filters:int=728, 
+                 long_skip:bool=False, manual_init:bool=False, nonlinear_order:str='last',**kwargs):
+
+        yhat_transform = lambda x: x
+        super(XceptionS2MixOrder, self).__init__(**kwargs, yhat_transform=yhat_transform)
+
+        self.activation_layer = activation_layer
+        self.norm_layer = norm_layer
+
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.num_sepconv_blocks = num_sepconv_blocks
+        self.num_sepconv_filters = num_sepconv_filters
+        self.long_skip = long_skip
+        self.entry_block = PointwiseBlock(activation_layer, in_channels=in_channels, filters=entry_block_filters, out_channels=num_sepconv_filters, norm_layer=norm_layer)
+        sepconv_blocks = self._make_sequential_blocks(block=sepconv_block, num_blocks=num_sepconv_blocks)
+        mid_block = get_class(mid_block)
+        mid_block = mid_block(self.activation_layer, in_channels=self.num_sepconv_filters, out_channels=self.num_sepconv_filters, norm_layer=self.norm_layer)
+        nonlin_blocks = self._make_sequential_blocks(block=nonlin_block, kernerl_sizes=(1, 1), num_blocks=num_nonlin_blocks)
+
+        if nonlinear_order == 'last':
+            self.layers = nn.Sequential(OrderedDict([
+                ('sepconv_blocks', sepconv_blocks), 
+                ('mid_block', mid_block), 
+                ('nonlin_blocks', nonlin_blocks)
+                ]))
+        elif nonlinear_order == 'first':
+            self.layers = nn.Sequential(OrderedDict([
+                ('nonlin_blocks', nonlin_blocks), 
+                ('sepconv_blocks', sepconv_blocks), 
+                ('mid_block', mid_block)
+                ]))
+        elif nonlinear_order == 'inbetween':
+            self.layers = nn.Sequential()
+            for i, (sepconv_block, nonlin_block) in enumerate(zip(sepconv_blocks, nonlin_blocks)):
+                self.layers.add_module(f'nonlin_block{i}', nonlin_block)
+                self.layers.add_module(f'sepconv_block{i}', sepconv_block)
+            self.layers.add_module(f'nonlin_block{i+1}', nonlin_blocks[-1])
+            self.layers.add_module('mid_block', mid_block)
+        elif nonlinear_order == 'mixed':
+            from models.modules.xception_blocks import SepNonlinConvBlock
+            self.layers = nn.Sequential()
+            for i in range(7): # 7 3x3 conv layers makes receptive field 15
+                self.layers.add_module(f'sepconv_block{i}', 
+                                       SepNonlinConvBlock(self.activation_layer, self.norm_layer, in_channels=self.num_sepconv_filters,
+                                    filters=[self.num_sepconv_filters, self.num_sepconv_filters],
+                                    kernel_sizes=(3, 3)))
+        else:
+            raise ValueError('nonlinear_order must be either "last" or "first" or "inbetween"')
+        self.last_conv = conv1x1(in_channels=num_sepconv_filters, out_channels=out_channels)
+
+        # initialize parameters
+        if manual_init:
+            self._manual_init()
+
+            # train (unfreeze) the last layer(s) of the linear regressor
+            if not self.freeze_last_mean:
+                print('Unfreeze last layer (mean regressor)... args.freeze_last_mean={}'.format(self.freeze_last_mean))
+                for param in self.last_conv.parameters():
+                    param.requires_grad = True
+
+
+    def forward(self, x):
+        """
+        Args:
+            x: input tensor: first 12 channels are sentinel-2 bands, last 3 channels are lat lon encoding
+        """
+        x = self.entry_block(x)
+        if self.long_skip:
+            shortcut = x
+        x = self.layers(x)
+        if self.long_skip:
+            x = x + shortcut
+        predictions = self.last_conv(x)
+
+        return predictions
+    
+
+
+    def _make_sequential_blocks(self,kernerl_sizes=(3, 3), block:str='DoubleSepConvBlock', num_blocks:int=None):
+        block = get_class(block)
+        blocks = nn.Sequential()
+        for i in range(num_blocks):
+            blocks.add_module(f'block{i}', block(self.activation_layer, self.norm_layer,
+                                       in_channels=self.num_sepconv_filters,
+                                       filters=[self.num_sepconv_filters, self.num_sepconv_filters],
+                                       kernel_sizes=kernerl_sizes))
+        return blocks
+
+    def _manual_init(self):
+        print('Manual weight init...')
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.xavier_uniform_(m.weight, gain=1.0)
+                # nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu') TODO: check if kaiming would be better with ReLU (see torchvision resnet)
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.constant_(m.weight, 1)  # gamma
+                nn.init.constant_(m.bias, 0)  # beta
+
+    # def _constrain_variances(self, variances_tmp):
+    #     variances_tmp = self.var_activation(variances_tmp)
+    #     variances = variances_tmp + self.min_var
+    #     return variances
 
     def _load_model_weights(self, model_weights_path):
         checkpoint = torch.load(model_weights_path)
@@ -467,7 +444,7 @@ def xceptionS2_08blocks_256(in_channels=15, out_channels=1, model_weights=None,
 if __name__ == "__main__":
 
     # create the model as used in "A high-resolution canopy height model of the Earth."
-    model = xceptionS2_08blocks_256()
+    model = XceptionS2MixOrder()
 
     # move model to GPU
     model.cuda()
