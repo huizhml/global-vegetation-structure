@@ -4,6 +4,7 @@ import logging
 from datetime import datetime
 from pyproj import Transformer
 import torch
+import numpy as np
 
 def setup_default_logging(log_path, string = 'Train', default_level=logging.INFO,
                           format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s"):
@@ -63,56 +64,31 @@ def get_class(name):
     args_class = getattr(module, class_name)
     return args_class
 
-def get_dense_latlon(central_coords_array, resolution=10, grid_size=15):
+def get_dense_latlon(central_coords, epsg, resolution=10, grid_size=15):
     """
     Calculate densified latitude and longitude tensors for grids around multiple central points.
 
     Parameters:
-    - central_coords_array: List of tuples (latitude, longitude) for the central pixels.
+    - central_coords: (latitude, longitude) for the central pixels.
     - resolution: Spatial resolution of the pixels in meters.
     - grid_size: Size of the grid (default is 15x15).
 
     Returns:
-    - Two tensors of size (n, 15, 15) for latitude and longitude.
+    - Two arrays of size (15, 15) for latitude and longitude.
     """
-    # Convert central coordinates to a tensor
-    n_points = central_coords_array.size(0)
-    device = central_coords_array.device
 
     # Prepare grid offsets
     half_grid = grid_size // 2
-    offsets = torch.arange(-half_grid, half_grid + 1, dtype=torch.float32, device=device)
-    row_offsets, col_offsets = torch.meshgrid(offsets, offsets, indexing="ij")  # Shape: (15, 15)
-    
-    # Flatten the grid offsets for easy broadcasting
-    row_offsets = row_offsets.flatten()  # Shape: (15*15,)
-    col_offsets = col_offsets.flatten()  # Shape: (15*15,)
+    offsets = np.arange(-half_grid, half_grid + 1) * resolution
 
     # Extract central latitudes and longitudes
-    central_lats = central_coords_array[:, 0].unsqueeze(1)  # Shape: (n, 1)
-    central_lons = central_coords_array[:, 1].unsqueeze(1)  # Shape: (n, 1)
-
-    # Compute conversion factors for degrees per meter
-    central_lats_radians = central_lats * (torch.pi / 180)  # Convert degrees to radians
-    meters_per_degree_lat = 111132.92  # Approximate mean value for latitude
-    meters_per_degree_lon = 111320 * torch.cos(central_lats_radians)  # Adjust for latitude
-
-    degree_per_pixel_lat = resolution / meters_per_degree_lat  # Shape: (n, 1)
-    degree_per_pixel_lon = resolution / meters_per_degree_lon  # Shape: (n, 1)
-
-    # Broadcast and compute lat/lon offsets for all points
-    lat_offsets = row_offsets.unsqueeze(0) * degree_per_pixel_lat  # Shape: (n, 15*15)
-    lon_offsets = col_offsets.unsqueeze(0) * degree_per_pixel_lon  # Shape: (n, 15*15)
-
-    # Add offsets to central coordinates
-    lat_pixels = central_lats + lat_offsets  # Shape: (n, 15*15)
-    lon_pixels = central_lons + lon_offsets  # Shape: (n, 15*15)
-
-    # Reshape into (n, 15, 15)
-    latitudes = lat_pixels.view(n_points, grid_size, grid_size)
-    longitudes = lon_pixels.view(n_points, grid_size, grid_size)
-
-    return latitudes, longitudes
+    transformer = Transformer.from_crs("EPSG:4326", f"EPSG:{epsg}", always_xy=True)
+    # Transform central coordinates to the local CRS
+    x_center, y_center = transformer.transform(central_coords[1], central_coords[0]) #lon, lat
+    # Calculate neighboring coordinates in the local CRS
+    lon_vector, lat_vector = transformer.transform(x_center + offsets, y_center - offsets, direction="INVERSE")
+    # lon_grid, lat_grid = np.meshgrid(lon_vector, lat_vector, indexing="xy")
+    return lon_vector, lat_vector
 
 
 def get_deep_size(obj, seen=None):
