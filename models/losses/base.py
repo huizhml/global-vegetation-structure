@@ -2,8 +2,6 @@ from typing import Dict, Tuple
 import torch
 import torch.nn as nn
 from torch import Tensor
-from torchmetrics import Metric
-from const import ESA_WC
 
 
 class MaskedBaseLoss(nn.Module):
