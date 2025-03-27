@@ -624,7 +624,6 @@ echo Compare networks with different width; # sbatch --array=2,4 run.sh 14
 #         --trainer.logger.init_args.id $run_id \
 #         --trainer.logger.init_args.name test_lr_$lr
 
-
 *)
 echo runnning nothing ;;
 esac

@@ -9,7 +9,7 @@
 #SBATCH --error=./logs/%x-%A_%a.err
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=huzh@di.ku.dk
-##SBATCH --exclude hendrixgpu04fl,hendrixgpu03fl,hendrixgpu08fl,hendrixgpu11fl,hendrixgpu12fl,hendrixgpu14fl,hendrixgpu15fl,hendrixgpu18fl #for using /scratch
+#SBATCH --exclude hendrixgpu01fl,hendrixgpu02fl,hendrixgpu03fl,hendrixgpu04fl,hendrixgpu05fl,hendrixgpu06fl,hendrixgpu07fl,hendrixgpu08fl,hendrixgpu09fl,hendrixgpu10fl,hendrixgpu11fl,hendrixgpu12fl,hendrixgpu13fl,hendrixgpu14fl,hendrixgpu15fl,hendrixgpu17fl,hendrixgpu18fl,hendrixgpu19fl,hendrixgpu20fl,hendrixgpu21fl
 hostname
 echo "Job Name: $SLURM_JOB_NAME"
 echo "Partition: $SLURM_JOB_PARTITION"
@@ -58,6 +58,20 @@ input_dir=$data_dir
 #         input_dir=$data_dir
 # fi
 
+hostname=$(hostname)
+number=$(echo "$hostname" | grep -o '[0-9]\+')
+echo "Number is $number"
+if hostname | grep -q "hendrix"; then
+        host_list=("01" "02" "07" "16" "22" "23" "24" "25" "26")
+        if [[ " ${host_list[@]} " =~ " $number " ]]; then
+                echo "node $number has scratch folder"
+                input_dir=/scratch
+                
+        else
+                echo "node $number does not have scratch folder"
+                input_dir=${HOME}/data/GVS
+        fi
+        fi
 
 # python -m datasets._4_convert_to_beton nsplit=$nsplit split_idx=$idx \
 #         h5_file=$input_dir/train.h5 out_idx_dir=$data_dir/index_table_train_subsets \
