@@ -106,7 +106,7 @@ sync_data_to_scratch() {
 
 id=$1
 run_id=${run_id:-null}
-max_epochs=${max_epochs:-200}
+max_epochs=${max_epochs:-400}
 subcommand=${subcommand:-fit}
 case $id in
 

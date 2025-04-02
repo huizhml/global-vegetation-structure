@@ -153,7 +153,6 @@ class XceptionS2(BaseModel):
                     param.requires_grad = True
 
 
-
     def forward(self, x):
         """
         Args:

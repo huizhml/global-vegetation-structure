@@ -45,7 +45,7 @@ class LoggerSaveConfigCallback(SaveConfigCallback):
         if isinstance(trainer.logger, Logger) and stage == "fit":
             config = self.config.get('fit', self.config)
             config = namespace_to_dict(config)
-            # trainer.logger.log_hyperparams({"config": config})
+            trainer.logger.log_hyperparams({"config": config})
 
 
 def update_namespace_from_nested_dict(namespace, nested_dict, prefix="", partial_update:str=None):
