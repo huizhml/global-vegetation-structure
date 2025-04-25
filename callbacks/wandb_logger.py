@@ -46,7 +46,7 @@ class WandbLogger(wb.WandbLogger):
             tags = [t.strip() for t in tags.rstrip(',').split(',')]
             kwargs.update({'tags': tags})
         super().__init__(**kwargs)
-        # self.experiment # explicitly call to check if wandb is initialized
+        self.experiment # explicitly call to check if wandb is initialized
         # wandb.define_metric('prediction/rh')
         # wandb.define_metric('prediction/*', step_metric='prediction/rh')
 
