@@ -3,8 +3,9 @@
 ##SBATCH --partition=standard
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=128G
-##SBATCH --exclude hendrixgpu26fl,hendrixgpu23fl
+#SBATCH --exclude hendrixgpu06fl
 #SBATCH --time=1-23:00:00
+#SBATCH --job-name=download
 #SBATCH --output=./logs/%x-%A_%a.out
 #SBATCH --error=./logs/%x-%A_%a.err
 #SBATCH --mail-type=END,FAIL
@@ -78,7 +79,7 @@ case $1 in
     python -m download._4_download zone="[$zone_list]"
     ;;
     5) echo download deploy data
-    python -m download._5_download_inference job_id=$ID
+    python -m download._5_download_inference job_id=$ID year=2024
     ;;
     6)
     echo sync data from hendrix to LUMI
