@@ -181,7 +181,22 @@ class S2Downloader(DaskDownloader):
         datasets = [xr.open_zarr(path) for path in zarr_paths]
         merged_ds = xr.concat(datasets, dim='time')
         merged_ds = merged_ds.chunk({'time': 1})
-        merged_ds.to_zarr(output_path, mode='w')
+        comp_level = 7
+        comp = {
+                's2': {
+                    "zlib": True,
+                    "complevel": comp_level,
+                    "fletcher32": True,
+                    "chunksizes": (1, 14, 15, 15)
+                },
+                'slope': {
+                    "zlib": True,
+                    "complevel": comp_level,
+                    "fletcher32": True,
+                    "chunksizes": (1, 15, 15)
+                }
+            }
+        merged_ds.to_netcdf(output_path, format='NETCDF4', engine='h5netcdf', encoding=comp,mode='w')
         print(f'Merged zarr stores saved to {output_path}')
         
     @dask.delayed
@@ -309,8 +324,27 @@ cs.store(name="config", node=Config)
 def main(cfg: DictConfig) -> None:
     downloader = S2Downloader(**cfg)
     downloader.download(job_id=cfg.job_id)
-    downloader.merge_zarr_stores(zarr_paths=cfg.output_dir, output_path=f'{cfg.output_dir}/s2_{cfg.year}.zarr')
-
+    # downloader.merge_zarr_stores(zarr_paths=cfg.output_dir, output_path=f'{cfg.output_dir}/s2_{cfg.year}.zarr')
+    ds = xr.open_zarr(f'{cfg.output_dir}/s2_{cfg.year}.zarr')
+    comp_level = 7
+    comp = {
+            's2': {
+                "zlib": True,
+                "complevel": comp_level,
+                "fletcher32": True,
+                "chunksizes": (1, 13, 15, 15)
+            },
+            'slope': {
+                "zlib": True,
+                "complevel": comp_level,
+                "fletcher32": True,
+                "chunksizes": (1, 15, 15)
+            }
+        }
+    print(ds)
+    ds.to_netcdf(f'{cfg.output_dir}/s2_{cfg.year}.h5', format='NETCDF4', engine='h5netcdf', encoding=comp,mode='w')
+    
+    
 if __name__ == "__main__":
     from dask.distributed import Client, LocalCluster, performance_report
     from dask import config
