@@ -163,7 +163,7 @@ class ZarrSentinel2Deploy(Dataset):
         else:
             return torch.from_numpy(patch)
 
-    def write_patch_predictions(self, prediction, idx, wandb_run_id):
+    def write_patch_predictions(self, prediction, idx):
         """Write patch prediction to tiff file
         Parameters
         ----------

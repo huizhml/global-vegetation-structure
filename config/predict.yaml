@@ -51,8 +51,8 @@ model:
     self_attention: False
     # used in the base model (_base_pl_model.py)
     transform: datasets.transforms.Normalize
-    loss_fc: 
-      class_path: models.losses.base.MaskedL1Loss #torch.nn.BCELoss # 
+    # loss_fc: 
+    #   class_path: models.losses.base.MaskedL1Loss #torch.nn.BCELoss # 
 
 trainer:
   accelerator: gpu

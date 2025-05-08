@@ -307,7 +307,7 @@ from const import ESA_WC
 
 
 
-def get_nonveg_mask(lc):
+def get_veg_mask(lc):
     zero_cls = torch.tensor([ESA_WC['Built-up'], ESA_WC['Snow and ice'], ESA_WC['Permanent water bodies']], device=lc.device)
     lc = lc[..., 7, 7]
     return torch.where(torch.isin(lc, zero_cls), 0, 1)
