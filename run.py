@@ -149,11 +149,17 @@ class MyLightningCLI(LightningCLI):
         self._set_seed()
 
         self._add_instantiators()
+        if self.subcommand in ['validate', 'test', 'predict']  and self.config[self.subcommand].correct_bias:
+            self.config[self.subcommand]['model']['init_args']['evaluate_high_slope'] = True
+
         self.before_instantiate_classes()
         self.instantiate_classes()
 
         if self.subcommand in ['validate', 'test', 'predict']  and self.config[self.subcommand].correct_bias:
             self.bias_correction()
+            self.model.correct_bias = True
+        else:
+            self.model.correct_bias = False
         
         if self.subcommand == 'fit' and self.config[self.subcommand].get('use_pretrained_model'):
             self.use_pretrained_model()
@@ -175,11 +181,11 @@ class MyLightningCLI(LightningCLI):
         self.model.nonlin_blocks = self.model._make_sepconv_blocks(block=block, kernerl_sizes=(1, 1), num_blocks=self.config[self.subcommand].model.init_args.num_nonlin_blocks)
 
     def bias_correction(self):
-        # check if the delta bias is logged 
-        if self.delta_bias is not None:
+        # check if the delta bias is logged         
+        if not self.config[self.subcommand].recalculate_bias and self.delta_bias is not None:
             print('correct bias using logged delta bias')
             # Load the checkpoint into the existing model instance
-            checkpoint = torch.load(self.config[self.subcommand]['ckpt_path'], weights_only=True, map_location=self.model.device)
+            checkpoint = torch.load(self.config[self.subcommand]['ckpt_path'], weights_only=False, map_location=self.model.device)
             self.config[self.subcommand]['ckpt_path'] = None
             self.config_init[self.subcommand]['ckpt_path'] = None # model loaded from the checkpoint defined here
             self.model.load_state_dict(checkpoint['state_dict'])
@@ -191,7 +197,7 @@ class MyLightningCLI(LightningCLI):
         print('correcting bias using training data')
         model = self.model
         # Load the checkpoint into the existing model instance
-        checkpoint = torch.load(self.config[self.subcommand]['ckpt_path'], weights_only=True, map_location=self.model.device)
+        checkpoint = torch.load(self.config[self.subcommand]['ckpt_path'], weights_only=False, map_location=self.model.device)
         self.config[self.subcommand]['ckpt_path'] = None
         self.config_init[self.subcommand]['ckpt_path'] = None # model loaded from the checkpoint defined here
         model.load_state_dict(checkpoint['state_dict'])
@@ -202,12 +208,16 @@ class MyLightningCLI(LightningCLI):
         
         epochs = len(self.datamodule.train_fp)
         self.datamodule.order = 'SEQUENTIAL'
-        for epoch in range(epochs):
+        for epoch in range(epochs): #TODO: bring back epochs
             train_dataloader = self.datamodule.train_dataloader()
+            # c = 0
             for batch in tqdm(train_dataloader):
                 batch = [b.to(model.device) for b in batch]
                 with torch.no_grad():
                     model.validation_step(batch, None)
+                # c += 1
+                # if c > 10:
+                #     break
 
         errors_gradual_slope = model.val_metrics['ME/'].sum_per_error / model.val_metrics['ME/'].total
         errors_with_steep_slope =model.val_me_with_steep_slope.sum_per_error / model.val_me_with_steep_slope.total
@@ -219,8 +229,9 @@ class MyLightningCLI(LightningCLI):
         for err in [errors_gradual_slope, errors_with_steep_slope, errors_gradual_slope_veg]:
             # correct the bias for median prediction only
             err = torch.cat([torch.zeros((feature_size,1), device=device), err.unsqueeze(1), torch.zeros((feature_size,1), device=device)], dim=1)
+            err = err.flatten()
             if self.model.out_channels > err.shape[0]*3:
-                err = torch.cat([err.flatten(), torch.zeros(12, device=device)])
+                err = torch.cat([err, torch.zeros(12, device=device)])
             errors.append(err)
         errors = torch.stack(errors)
         errors = errors.T
@@ -240,7 +251,8 @@ class MyLightningCLI(LightningCLI):
         parser.add_argument("--lr_step_interval", default="step")
         parser.add_argument("--correct_bias",  type=bool, default=True)
         parser.add_argument("--use_pretrained_model",  type=bool, default=False)
-        parser.add_argument("--bias_correction_column", default='me_gradual_slope')
+        parser.add_argument("--bias_correction_column", default='me_gradual_slope_veg')
+        parser.add_argument("--recalculate_bias",  type=bool, default=False)
 
     
     def parse_arguments(self, parser: LightningArgumentParser, args: ArgsType) -> None:
@@ -255,7 +267,6 @@ class MyLightningCLI(LightningCLI):
             self.config = parser.parse_object(args)
         else:
             self.config = parser.parse_args(args)
-        
         
         subcommand = self.config.get('subcommand')
         if subcommand is None:
@@ -297,20 +308,22 @@ class MyLightningCLI(LightningCLI):
                 lr_scheduler_config['init_args']['last_epoch'] = run_.config['config']['trainer']['max_epochs']-1 # start from 0
                 more_epochs = config.trainer.max_epochs
                 update_namespace_from_nested_dict(config, run_.config['config'])
+                # update everything from logged config except following
                 config['optimizer'] = optim_config
                 config['lr_scheduler'] = lr_scheduler_config
                 config.trainer.max_epochs = more_epochs + run_.config['config']['trainer']['max_epochs']
                 config['data']['init_args']['train_fp'] = train_fp
                 config['data']['init_args']['val_fp'] = val_fp
             else:
-                # try:
-                #     logged_config = run_.config['config']
-                # except:
-                #     logged_config = {}
-                #     logged_config['model'] = run_.config
-                #     logged_config['model']['class_path'] = run_.config['_class_path']
-                # update_namespace_from_nested_dict(config, logged_config, partial_update='model')
-                config['model']['init_args']['evaluate_high_slope'] = True
+                # evaluation, use logged config to initialize the model to be able to load the model correctly
+                try:
+                    logged_config = run_.config['config']
+                except:
+                    logged_config = {}
+                    logged_config['model'] = run_.config
+                    logged_config['model']['class_path'] = run_.config['_class_path']
+                update_namespace_from_nested_dict(config, logged_config, partial_update='model')
+                # config['model']['init_args']['evaluate_high_slope'] = True # not needed for the grouped boxplot
 
             # check if training/validation data exists
             if subcommand == "fit" and (not os.path.exists(train_fp)):
