@@ -182,15 +182,28 @@ def get_canopy_height_per_zone(partition, h5_dir, save_dir):
     res.to_parquet(save_dir / f'{zone}.parquet')
 
 
+def add_biome(val_df_fp, sota_chm_df_dir):
+    val_df_fp = Path(val_df_fp).expanduser()
+    sota_chm_df_dir = Path(sota_chm_df_dir).expanduser()
+    val_df = pd.read_parquet(val_df_fp, columns=['rh100', 'lat', 'lon', 'BIOME']) 
+    ddf = dd.read_parquet(f'{sota_chm_df_dir}/*.parquet', index=False) #TODO: add latlon to check alignment
+    ddf = ddf.compute() 
+    ddf = ddf.drop(columns=['index']).reset_index(drop=True) # NOTE: currently relying on the fixed order to match val_df, (ddf['RH100_GEDI'] == val_df['rh100']).all() is true
+    ddf[['BIOME']] = val_df[['BIOME']]
+    ddf.to_parquet(sota_chm_df_dir.parent / f'sota_chm_val_with_gedi_biome.parquet')
+    print(f'{sota_chm_df_dir.parent / f"sota_chm_val_with_gedi_biome.parquet"} saved')
+    return val_df
 
 
-def calculate_metrics(df_dir, run_id):
+def calculate_metrics(sota_chm_df_fp, run_id, corrected=False):
     # df_dir = Path(df_dir).expanduser()
 
-    ddf = dd.read_parquet(f'{df_dir}/*.parquet', index=False)
-    ddf = ddf.compute()
-    ddf = ddf.drop(columns=['index']).reset_index(drop=True)
-    ddf_ours = pd.read_parquet(f'output/canopy_height_predictions_{run_id}.parquet')
+    # ddf = dd.read_parquet(f'{df_dir}/*.parquet', index=False)
+    # ddf = ddf.compute()
+    sota_chm_df_fp = Path(sota_chm_df_fp).expanduser()
+    ddf = pd.read_parquet(sota_chm_df_fp)
+    suffix = '_corrected' if corrected else ''
+    ddf_ours = pd.read_parquet(f'output/canopy_height_predictions_{run_id}{suffix}.parquet')
     ddf[['RH95_ours', 'RH98_ours', 'RH100_ours', 'slope_mask', 'veg_mask']] = ddf_ours[['RH95_ours', 'RH98_ours', 'RH100_ours', 'slope_mask', 'veg_mask']]
     ddf = ddf.dropna(subset=['RH95_META', 'RH95_UMD', 'RH98_ETH', 'RH100_UM'])
     comp_dfs = []
@@ -215,16 +228,16 @@ def calculate_metrics(df_dir, run_id):
         comp_dfs.append(df)
 
     comp_dfs = pd.concat(comp_dfs, axis=1)
-    comp_dfs.to_csv(f'output/evaluation/comparison_metrics_{run_id}.csv')
+    comp_dfs.to_csv(f'output/evaluation/comparison_metrics_{run_id}{suffix}.csv')
 
 
 @dataclass
 class MyConfig:
-    sota_chm_df: str = '~/data/GVS/evaluation/existing_canopy_height_pred_val_with_gedi'
+    sota_chm_df_fp: str = '~/data/GVS/evaluation/sota_chm_val_with_gedi_biome.parquet'
     run_id: str = ''
     output_dir: str = 'output'
     task: str = 'aggregate_gedi_by_biome'
-
+    corrected: bool = False
 
 cs = ConfigStore.instance()
 cs.store(name="my_config", node=MyConfig)
@@ -232,7 +245,8 @@ cs.store(name="my_config", node=MyConfig)
 
 @hydra.main(config_name="my_config", version_base="1.2")
 def main(cfg):
-    calculate_metrics(cfg.sota_chm_df, cfg.run_id)
+    calculate_metrics(cfg.sota_chm_df_fp, cfg.run_id, cfg.corrected)
+    # add_biome(val_df_fp='~/data/GVS/train_subsets/val_filtered_v1.parquet', sota_chm_df_dir='~/data/GVS/evaluation/existing_canopy_height_pred_val_with_gedi')
 
 if __name__ == '__main__':
     from dask.distributed import Client, LocalCluster
