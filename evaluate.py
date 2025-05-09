@@ -204,6 +204,7 @@ def calculate_metrics(sota_chm_df_fp, run_id, corrected=False):
     ddf = pd.read_parquet(sota_chm_df_fp)
     suffix = '_corrected' if corrected else ''
     ddf_ours = pd.read_parquet(f'output/canopy_height_predictions_{run_id}{suffix}.parquet')
+    ddf_ours = ddf_ours.rename(columns=lambda x: x+'_ours' if x.startswith('RH') and '_' not in x else x)
     ddf[['RH95_ours', 'RH98_ours', 'RH100_ours', 'slope_mask', 'veg_mask']] = ddf_ours[['RH95_ours', 'RH98_ours', 'RH100_ours', 'slope_mask', 'veg_mask']]
     ddf = ddf.dropna(subset=['RH95_META', 'RH95_UMD', 'RH98_ETH', 'RH100_UM'])
     comp_dfs = []

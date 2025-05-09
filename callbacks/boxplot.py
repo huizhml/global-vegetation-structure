@@ -49,42 +49,44 @@ class BoxplotLogger(Callback):
 
     
     def on_validation_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
-        self.val_samples_biome = pd.read_parquet(trainer.datamodule.val_fp.with_suffix('.parquet'), columns=['shot_number', 'BIOME', 'rh98'])
-        self.val_samples_biome = self.val_samples_biome.drop_duplicates(subset=['shot_number', 'rh98'])
+        self.val_samples_biome = pd.read_parquet(trainer.datamodule.val_fp.with_suffix('.parquet'), columns=['BIOME', 'lat', 'lon'])
+        # self.val_samples_biome = self.val_samples_biome.drop_duplicates(subset=['shot_number', 'rh98'])
         self.residuals = []
         self.avg_residuals = []
-        self.shot_numbers = []
         self.rh98 = []
+        self.lat = []
+        self.lon = []
     
     @torch.no_grad()
     def on_validation_batch_end(self, trainer: Trainer, pl_module: LightningModule, outputs, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> None:
         current_epoch = trainer.current_epoch
         if check_if_log(current_epoch, self.log_every):
-            veg_mask = outputs['veg_mask']
-            rhs_hat = outputs['rhs_hat'][veg_mask, :, 1] if len(outputs['rhs_hat'].shape) > 2 else outputs['rhs_hat'][veg_mask, :]
-            residuals =  rhs_hat - outputs['rhs'][veg_mask]
+            mask = (outputs['veg_mask'] & outputs['slope_mask']).bool()
+            rhs_hat = outputs['rhs_hat'][mask, :, 1] if len(outputs['rhs_hat'].shape) > 2 else outputs['rhs_hat'][mask, :]
+            residuals =  rhs_hat - outputs['rhs'][mask]
             avg_residuals = residuals.mean(dim=1)
+            
             self.residuals.append(residuals[:, self.rh_idx])
             self.avg_residuals.append(avg_residuals)
-            self.rh98.append(outputs['rhs'][veg_mask, 98])
-            self.shot_numbers.append(outputs['shot_number'][veg_mask])
+            self.rh98.append(outputs['rhs'][mask, 98])
+            self.lat.append(outputs['lat'][mask]) 
+            self.lon.append(outputs['lon'][mask])
         return super().on_validation_batch_end(trainer, pl_module, outputs, batch, batch_idx, dataloader_idx)
     
     def on_validation_epoch_end(self, trainer: Trainer, pl_module: LightningModule) -> None:
         current_epoch = trainer.current_epoch
         if check_if_log(current_epoch, self.log_every):
             residuals = torch.cat(self.residuals, dim=0).cpu().numpy()
-            shot_numbers = torch.cat(self.shot_numbers, dim=0).cpu().numpy()
             rh98 = torch.cat(self.rh98, dim=0).cpu().numpy()
             avg_residuals = torch.cat(self.avg_residuals, dim=0).cpu().numpy()
-
+            lat = torch.cat(self.lat, dim=0).cpu().numpy()
+            lon = torch.cat(self.lon, dim=0).cpu().numpy()
             df = pd.DataFrame(residuals.squeeze(), columns=self.cols)
-            df['shot_number'] = shot_numbers
             df['rh98'] = rh98
             df['Residuals RH_all'] = avg_residuals
-            df = df.drop_duplicates(subset=['shot_number', 'rh98'])
-            df = pd.merge(df, self.val_samples_biome, on=['shot_number', 'rh98'], how='left')
-            
+            df['lat'] = lat
+            df['lon'] = lon
+            df = pd.merge(df, self.val_samples_biome, on=['lat', 'lon'], how='left')
             df['interval'] = pd.cut(df['rh98'], bins=self.intervals, include_lowest=True, labels=self.labels)
             stats = df.groupby('interval').describe(percentiles=[0.1, 0.25, 0.5, 0.75, 0.9])
             stats_biome = df.groupby('BIOME').describe(percentiles=[0.1, 0.25, 0.5, 0.75, 0.9])

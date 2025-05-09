@@ -191,6 +191,8 @@ class MyLightningCLI(LightningCLI):
             self.model.load_state_dict(checkpoint['state_dict'])
             self.model.eval()
             print(self.model.last_conv.bias)
+            if self.model.last_conv.bias.shape[0] > self.delta_bias.shape[0]:
+                self.delta_bias = torch.cat([torch.tensor(self.delta_bias), torch.zeros(12)])
             self.model.last_conv.bias.data -= self.delta_bias
             print(self.model.last_conv.bias)
             return
@@ -208,7 +210,7 @@ class MyLightningCLI(LightningCLI):
         
         epochs = len(self.datamodule.train_fp)
         self.datamodule.order = 'SEQUENTIAL'
-        for epoch in range(epochs): #TODO: bring back epochs
+        for epoch in range(epochs):
             train_dataloader = self.datamodule.train_dataloader()
             # c = 0
             for batch in tqdm(train_dataloader):
@@ -229,9 +231,10 @@ class MyLightningCLI(LightningCLI):
         for err in [errors_gradual_slope, errors_with_steep_slope, errors_gradual_slope_veg]:
             # correct the bias for median prediction only
             err = torch.cat([torch.zeros((feature_size,1), device=device), err.unsqueeze(1), torch.zeros((feature_size,1), device=device)], dim=1)
-            err = err.flatten()
             if self.model.out_channels > err.shape[0]*3:
                 err = torch.cat([err, torch.zeros(12, device=device)])
+            else:
+                err = err.flatten()
             errors.append(err)
         errors = torch.stack(errors)
         errors = errors.T
@@ -240,7 +243,8 @@ class MyLightningCLI(LightningCLI):
 
         # last_conv.bias.data -= errors.squeeze()
         self.delta_bias = data.get_dataframe()[self.config[self.subcommand].bias_correction_column].values
-        
+        if self.model.last_conv.bias.shape[0] > self.delta_bias.shape[0]:
+            self.delta_bias = torch.cat([self.delta_bias, torch.zeros(12)])
         self.model.last_conv.bias.data -= torch.tensor(self.delta_bias).to(self.model.device)
         model.val_metrics.reset()
         model.val_metrics_veg.reset()

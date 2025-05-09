@@ -62,7 +62,11 @@ class BaseModel(LightningModule):
         self.process_latlon = self._process_latlon if self.feed_latlon else lambda x, lat, lon: x
         self.process_nonveg = self._process_nonveg if self.zero_out_nonveg else lambda rhs, veg_mask: rhs
         self.add_veg_mask = self._add_veg_mask if self.filter_out_nonveg else lambda veg_mask, slope_mask: slope_mask
+        self.process_slope_evaluation = self._process_slope_evaluation if self.evaluate_high_slope else lambda rhs, rhs_hat, lc, lat, lon, mask: (rhs[mask], rhs_hat[mask], lc[mask], lat[mask], lon[mask])
 
+    def _process_slope_evaluation(self, rhs, rhs_hat, lc, lat, lon, mask):
+        self.val_me_with_steep_slope(rhs_hat, rhs)
+        return rhs, rhs_hat, lc, lat, lon
 
     def get_slope_mask(self, slope):
         loss_mask_slope = torch.where(slope < self.slope_th, 1, 0)
@@ -219,10 +223,4 @@ class BaseModel(LightningModule):
             x = torch.cat([x, lat.unsqueeze(1), sin_lon.unsqueeze(1), cos_lon.unsqueeze(1)], dim=1)
         y_hat = self.forward(x.float())
         y_hat = y_hat[:, :303, 7, 7].reshape(-1, 101, 3)
-        canopy_heights = y_hat[:, [95, 98, 100], 1]
-        canopy_heights = torch.cat(
-            [canopy_heights, sample[1][:, [95, 98, 100]],
-             slope_mask.unsqueeze(1),
-             veg_mask.unsqueeze(1)],
-            dim=1)
-        return canopy_heights
+        return y_hat[:, :, 1], sample[1], slope_mask.unsqueeze(1), veg_mask.unsqueeze(1)
