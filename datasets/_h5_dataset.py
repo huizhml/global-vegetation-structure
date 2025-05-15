@@ -1,10 +1,13 @@
 
 from typing import Union
 from pathlib import Path
+import torch.utils
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
 import h5py
+import torch
 from utils import get_dense_latlon
+
 
 coverage_beams = ['BEAM0000', 'BEAM0001', 'BEAM0010', 'BEAM0011']
 power_beams = ['BEAM0101', 'BEAM0110', 'BEAM1000', 'BEAM1011']
@@ -15,6 +18,34 @@ def get_epsg_from_tile(tile_name):
     hemisphere = 'south' if band <= 'M' else 'north'
     epsg = 32700 + zone if hemisphere == 'south' else 32600 + zone
     return epsg
+
+class NaturalnessDataset(Dataset):
+    def __init__(self, h5_file:str) -> None:
+        super().__init__()
+        self.h5_file = Path(h5_file).expanduser()
+        with h5py.File(self.h5_file) as f:
+            self.length = f['s2'].shape[0]
+    
+        
+    def __len__(self):
+        return self.length
+    
+    def __getitem__(self, index):
+        if not hasattr(self, 'data'):
+            self.data = h5py.File(self.h5_file)
+        s2 = self.data['s2'][index]
+        img = s2[:12, :, :]
+        scl = s2[12, :, :]
+        slope = self.data['slope'][index]
+        coords = self.data['centroid'][index]
+        rowid = self.data['rowid'][index]
+        epsg = self.data['epsg'][index]
+        lon_vector, lat_vector = get_dense_latlon(coords, epsg, resolution=10, grid_size=15)
+        return torch.from_numpy(img), torch.from_numpy(scl), torch.from_numpy(slope), torch.from_numpy(lon_vector), torch.from_numpy(lat_vector), torch.from_numpy(coords), torch.tensor(rowid)
+
+    def __del__(self):
+        if hasattr(self, 'data'):
+            self.data.close()
 
 class S2Dataset(Dataset):
 
@@ -65,22 +96,25 @@ class S2Dataset(Dataset):
             self.h5_file.close()
 
 
-
 if __name__ == '__main__':
     import pandas as pd
     import dask.dataframe as dd
-    h5_files = Path.home() / 'data/GVS/train.h5'
-    index_table = Path.home() / 'data/GVS/index_table_train_subsets/train0_v1.parquet'
+    h5_file = '~/data/GVS/downstream_task_data/s2_2017_part0.h5'
+    # index_table = Path.home() / 'data/GVS/index_table_train_subsets/train0_v1.parquet'
     # index_table = [str(p) for p in index_table.glob('*.parquet')]
-    index_table = pd.read_parquet(index_table)#.compute()
-    dataset = S2Dataset(h5_files, index_table)
+    # index_table = pd.read_parquet(index_table)#.compute()
+    # dataset = S2Dataset(h5_files, index_table)
+    dataset = NaturalnessDataset(h5_file)
+    dataloader = torch.utils.data.DataLoader(dataset, batch_size=4096, num_workers=4)
+    for batch in enumerate(dataloader):
+        print(batch[0].shape)
     
-    for i in range(len(dataset)):
-        lon = dataset[i][4]
-        import ipdb; ipdb.set_trace()
-        if np.isinf(lon).any():
-            print(i)
-    dataset.h5_file.close()
+    # for i in range(len(dataset)):
+    #     lon = dataset[i][4]
+    #     import ipdb; ipdb.set_trace()
+    #     if np.isinf(lon).any():
+    #         print(i)
+    # dataset.h5_file.close()
 
 
 

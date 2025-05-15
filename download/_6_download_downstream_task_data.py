@@ -18,6 +18,7 @@ import logging
 import dask
 from dask.distributed import Semaphore
 import dask_geopandas as dgp
+import h5py
 import zarr
 import calendar
 from shapely.geometry import box
@@ -79,6 +80,8 @@ class S2Downloader(DaskDownloader):
         self.output_dir.mkdir(exist_ok=True, parents=True)
         self.s2_parquet = Path(s2_parquet).expanduser()
         self.crowd_source_data_file = Path(crowd_source_data_file).expanduser()
+        if not self.crowd_source_data_file.exists():
+            self.train_val_split()
         df = pd.read_csv(self.crowd_source_data_file)
         self.gdf = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.Longitude, df.Latitude), crs="EPSG:4326")
         self.gdf = self.assign_growing_months()
@@ -101,18 +104,41 @@ class S2Downloader(DaskDownloader):
         self.dem_df['datetime'] = self.dem_df['datetime'].dt.strftime('%Y-%m-%d %H:%M:%S.%f')
         chunk_size = patch_size
         compressor = zarr.codecs.BloscCodec(cname=comp_name, clevel=comp_level)
+        # self.comp = { # for zarr
+        #     's2': {
+        #         "compressors": compressor,
+        #         # "shards": (1, 1, shard_size, shard_size),
+        #         "chunks": (1, 13, chunk_size, chunk_size)
+        #     },
+        #     'slope': {
+        #         "compressors": compressor,
+        #         # "shards": (shard_size, shard_size),
+        #         "chunks": (1, chunk_size, chunk_size)
+        #     }
+        # }
+        comp_level = 7
         self.comp = {
-            's2': {
-                "compressors": compressor,
-                # "shards": (1, 1, shard_size, shard_size),
-                "chunks": (1, 13, chunk_size, chunk_size)
-            },
-            'slope': {
-                "compressors": compressor,
-                # "shards": (shard_size, shard_size),
-                "chunks": (1, chunk_size, chunk_size)
+                's2': {
+                    "zlib": True,
+                    "complevel": comp_level,
+                    "fletcher32": True,
+                    "chunksizes": (1, 13, 15, 15)
+                },
+                'slope': {
+                    "zlib": True,
+                    "complevel": comp_level,
+                    "fletcher32": True,
+                    "chunksizes": (1, 15, 15)
+                }
             }
-        }
+        
+    def train_val_split(self, val_ratio:float=0.1):
+        df = pd.read_csv(self.crowd_source_data_file, index_col='rowid')
+        original_name = self.crowd_source_data_file.stem[:26]
+        df_val = df.sample(frac=val_ratio)
+        df_val.to_csv(self.crowd_source_data_file.with_stem(f'{original_name}_val'))
+        df_train = df.drop(df_val.index)
+        df_train.to_csv(self.crowd_source_data_file.with_stem(f'{original_name}_train'))
         
         
     def get_aux_df(self, collection_id, filters=None, time_col=None):
@@ -150,17 +176,16 @@ class S2Downloader(DaskDownloader):
         df = self.gdf.sjoin(s2_df, how='left', predicate='intersects')
         df = df.drop_duplicates(subset=['rowid'])
         df = df.drop(columns=['index_right'])
-        df = df.set_index('rowid')
         return df
         
         
     def download(self, job_id:int=0):
-        out_file = self.output_dir / f's2_{self.year}_part{job_id}.zarr'
+        out_file = self.output_dir / f's2_{self.year}_part{job_id}.h5'
         if out_file.exists():
             logger.info(f'{out_file} already exists, skipping')
             return
         n_per_job = 11572
-        if job_id == 19:
+        if (job_id+1)*n_per_job > len(self.gdf):
             df = self.gdf.iloc[job_id*n_per_job:]
         else:
             df = self.gdf.iloc[job_id*n_per_job:(job_id+1)*n_per_job]
@@ -171,10 +196,28 @@ class S2Downloader(DaskDownloader):
             
         results = [r for r in results if r is not None]
         ds = xr.concat(results, dim='time')
-        print('saving to zarr')
+        print('saving as h5')
         print(ds)
-        ds.to_zarr(out_file, mode='w', encoding=self.comp)
+        ds.to_netcdf(out_file, format='NETCDF4', engine='h5netcdf', encoding=self.comp, mode='w')
+        # ds.to_zarr(out_file, mode='w', encoding=self.comp)
+    
+    def merge_h5s(self, h5_files, out_h5:str=None):
+        h5_files = Path(h5_files).expanduser()
+        if out_h5 is None:
+            out_h5 = h5_files.parent / f's2_{self.year}.h5'
+        else:
+            out_h5 = Path(out_h5).expanduser()
+        h5_files = h5_files.parent.glob(h5_files.name)
+        data = []
+        for file in h5_files:
+            ds = xr.open_dataset(file, engine='h5netcdf')  
+            data.append(ds)
+        ds = xr.concat(data, dim='time')
+        print(ds)
+        print('saving to ', out_h5)
+        ds.to_netcdf(out_h5, format='NETCDF4', engine='h5netcdf', encoding=self.comp, mode='w')
         
+    
     def merge_zarr_stores(self, zarr_paths: list, output_path: str):
         zarr_paths = Path(zarr_paths).expanduser().glob('*.zarr')
         output_path = Path(output_path).expanduser()
@@ -306,7 +349,7 @@ class S2Downloader(DaskDownloader):
 @dataclass
 class Config:
     task_name: str = ""  # The name of the task for which the data is being downloaded.
-    crowd_source_data_file: str = "~/data/GVS/downstream_task_data/naturalness/reference_data_set_updated.csv"  # Path to the CSV file containing crowd-sourced data.
+    crowd_source_data_file: str = "~/data/GVS/downstream_task_data/naturalness/reference_data_set_updated_train.csv"  # Path to the CSV file containing crowd-sourced data.
     output_dir: str = "~/data/GVS/downstream_task_data"  # Directory where the downloaded data will be saved.
     s2_parquet: str = '~/data/GVS/S2_tiles_with_growing_months.parquet'  # Path to the Parquet file containing S2 tiles with growing months information.
     wc_dem_meta_dir: str = '~/data/GEDI'
@@ -323,26 +366,30 @@ cs.store(name="config", node=Config)
 @hydra.main(config_name="config", version_base='1.2')
 def main(cfg: DictConfig) -> None:
     downloader = S2Downloader(**cfg)
-    downloader.download(job_id=cfg.job_id)
+    # downloader.download(job_id=cfg.job_id)
     # downloader.merge_zarr_stores(zarr_paths=cfg.output_dir, output_path=f'{cfg.output_dir}/s2_{cfg.year}.zarr')
-    ds = xr.open_zarr(f'{cfg.output_dir}/s2_{cfg.year}.zarr')
-    comp_level = 7
-    comp = {
-            's2': {
-                "zlib": True,
-                "complevel": comp_level,
-                "fletcher32": True,
-                "chunksizes": (1, 13, 15, 15)
-            },
-            'slope': {
-                "zlib": True,
-                "complevel": comp_level,
-                "fletcher32": True,
-                "chunksizes": (1, 15, 15)
-            }
-        }
-    print(ds)
-    ds.to_netcdf(f'{cfg.output_dir}/s2_{cfg.year}.h5', format='NETCDF4', engine='h5netcdf', encoding=comp,mode='w')
+    downloader.merge_h5s('~/data/GVS/downstream_task_data/*.h5')
+    # ds = xr.open_zarr(f'{cfg.output_dir}/s2_{cfg.year}_part{cfg.job_id}.zarr')
+    # comp_level = 7
+    # comp = {
+    #         's2': {
+    #             "zlib": True,
+    #             "complevel": comp_level,
+    #             "fletcher32": True,
+    #             "chunksizes": (1, 13, 15, 15)
+    #         },
+    #         'slope': {
+    #             "zlib": True,
+    #             "complevel": comp_level,
+    #             "fletcher32": True,
+    #             "chunksizes": (1, 15, 15)
+    #         }
+    #     }
+    # print(ds)
+    # ds = ds.compute()
+    # print(ds)
+    # print('saving as h5')
+    # ds.to_netcdf(f'{cfg.output_dir}/s2_{cfg.year}_part{cfg.job_id}.h5', format='NETCDF4', engine='h5netcdf', encoding=comp,mode='w')
     
     
 if __name__ == "__main__":
