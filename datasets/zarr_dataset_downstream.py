@@ -3,6 +3,7 @@ from typing import List, Iterable, Union
 import time
 import torch
 import zarr
+from zarr.storage import LocalStore
 import numpy as np
 import math
 from pathlib import Path
@@ -22,7 +23,8 @@ from torch.utils.data import DataLoader, IterableDataset, get_worker_info
 from utils import get_dense_latlon
 from const import LAT_MEAN, LAT_STD, LON_SIN_MEAN, LON_SIN_STD, LON_COS_MEAN, LON_COS_STD, SLOPE_MEAN, SLOPE_STD
 
-
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="zarr.codecs.vlen_utf8")
 MASKED_VALUE = 32767
 RH100_idx = 301
 RH98_idx = 295
@@ -65,24 +67,47 @@ class ZarrSentinel2Downstream(Dataset):
                  compression: str = None):
         self.mask_with_scl = mask_with_scl
         self.compression = compression
-        zarr_store_path = Path(zarr_store_path).expanduser()
+        self.zarr_store_path = Path(zarr_store_path).expanduser()
         if not pred_zarr_path:
-            self.pred_zarr_path = zarr_store_path.parent / 'vs_predictions.zarr'
+            self.pred_zarr_path = self.zarr_store_path.parent / 'vs_predictions.zarr'
         else:
             self.pred_zarr_path = Path(pred_zarr_path).expanduser()
         
-        try:
-            self.store = zarr.open(zarr_store_path, mode='r')
-        except Exception as e:
-            print(f'Error opening zarr store: {e}, conda activate py3!')
+        # store = zarr.open(self.zarr_store_path, mode='r')
+        # self.length = store['s2'].shape[0]
+        # print(self.length)
+        self._initialized = False
+        
+        # try:
+        #     self.store = zarr.open(zarr_store_path, mode='r')
+        # except Exception as e:
+        #     print(f'Error opening zarr store: {e}, conda activate py3!')
         self.scl_zero_canopy_height = np.array([5, 6])  # "not vegetated", "water"
         # cloud shadows, CLOUD_MEDIUM_PROBABILITY, CLOUD_HIGH_PROBABILITY, SNOW, water, nodata
         self.scl_exclude_labels = torch.tensor(np.array([0, 3, 8, 9, 11, 6]))
 
+    def _iniitialze(self, force=False):
+        if self._initialized and not force:
+            return
+        store = LocalStore(self.zarr_store_path)
+        self.store = zarr.open(store, mode='r')
+        self._initialized = True
+        print('initialized')
+
     def __len__(self):
-        return self.store['s2'].shape[0]
+        if not hasattr(self, 'length'):
+            self._iniitialze()
+            self.length = self.store['s2'].shape[0]
+            print(self.length)
+        return self.length
+    
+    # def __iter__(self):
+    #     self._iniitialze()
+        
 
     def __getitem__(self, idx):
+        self._iniitialze()
+        # store = zarr.open(self.zarr_store_path, mode='r')
         s2 = self.store['s2'][idx]
         img = s2[:12, :, :]
         scl = s2[12, :, :]
@@ -153,7 +178,7 @@ class DeployDataModel(L.LightningDataModule):
 
 if __name__ == "__main__":
     dataset = ZarrSentinel2Downstream(zarr_store_path='~/data/GVS/downstream_task_data/s2_2017.zarr')
-    dataloader = torch.utils.data.DataLoader(dataset, batch_size=4096, num_workers=4, worker_init_fn=zarrdataset_worker_init_fn)
+    dataloader = torch.utils.data.DataLoader(dataset, batch_size=4096, num_workers=4, worker_init_fn=zarrdataset_worker_init_fn, shuffle=False)
     for batch in dataloader:
         print(batch[0].shape)
         
