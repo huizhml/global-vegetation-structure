@@ -188,6 +188,7 @@ class BaseModel(LightningModule):
             self.predict_step = self._predict_step_for_large_tile
         else:            
             self.predict_step = self._predict_step_for_small_patch
+            self.trainer.datamodule.pred_dataset.init_out_h5(self.logger._experiment.id)
         return super().on_predict_epoch_start()
 
     def _predict_step_for_large_tile(self, sample, batch_idx):
@@ -198,12 +199,12 @@ class BaseModel(LightningModule):
             x = self.transform(sample[0])
         y_hat = self.forward(x.float())
         self.trainer.datamodule.pred_dataset.write_patch_predictions(y_hat, batch_idx)
-                
+
     def _predict_step_for_small_patch(self, sample, batch_idx):
         x = self.transform(sample[0])
         x = self.process_latlon(x, sample[3], sample[4])
         y_hat = self.forward(x.float())
-        self.trainer.datamodule.pred_dataset.write_patch_predictions(y_hat, sample[1], sample[5], sample[6])
+        self.trainer.datamodule.pred_dataset.write_patch_predictions(y_hat, sample[1], sample[5], sample[6], batch_idx)
     
     def test_step(self, sample, batch_idx):
         '''

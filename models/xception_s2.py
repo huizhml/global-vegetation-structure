@@ -5,6 +5,9 @@ import torch
 import torch.nn as nn
 import lightning as L
 from torch.hub import download_url_to_file
+import torchmetrics
+import wandb
+from wandb.plot.custom_chart import plot_table
 from ._base_pl_model import BaseModel
 from models.modules.xception_blocks import PointwiseBlock, DoubleSepConvBlock, conv1x1
 from utils import get_class
@@ -439,6 +442,99 @@ def xceptionS2_08blocks_256(in_channels=15, out_channels=1, model_weights=None,
                       long_skip=True,
                       model_weights_path=model_weights)
 
+
+class XceptionDownstream(XceptionS2MixOrder):
+    def __init__(self, in_channels=12, out_channels=1, 
+                 **kwargs):
+        super(XceptionDownstream, self).__init__(in_channels=in_channels, out_channels=out_channels, **kwargs)
+        self.val_metrics_veg = None
+        self.val_metrics_lcc = None
+        
+        # Overall metrics
+        self.train_metrics = torchmetrics.MetricCollection({
+            'acc': torchmetrics.Accuracy('multiclass', num_classes=7, average='micro'),
+            'acc_per_class': torchmetrics.Accuracy('multiclass', num_classes=7, average='none'),
+            'precision': torchmetrics.Precision('multiclass', num_classes=7, average='micro'),
+            'precision_per_class': torchmetrics.Precision('multiclass', num_classes=7, average='none'),
+            'recall': torchmetrics.Recall('multiclass', num_classes=7, average='micro'),
+            'recall_per_class': torchmetrics.Recall('multiclass', num_classes=7, average='none'),
+            'confusion_matrix': torchmetrics.ConfusionMatrix('multiclass', num_classes=7)
+        }, compute_groups=False, postfix='-train')
+        
+        self.val_metrics = self.train_metrics.clone(postfix='-val')
+
+        # Define the class labels
+        self.class_labels = ['No forest', 'Natural forest (primary)', 'Natural forest (secondary)', 
+                             'Planted forest', 'Short rotation plantation', 'Oil palm plantation', 'Agroforestry']
+
+    def on_train_epoch_start(self):
+        self.train_metrics.reset()
+        self.val_metrics.reset()
+    
+    def training_step(self, batch, batch_idx):
+        x, y = batch
+        x = self.transform(x)
+        y_hat = self(x.float())
+        loss = self.loss_fc(y_hat[:, :, 7,7], y)
+        self.log('train.loss', loss)
+        self.train_metrics(y_hat[:, :, 7,7], y)
+        return loss
+    
+    def validation_step(self, batch, batch_idx):
+        x, y = batch
+        x = self.transform(x)
+        y_hat = self(x.float())
+        loss = self.loss_fc(y_hat[:, :, 7,7], y)
+        self.log('val.loss', loss)
+        self.val_metrics(y_hat[:, :, 7,7], y)
+        return loss
+    
+    def on_validation_epoch_end(self):
+        val_metrics = self.val_metrics.compute()
+        train_metrics = self.train_metrics.compute()
+
+        # Log overall metrics
+        self.log_dict({k.replace('-', '/'): v for k, v in val_metrics.items() if 'per_class' not in k and k != 'confusion_matrix-val'}, 
+                      on_epoch=True, on_step=False, sync_dist=True)
+        self.log_dict({k.replace('-', '/'): v for k, v in train_metrics.items() if 'per_class' not in k and k != 'confusion_matrix-train'}, 
+                      on_epoch=True, on_step=False, sync_dist=True)
+
+        # Log per-class metrics with actual labels
+        for metric in ['acc', 'precision', 'recall']:
+            for i, label in enumerate(self.class_labels):
+                self.log(f'{metric}/per_class/{label}.val', val_metrics[f'{metric}_per_class-val'][i], 
+                         on_epoch=True, on_step=False, sync_dist=True)
+                self.log(f'{metric}/per_class/{label}.train', train_metrics[f'{metric}_per_class-train'][i], 
+                         on_epoch=True, on_step=False, sync_dist=True)
+        
+        # Log confusion matrices
+        # Convert confusion matrix to list of [actual, predicted, count]
+        for split, metrics in [('val', val_metrics), ('train', train_metrics)]:
+            confusion_data = []
+            conf_matrix = metrics[f'confusion_matrix-{split}']
+            for i in range(len(self.class_labels)):
+                for j in range(len(self.class_labels)):
+                    confusion_data.append([
+                        self.class_labels[i],  # Actual class
+                        self.class_labels[j],  # Predicted class 
+                        conf_matrix[i,j].item() # Number of samples
+                    ])
+                    
+            table = plot_table(
+                data_table=wandb.Table(
+                    columns=["Actual", "Predicted", "nPredictions"],
+                    data=confusion_data
+                ),
+                vega_spec_name="wandb/confusion_matrix/v1", 
+                fields={
+                    "Actual": "Actual",
+                    "Predicted": "Predicted", 
+                    "nPredictions": "nPredictions"
+                },
+                string_fields={"title": f'confusion_matrix/{split}'},
+                split_table=False
+            )
+            self.logger.experiment.log({f'confusion_matrix/{split}': table})
 
 if __name__ == "__main__":
 

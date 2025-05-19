@@ -1,11 +1,11 @@
 #!/bin/bash
-#SBATCH --account=project_465001846
+##SBATCH --account=project_465001846
 #SBATCH --partition=gpu
 ##SBATCH --ntasks-per-node=1
 ##SBATCH --cpus-per-task=16
 ##SBATCH --mem=128G
-#SBATCH --gres=gpu:8
-#SBATCH --time=1-23:50:00
+#SBATCH --gres=gpu:l40s:1
+#SBATCH --time=0-23:50:00
 #SBATCH --job-name=run
 #SBATCH --output=./logs/%x-%A_%a.out
 #SBATCH --error=./logs/%x-%A_%a.err
@@ -111,15 +111,62 @@ subcommand=${subcommand:-fit}
 case $id in
 
 # ====================================================================================
-# Evaluation and prediction
+# Downstream tasks
 # ====================================================================================
+60)
+sync_data_to_scratch
+echo $run_id
+echo predict for downstream task;
+python run.py predict -c config/predict.yaml --model config/model/xception_mix_order.yaml \
+        --data.class_path datasets._h5_dataset.SparsePredDataModule \
+        --data.init_args.pred_fp ~/data/GVS/downstream_task_data/s2_2017_nounsure.h5 \
+        --data.init_args.prediction_dir ~/data/GVS/downstream_task_data/rhs_predictions_2017 \
+        --data.init_args.batch_size 4096 \
+        --trainer.logger.init_args.id $run_id
+;;
+61)
+sync_data_to_scratch
+echo $run_id
+echo downstream task training with full profile;
+python run.py fit -c config/train_naturalness.yaml \
+        --data.class_path datasets._h5_dataset.NaturalnessDataModule \
+        --data.init_args.h5_file ~/data/GVS/downstream_task_data/rhs_predictions_2017_${run_id}.h5 \
+        --data.init_args.naturalness_fp ~/data/GVS/downstream_task_data/naturalness/reference_data_set_updated.csv \
+        --data.init_args.mean_std_fp ~/data/GVS/downstream_task_data/naturalness/mean_std_${run_id}.npz \
+        --data.init_args.batch_size 1024 \
+        --trainer.logger.init_args.name naturalness_full_profile_${run_id}
+;;
+
+62)
+sync_data_to_scratch
+echo $run_id
+echo downstream task training with canopy top height;
+python run.py fit -c config/train_naturalness.yaml \
+        --data.class_path datasets._h5_dataset.NaturalnessDataModule \
+        --data.init_args.h5_file ~/data/GVS/downstream_task_data/rhs_predictions_2017_${run_id}.h5 \
+        --data.init_args.naturalness_fp ~/data/GVS/downstream_task_data/naturalness/reference_data_set_updated.csv \
+        --data.init_args.batch_size 2048 \
+        --data.init_args.use_full_profile False \
+        --model.init_args.in_channels 1 \
+        --trainer.logger.init_args.name naturalness_canopy_top_height_${run_id}
+;;
+
+# ====================================================================================
+# * Evaluation and prediction
+# 1. Bias correction
+#    - takes about 18min/epoch on LUMI, 40min on titanrtx (single GPU)
+# ====================================================================================
+
 50)
-echo predict tiles # need 128GB memory
-# TODO: remove --model config/model/xception_s2.yaml
+# ******************************
+# 1. Need 128GB memory
+# 2. Takes about 21 min to predict one tile on one L40s
+# ******************************
+echo predict tiles 
 tile_id=32MQE
 echo run prediction for model $run_id for tile $tile_id;
-python run.py predict -c config/predict.yaml --model config/model/xception_s2.yaml \
-        --data.init_args.input_lat_lon False \
+python run.py predict -c config/predict.yaml --model config/model/xception_mix_order.yaml \
+        --data.init_args.input_lat_lon True \
         --data.init_args.num_workers 8 \
         --data.init_args.tile_id $tile_id \
         --correct_bias False \
@@ -127,31 +174,42 @@ python run.py predict -c config/predict.yaml --model config/model/xception_s2.ya
 
 ;;
 51) 
+# NOTE: takes about 1h5min on LUMI for val_filtered_v1
 val_data_name=val_filtered_v1
 sync_data_to_scratch
-echo run sparse evaluation for model $run_id on $val_data_name;
-# TODO: remove --model config/model/xception_s2.yaml
-python run.py test -c config/train.yaml --model config/model/xception_s2.yaml \
+correct_bias=True
+echo get sparse prediction for model $run_id on $val_data_name;
+python run.py test -c config/train.yaml --model config/model/xception_mix_order.yaml \
         --data.init_args.train_fp "$data_dir/$train_data_name.beton" \
         --data.init_args.test_fp "$data_dir/$val_data_name.beton" \
         --data.init_args.batch_size 4096 \
         --data.init_args.distributed False \
         --model.init_args.evaluate_high_slope True \
-        --correct_bias False \
-        --bias_correction_column me_gradual_slope \
+        --correct_bias $correct_bias \
+        --bias_correction_column me_gradual_slope_veg \
+        --recalculate_bias False \
         --trainer.logger.init_args.id $run_id \
-        --trainer.callbacks+=callbacks.prediction_logger.PredictionLogger
+        --trainer.callbacks+=callbacks.prediction_logger.PredictionLogger \
+        --trainer.callbacks.output_rh_idxs "[0,25,50,95,98,100]"
+
+echo generate the comparison table for canopy height predictions;
+python evaluate.py run_id=$run_id corrected=$correct_bias
         ;;
 
 52) 
-sync_data_to_scratch
-echo validate on run $run_id
 val_data_name=val_filtered_v1
-python run.py validate -c config/train.yaml \
+sync_data_to_scratch
+echo Get boxplot data for top height and biome aggregated analysis on run $run_id
+python run.py validate -c config/train.yaml --model config/model/xception_mix_order.yaml \
         --data.init_args.val_fp "$data_dir/$val_data_name.beton" \
+        --data.init_args.train_fp "$data_dir/$train_data_name.beton" \
         --data.init_args.batch_size 4096 \
         --data.init_args.distributed False \
-        --trainer.logger.init_args.id $run_id
+        --model.init_args.evaluate_high_slope False \
+        --correct_bias True \
+        --bias_correction_column me_gradual_slope_veg \
+        --trainer.logger.init_args.id $run_id \
+        --trainer.callbacks+=callbacks.boxplot.BoxplotLogger
         ;;
 
 # ====================================================================================
@@ -584,45 +642,31 @@ echo Compare networks with different width; # sbatch --array=2,4 run.sh 14
         --trainer.logger.init_args.name test_warmup_steps_10_epochs
 ;;
 
-# sync_data_to_scratch
-# echo find best weight decay;
-# wd=$(echo "scale=6; $SLURM_ARRAY_TASK_ID / 1000000.0" | bc)
-# wd=$(printf "%.6f" "$wd")
-# echo "$wd" 
-# echo debug, quantile regression, zero out RH profile for building etc.;
-# python run.py fit -c config/train.yaml \
-#         --data.init_args.train_fp "$data_dir/$train_data_name.beton" \
-#         --data.init_args.val_fp "$data_dir/$val_data_name.beton" \
-#         --data.init_args.batch_size 1024 \
-#         --model.init_args.out_channels 315 \
-#         --model.init_args.loss_fc.class_path models.losses.quantile_ce_loss.QuantileCELoss \
-#         --model.init_args.feed_latlon True \
-#         --model.init_args.zero_out_nonveg False \
-#         --model.init_args.encoder.init_args.in_channels 15 \
-#         --optimizer.init_args.weight_decay $wd \
-#         --trainer.max_epochs $max_epochs \
-#         --trainer.logger.init_args.name test_wd_$wd
-
-
-# sync_data_to_scratch
-#     echo find best inital learning rate;
-#     lr=$(echo "scale=5; $SLURM_ARRAY_TASK_ID / 1000.0" | bc)
-#     lr=$(printf "%.5f" "$lr")
-#     echo "$lr" 
-
-# python run.py fit -c config/train.yaml \
-#         --data.init_args.train_fp "$data_dir/$train_data_name.beton" \
-#         --data.init_args.val_fp "$data_dir/$val_data_name.beton" \
-#         --data.init_args.batch_size 1024 \
-#         --model.init_args.out_channels 315 \
-#         --model.init_args.loss_fc.class_path models.losses.quantile_ce_loss.QuantileCELoss \
-#         --model.init_args.feed_latlon True \
-#         --model.init_args.zero_out_nonveg False \
-#         --model.init_args.encoder.init_args.in_channels 15 \
-#         --trainer.max_epochs $max_epochs \
-#         --optimizer.init_args.lr $lr \
-#         --trainer.logger.init_args.id $run_id \
-#         --trainer.logger.init_args.name test_lr_$lr
+# ====================================================================================
+# Fast dev run
+# ====================================================================================
+01)
+train_data_name=val_filtered_v1_1m
+val_data_name=val_filtered_v1_1m
+# train_data_name=train*_filtered_v1
+# val_data_name=val_filtered_v1_1m
+num_nonlin_blocks=3
+num_sepconv_filters=256
+sync_data_to_scratch
+echo "$data_dir/$val_data_name.beton"
+ls "$data_dir/$val_data_name.beton"
+echo Using Xception;
+python run.py fit -c config/train.yaml --model config/model/xception_s2.yaml \
+        --data.init_args.train_fp "$data_dir/$train_data_name.beton" \
+        --data.init_args.val_fp "$data_dir/$val_data_name.beton" \
+        --model.init_args.num_sepconv_filters $num_sepconv_filters \
+        --model.init_args.num_nonlin_blocks $num_nonlin_blocks \
+        --optimizer.init_args.lr 0.0006 \
+        --lr_scheduler null \
+        --trainer.max_epochs $max_epochs \
+        --trainer.fast_dev_run 100 \
+        --trainer.logger.init_args.name debug # Xception_QR_rf_15_${num_sepconv_filters}_filters_3+${num_nonlin_blocks}blocks
+        ;;
 
 *)
 echo runnning nothing ;;

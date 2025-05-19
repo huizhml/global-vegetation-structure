@@ -1,0 +1,90 @@
+seed_everything: 42
+optimizer:
+  class_path: torch.optim.Adam
+  init_args:
+    lr: 0.0001
+    weight_decay: 0.0001 # 0.0001
+lr_scheduler:
+  class_path:  models._scheduler.ChainedScheduler # torch.optim.lr_scheduler.StepLR
+  init_args:
+    warmup_steps: 905 # 5 epochs 20 subsets
+    T_0: 18100 # for 400 epochs 1 cycle
+    eta_min: 1e-6
+    max_lr: 0.0001
+    gamma: 0.2
+
+
+data:
+  class_path: datasets._h5_dataset.NaturalnessDataModule
+  init_args: 
+    h5_file: ~/data/GVS/downstream_task_data/rhs_predictions_2017_izraz2av.h5
+    naturalness_fp: ~/data/GVS/downstream_task_data/naturalness/reference_data_set_updated.csv
+    use_full_profile: True
+    num_workers: 4
+    batch_size: 4096 # per device
+
+model:
+  class_path: models.xception_s2.XceptionDownstream
+  init_args:
+    in_channels: 101
+    out_channels: 7
+    entry_block_filters: [128, 256]
+    long_skip: True
+    activation_layer: torch.nn.ReLU
+    norm_layer: torch.nn.BatchNorm2d
+    sepconv_block: models.modules.xception_blocks.DoubleSepConvBlock
+    num_sepconv_blocks: 3
+    num_sepconv_filters: 256
+    mid_block: models.modules.xception_blocks.SepConvBlockSkip
+    nonlin_block: models.modules.xception_blocks.DoubleConvBlock
+    num_nonlin_blocks: 4
+    nonlinear_order: inbetween
+    # used in the base model (_base_pl_model.py)
+    loss_fc: torch.nn.CrossEntropyLoss
+    transform: 
+      class_path: datasets._h5_dataset.Normalize
+      init_args:
+        mean_std_fp: ~/data/GVS/downstream_task_data/naturalness/mean_std.npz
+
+
+trainer:
+  accelerator: gpu
+  strategy: ddp
+  devices: auto
+  default_root_dir: logs/wandb
+  # val_check_interval: 100000
+  # check_val_every_n_epoch: 1
+  max_epochs: 200
+  num_sanity_val_steps: 0
+  reload_dataloaders_every_n_epochs: 1
+  # fast_dev_run: 100
+  # profiler: advanced
+  # profiler: simple
+  #   class_path: lightning.pytorch.profilers.PyTorchProfiler
+  #   init_args:
+  #     sort_by_key: self_cpu_memory_usage
+  sync_batchnorm: True
+  # enable_checkpointing: False
+  callbacks:
+    - class_path: lightning.pytorch.callbacks.LearningRateMonitor
+      init_args:
+        logging_interval: step
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        dirpath: checkpoints
+        monitor: 'val.loss'
+        filename: 'BestModel-{epoch:02d}-{val.loss:.2f}'
+        save_top_k: 1
+        mode: min
+        every_n_epochs: 100 #check every n epochs
+        save_last: True # save the last epoch? or just save the last best model?
+
+  logger:
+      class_path: callbacks.wandb_logger.WandbLogger
+      init_args:
+        project: global-vegetation-structure-v1
+        name: test
+        job_type: train
+        save_dir: logs
+        log_model: 'all' # 'all' would log the model after each checkpoint being saved
+        id:
