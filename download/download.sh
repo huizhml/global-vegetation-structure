@@ -131,6 +131,10 @@ case $1 in
     echo download S2 images for downstream task
     python -m download._6_download_downstream_task_data job_id=$ID
     ;;
+    8)
+    echo download S2 images for specified tiles
+    python -m download._5_download_inference job_id=0 year=$year specified_tiles_file=download/evaluation_tiles.txt
+    ;;
 esac
 
 # python -m download.correct_order zone="[$zone_list]" merge_zones=$merge_zones
