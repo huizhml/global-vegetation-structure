@@ -11,7 +11,7 @@ class PredictionLogger(Callback):
                  **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.output_rh_idxs = output_rh_idxs
-        self.output_cols = [f'RH{i}' for i in output_rh_idxs] + ['RH95_GEDI', 'RH98_GEDI', 'RH100_GEDI', 'slope_mask', 'veg_mask']
+        self.output_cols = [f'RH{i}' for i in output_rh_idxs] + [f'RH{j}_GEDI' for j in output_rh_idxs] + ['slope_mask', 'veg_mask']
     
     def on_test_epoch_start(self, trainer, pl_module):
         self.canopy_heights = []
@@ -20,7 +20,7 @@ class PredictionLogger(Callback):
     @torch.no_grad()
     def on_test_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx = 0):
         y_hat = outputs[0][:, self.output_rh_idxs]
-        y = outputs[1][:, [95, 98, 100]]
+        y = outputs[1][:, self.output_rh_idxs]
         canopy_heights = torch.cat([y_hat, y, *outputs[2:]], dim=1)
         self.canopy_heights.append(canopy_heights.cpu())
         return super().on_test_batch_end(trainer, pl_module, outputs, batch, batch_idx, dataloader_idx)

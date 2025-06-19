@@ -195,7 +195,31 @@ def add_biome(val_df_fp, sota_chm_df_dir):
     return val_df
 
 
-def calculate_metrics(sota_chm_df_fp, run_id, corrected=False):
+def compare_result_precision(run_id, corrected=False):
+    suffix = '_corrected' if corrected else ''
+    ddf_ours = pd.read_parquet(f'output/canopy_height_predictions_{run_id}{suffix}.parquet')
+    ddf_ours = ddf_ours[(ddf_ours['slope_mask']==1) & (ddf_ours['veg_mask']==1)]
+    columns = ddf_ours.columns
+    pred_cols = [c for c in columns if c.startswith('RH') and '_GEDI' not in c]
+    gedi_cols = [c for c in columns if c.startswith('RH') and '_GEDI' in c]
+    gedi_ref = ddf_ours[gedi_cols].rename(columns=lambda x: x.replace('_GEDI', ''))
+    comp_dfs = []
+    for round_precision in range(0,3):
+        preds = ddf_ours[pred_cols].round(round_precision)
+        diff = preds - gedi_ref
+        rmse = ((diff)**2).mean()**0.5
+        mae = diff.abs().mean()
+        me = diff.mean()
+        df = pd.DataFrame({'RMSE': rmse, 'MAE': mae, 'ME': me}, index=pred_cols)
+        # unstack the index to make grouped columns
+        df_unstacked = df.unstack(level=1)
+        df_unstacked = pd.DataFrame(df_unstacked).T
+        comp_dfs.append(df_unstacked)
+    comp_dfs = pd.concat(comp_dfs, keys=[f'precision_{i}' for i in range(0,3)])
+    comp_dfs.to_csv(f'output/evaluation/compare_round_precision_val_{run_id}{suffix}.csv')
+        
+
+def compare_with_sota_maps(sota_chm_df_fp, run_id, corrected=False):
     # df_dir = Path(df_dir).expanduser()
 
     # ddf = dd.read_parquet(f'{df_dir}/*.parquet', index=False)
@@ -206,6 +230,7 @@ def calculate_metrics(sota_chm_df_fp, run_id, corrected=False):
     ddf_ours = pd.read_parquet(f'output/canopy_height_predictions_{run_id}{suffix}.parquet')
     ddf_ours = ddf_ours.rename(columns=lambda x: x+'_ours' if x.startswith('RH') and '_' not in x else x)
     ddf[['RH95_ours', 'RH98_ours', 'RH100_ours', 'slope_mask', 'veg_mask']] = ddf_ours[['RH95_ours', 'RH98_ours', 'RH100_ours', 'slope_mask', 'veg_mask']]
+    
     ddf = ddf.dropna(subset=['RH95_META', 'RH95_UMD', 'RH98_ETH', 'RH100_UM'])
     comp_dfs = []
     for filter in ['Base', 'slope', 'veg']:
@@ -246,7 +271,7 @@ cs.store(name="my_config", node=MyConfig)
 
 @hydra.main(config_name="my_config", version_base="1.2")
 def main(cfg):
-    calculate_metrics(cfg.sota_chm_df_fp, cfg.run_id, cfg.corrected)
+    compare_result_precision(cfg.run_id, cfg.corrected)
     # add_biome(val_df_fp='~/data/GVS/train_subsets/val_filtered_v1.parquet', sota_chm_df_dir='~/data/GVS/evaluation/existing_canopy_height_pred_val_with_gedi')
 
 if __name__ == '__main__':
