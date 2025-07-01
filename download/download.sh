@@ -133,7 +133,7 @@ case $1 in
     ;;
     8)
     echo download S2 images for specified tiles
-    python -m download._5_download_inference job_id=0 year=$year specified_tiles_file=download/evaluation_tiles.txt
+    python -m download._5_download_inference job_id=0 year=$year specified_tiles_file=download/evaluation_tiles.txt task=download_by_api_query
     ;;
 esac
 

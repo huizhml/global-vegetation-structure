@@ -63,7 +63,7 @@ model:
 
 trainer:
   accelerator: gpu
-  strategy: ddp
+  strategy: auto
     # class_path: lightning.pytorch.strategies.DDPStrategy
     # init_args:
     #   process_group_backend: gloo

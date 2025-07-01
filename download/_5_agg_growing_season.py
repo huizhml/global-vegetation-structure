@@ -52,7 +52,6 @@ class GrowingSeason:
 
     def get_growing_months_per_tile(self):
         '''Number of growing pixels for each month has been aggregated to Sentinel-2 tile in GEE'''
-        df_raw = gpd.read_file('~/data/GEDI/Sentinel-2-Shapefile-Index-master/sentinel_2_index_shapefile.shp')
         df_old = get_s2_tiles_by_landmass('~/data/GEDI/Sentinel-2-Shapefile-Index-master/sentinel_2_index_shapefile.shp')# the old one has complete list of tiles
         fc = ee.FeatureCollection(self.asset_id)
         download_id = ee.data.getTableDownloadId({'table': fc, 'fileFormat': 'csv'})
@@ -60,19 +59,14 @@ class GrowingSeason:
         if res.status_code == 200:
             data = StringIO(res.content.decode('utf-8'))
             df = pd.read_csv(data)            
-            df = df.drop(columns=['system:index'])
+            df = df.drop(columns=['system:index', '.geo'])
             df = df.groupby('Name').sum()
             for i in range(1,13):
                 df[f'freq_month{i}'] = df[f'month{i}']/df['mask']
             df = df.merge(df_old, left_index=True, right_on='Name', how='outer', right_index=False)
             df = gpd.GeoDataFrame(df, geometry='geometry')
             df = df.drop(columns=['index_right'])
-            # get the geometry from the raw sentinel-2 grid cell
-            df = df.merge(df_raw, left_on='Name', right_on='Name', how='left', right_index=False)
-            df = df.rename(columns={'geometry_y': 'geometry'})
-            df = df.drop(columns=['geometry_x'])
             df = df.apply(self.get_growing_months, axis=1)
-            df = gpd.GeoDataFrame(df, geometry='geometry', crs='EPSG:4326')
             df.to_parquet(self.save_dir / 'S2_tiles_with_growing_months.parquet')
             print(f'Saved to {self.save_dir / "S2_tiles_with_growing_months.parquet"}')
 

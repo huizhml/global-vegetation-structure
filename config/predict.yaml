@@ -19,7 +19,7 @@ data:
     pred_fp: ~/data/GVS/Deploy/inference_2020.zarr 
     tile_id: 32MQE
     num_workers: 8
-    prediction_dir: ~/data/GVS/Deploy/2020/predictions
+    prediction_dir: ~/data/GVS/Deploy/predictions_2020
 
 model:
   class_path: models.unet.UNet
@@ -72,6 +72,10 @@ trainer:
   #     sort_by_key: self_cpu_memory_usage
   sync_batchnorm: True
   # enable_checkpointing: False
+  # callbacks:
+  #   - class_path: callbacks.image_writer.ImageWriter
+  #     init_args:
+  #       output_format: cog_dask
 
   logger:
       class_path: callbacks.wandb_logger.WandbLogger

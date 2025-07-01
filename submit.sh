@@ -81,7 +81,7 @@ if hostname | grep -q "hendrix"; then
 python -m datasets._4_convert_to_beton \
         h5_file=$input_dir/val.h5 \
         index_table=$data_dir/split_test0.1_cal0.1_val0.1_seed42_v1/index_table_val \
-        shuffle_indices=False +debug=$debug version=$3 +create_subset=True
+        shuffle_indices=False +debug=$debug version=$3 +create_subset=False
 ;;
 
 5)

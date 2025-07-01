@@ -230,7 +230,7 @@ class S2Downloader(DaskDownloader):
                     "zlib": True,
                     "complevel": comp_level,
                     "fletcher32": True,
-                    "chunksizes": (1, 13, 15, 15)
+                    "chunksizes": (1, 14, 15, 15)
                 },
                 'slope': {
                     "zlib": True,

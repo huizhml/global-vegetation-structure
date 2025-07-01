@@ -160,7 +160,7 @@ class WorldS2(DaskDownloader):
                 df = df.loc[idx]
         items = [item for item in items.items if item.properties['s2:granule_id'] in df['s2:granule_id'].values]
         epsg = int(items[0].properties['proj:code'][5:])
-        images = get_patch(items, self.bands, dtype='uint16', fill_value=np.uint16(65535), epsg=epsg)
+        images = get_patch(items, self.bands, dtype='uint16', fill_value=np.uint16(0), epsg=epsg)
         images.name = 's2'
         wc_df = wc_df[wc_df.Name == tile]
         wc_df['datetime'] = wc_df['start_datetime'].dt.strftime('%Y-%m-%d %H:%M:%S.%f')
@@ -172,6 +172,7 @@ class WorldS2(DaskDownloader):
         del images.attrs['spec']
         del images.attrs['crs']
         ds = xr.merge([images, wc_image], join='outer')
+        print(ds)
         if file.exists():
             try:
                 print('saveing to ', file)
@@ -250,7 +251,7 @@ class WorldS2(DaskDownloader):
         wc_df = self.wc_df[self.wc_df.geometry.intersects(bbox)]
         items = row_to_stac_item(df, S2_ITEM_PROPS)  
         epsg = items[0].properties['proj:epsg']
-        images = get_patch(items, self.bands, dtype='uint16', fill_value=np.uint16(65535))
+        images = get_patch(items, self.bands, dtype='uint16', fill_value=np.uint16(0))
         images.name = 's2'
         wc_df = wc_df.set_index('id')
         wc_items = row_to_stac_item(wc_df, ['datetime'])

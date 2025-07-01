@@ -257,26 +257,25 @@ class NaturalnessDataModule(LightningDataModule):
             [train_size, val_size],
             generator=torch.Generator().manual_seed(42)  # For reproducibility
         )
-    #     self.mean_std_fp = Path(mean_std_fp).expanduser()
-    #     if not self.mean_std_fp.exists():
-    #         self.mean, self.std = self.calculate_mean_std()
-    #     else:
-    #         file = np.load(self.mean_std_fp)
-    #         self.mean = file['mean']
-    #         self.std = file['std']
+        self.mean_std_fp = Path(mean_std_fp).expanduser()
+        if not self.mean_std_fp.exists():
+            self.mean, self.std = self.calculate_mean_std()
+        else:
+            file = np.load(self.mean_std_fp)
+            self.mean = file['mean']
+            self.std = file['std']
     
-    # def calculate_mean_std(self):
-    #     # dataloader = self.train_dataloader()
-    #     rhs_list = []
-        
-    #     for batch in self.train_dataset:
-    #         rhs, target = batch
-    #         rhs_list.append(rhs)
-    #     rhs = np.stack(rhs_list, axis=0)
-    #     mean = rhs.mean(axis=(0, 2, 3))
-    #     std = rhs.std(axis=(0, 2, 3))
-    #     np.savez(self.mean_std_fp, mean=mean, std=std)
-    #     return mean, std
+    def calculate_mean_std(self):
+        dataloader = self.train_dataloader()
+        rhs_list = []
+        for batch in dataloader:
+            rhs, target = batch
+            rhs_list.append(rhs)
+        rhs = np.stack(rhs_list, axis=0)
+        mean = rhs.mean(axis=(0, 2, 3))
+        std = rhs.std(axis=(0, 2, 3))
+        np.savez(self.mean_std_fp, mean=mean, std=std)
+        return mean, std
     
         
         

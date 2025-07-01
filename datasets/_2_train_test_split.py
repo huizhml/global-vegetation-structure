@@ -305,7 +305,7 @@ def overlay_country_boundaries(ax):
 @dataclass
 class MyConfig:
     index_dir: Path = Path('~/data/GEDI/geo_index_table_with_sensitivity').expanduser()
-    mgrs_file: Path = Path('~/data/GEDI/mgrs_stats_v1.parquet').expanduser()
+    mgrs_file: Path = Path('~/data/GEDI/mgrs_stats.parquet').expanduser()
     s2_grid_file: Path = Path('~/data/GEDI/Sentinel-2_tilling_shp/sentinel_2_index_shapefile.shp').expanduser()
     test_ratio: float = 0.1
     val_ratio: float = 0.1
@@ -334,8 +334,9 @@ def main(cfg: DictConfig) -> None:
     print('Visualize...')
     splitter.visualize_split()
     print('Split h5 files...') 
+    # TODO: filter out low sensitivity samples before generating {split}.h5 to reduce time to convert to beton
     h5_dir = cfg.get('h5_dir', '~/data/GEDI/GEDI_S2_h5s_original')
-    index_dir = cfg.get('save_dir', splitter.save_dir) # index dir for each split
+    index_dir = cfg.get('save_dir', splitter.save_dir)
     save_dir = cfg.get('save_dir', splitter.save_dir)
     split_h5(h5_dir, index_dir, save_dir)
     print('Sample subset...')
