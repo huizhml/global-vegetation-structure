@@ -1,13 +1,19 @@
+import time
+import copy
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from typing import Any, Dict
-from lightning import LightningModule
 import torchmetrics
+import numpy as np
+from lightning import Trainer, LightningModule
+from modelopt.torch.quantization.utils import export_torch_mode
 from models.metrics import MAE, RMSE, MAPE, ME
-
+from utils import print_size_of_model
 from models.modules.util import get_veg_mask
 from const import LAT_MEAN, LAT_STD, LON_SIN_MEAN, LON_SIN_STD, LON_COS_MEAN, LON_COS_STD, SLOPE_MEAN, SLOPE_STD
 
+MASKED_VALUE = 32767
 
 class BaseModel(LightningModule):
 
@@ -97,6 +103,17 @@ class BaseModel(LightningModule):
     def _add_veg_mask(self, veg_mask, slope_mask):
         return (veg_mask & slope_mask).bool()
 
+    
+    def on_train_epoch_start(self):
+        self.train_metrics.reset()
+        self.val_metrics.reset()
+        self.val_metrics_veg.reset()
+        self.val_metrics_lcc.reset()
+        if self.evaluate_high_slope:
+            self.val_me_with_steep_slope.reset()
+        return super().on_train_epoch_start()
+    
+    
     def training_step(self, sample, batch_idx):
         x = self.transform(sample[0])
         rhs = sample[1]
@@ -122,21 +139,19 @@ class BaseModel(LightningModule):
             self.log(f'train.{name}', loss, on_epoch=True, on_step=False, sync_dist=True)
         return losses
 
-    def on_train_epoch_start(self):
-        self.train_metrics.reset()
-        self.val_metrics.reset()
-        self.val_metrics_veg.reset()
-        self.val_metrics_lcc.reset()
-        if self.evaluate_high_slope:
-            self.val_me_with_steep_slope.reset()
-        return super().on_train_epoch_start()
 
-    def on_validation_epoch_end(self):
-        if hasattr(self, 'train_metrics'):  # TODO
-            self.log_dict(self.train_metrics.compute(), on_epoch=True, on_step=False, sync_dist=True)
-
-        self.log_dict(self.val_metrics.compute(), on_epoch=True, on_step=False, sync_dist=True)
-        self.log_dict(self.val_metrics_veg.compute(), on_epoch=True, on_step=False, sync_dist=True)
+    # def on_validation_epoch_start(self):
+    #     if self.current_epoch > 3:
+    #         # Freeze quantizer parameters
+    #         self.apply(torch.ao.quantization.disable_observer)
+    #     if self.current_epoch > 2:
+    #         # Freeze batch norm mean and variance estimates
+    #         self.apply(torch.nn.intrinsic.qat.freeze_bn_stats)
+        
+    #     # Create quantized model without deepcopy
+    #     self.quantized_model = torch.ao.quantization.convert(self.to('cpu').eval())
+        return super().on_validation_epoch_start()
+    
 
     def validation_step(self, sample, batch_idx):
         x = self.transform(sample[0])
@@ -152,6 +167,7 @@ class BaseModel(LightningModule):
         # NOTE: this step will add lat and lon as input if feed_latlon is True, sample[4] and sample[5] are the lat and lon vectors
         x = self.process_latlon(x, sample[4], sample[5])
         y_hat = self.forward(x.float())
+        # y_hat = self.quantized_model.forward(x)
 
         losses, pred, target = self.loss_fc(y_hat, mask, rhs, *sample[2:])
         rhs = target['rhs'].squeeze()
@@ -166,7 +182,7 @@ class BaseModel(LightningModule):
             self.val_me_with_steep_slope(rhs_hat, rhs)
 
         if pred.get('lc_hat') is not None:
-            self.val_metrics_lcc(pred.get('lc_hat'), target.get('lc'))
+            # self.val_metrics_lcc(pred.get('lc_hat'), target.get('lc'))
             self.log(f'{self.val_dataname}.acc', self.val_metrics_lcc, on_epoch=True, on_step=False, sync_dist=True)
 
         for name, loss in losses.items():
@@ -181,31 +197,14 @@ class BaseModel(LightningModule):
             'lat': sample[5][:, 7],
             'lon': sample[4][:, 7],
         }
+        
+    # def on_validation_epoch_end(self):
+    #     if hasattr(self, 'train_metrics'):  # TODO
+    #         self.log_dict(self.train_metrics.compute(), on_epoch=True, on_step=False, sync_dist=True)
 
-    def on_predict_epoch_start(self):
-        if hasattr(self.trainer.datamodule.pred_dataset, 'tile_id'):
-            self.trainer.datamodule.pred_dataset.set_prediction_fname(self.logger._experiment.id)
-            self.predict_step = self._predict_step_for_large_tile
-        else:            
-            self.predict_step = self._predict_step_for_small_patch
-            self.trainer.datamodule.pred_dataset.init_out_h5(self.logger._experiment.id)
-        return super().on_predict_epoch_start()
+    #     self.log_dict(self.val_metrics.compute(), on_epoch=True, on_step=False, sync_dist=True)
+    #     self.log_dict(self.val_metrics_veg.compute(), on_epoch=True, on_step=False, sync_dist=True)
 
-    def _predict_step_for_large_tile(self, sample, batch_idx):
-        if self.feed_latlon:
-            x = self.transform(sample[0][0])
-            x = torch.cat([x, sample[0][1]], dim=1)
-        else:
-            x = self.transform(sample[0])
-        y_hat = self.forward(x.float())
-        self.trainer.datamodule.pred_dataset.write_patch_predictions(y_hat, batch_idx)
-
-    def _predict_step_for_small_patch(self, sample, batch_idx):
-        x = self.transform(sample[0])
-        x = self.process_latlon(x, sample[3], sample[4])
-        y_hat = self.forward(x.float())
-        self.trainer.datamodule.pred_dataset.write_patch_predictions(y_hat, sample[1], sample[5], sample[6], batch_idx)
-    
     def test_step(self, sample, batch_idx):
         '''
         For sparse evaluation
@@ -225,3 +224,150 @@ class BaseModel(LightningModule):
         y_hat = self.forward(x.float())
         y_hat = y_hat[:, :303, 7, 7].reshape(-1, 101, 3)
         return y_hat[:, :, 1], sample[1], slope_mask.unsqueeze(1), veg_mask.unsqueeze(1)
+
+
+    def _apply_masks(self, prediction, scl, x_topleft, y_topleft):
+        prediction_no_border = prediction[:, self.rh_idx,
+                                          self.border:self.patch_size - self.border,
+                                          self.border:self.patch_size - self.border
+                                          ]
+        
+        
+        location_key = f'{y_topleft}_{x_topleft}'
+        if location_key not in self.prediction_cache:
+            self.prediction_cache[location_key] = prediction_no_border
+            return None
+        else: # ready to write
+            prediction_no_border = torch.cat([self.prediction_cache[location_key], prediction_no_border], dim=0)
+            
+            # Prepare masks before applying them to reduce repeated operations
+            masks_to_apply = []
+            
+            # if self.mask_empty:
+            #     # pixels where all RGB values equal zero are empty (bands B02, B03, B04)
+            #     # note self.image has shape: (height, width, channels)
+            #     img = self.store[f'{self.tile_id}/s2'][:, 1:4, y_topleft:y_topleft + self.patch_size_no_border, x_topleft:x_topleft + self.patch_size_no_border]
+            #     # Use torch operations directly instead of numpy sum
+            #     img_tensor = torch.from_numpy(img).to(prediction_no_border.device)
+            #     invalid_mask = torch.sum(img_tensor, dim=1, keepdim=True) == 0
+            #     masks_to_apply.append(invalid_mask)
+            
+            if self.mask_with_scl:
+                # mask snow and cloud (medium and high density). In some cases the probability cloud mask might miss some clouds
+                if scl.shape[2] == self.patch_size:
+                    scl = scl[:, :, self.border:self.patch_size - self.border,
+                            self.border:self.patch_size - self.border]
+                # Convert to torch tensor once and use isin equivalent with pre-computed tensor
+                if self.scl_exclude_labels_tensor is None or self.scl_exclude_labels_tensor.device != prediction_no_border.device:
+                    self.scl_exclude_labels_tensor = torch.tensor(self.scl_exclude_labels, device=prediction_no_border.device)
+                scl_mask = torch.isin(scl, self.scl_exclude_labels_tensor)
+                masks_to_apply.append(scl_mask)
+            
+            # Apply all masks at once using logical_or to combine them
+            if len(masks_to_apply) > 1:
+                combined_mask = torch.logical_or(*masks_to_apply)
+            else:
+                combined_mask = masks_to_apply[0]
+            prediction_no_border = torch.where(combined_mask, torch.nan, prediction_no_border)
+            
+            # aggregate predictions with median
+            prediction_no_border, _ = torch.nanmedian(prediction_no_border, dim=0)          
+            prediction_no_border.round_()  # .mul_(10) In-place operations
+            prediction_no_border = torch.nan_to_num(prediction_no_border, nan=MASKED_VALUE).to(torch.int16)
+            
+            # Move to CPU once and do all numpy operations together
+            prediction_no_border = prediction_no_border.cpu().numpy()
+            return prediction_no_border
+    
+    
+    
+    # def on_predict_epoch_start(self):
+    #     if hasattr(self.trainer.datamodule.pred_dataset, 'tile_id'):
+    #         self.trainer.datamodule.pred_dataset.set_prediction_fname(self.logger._experiment.id)
+    #         self.predict_step = self._predict_step_for_large_tile
+    #         self.on_predict_epoch_end = self.trainer.datamodule.pred_dataset.finalize_output
+    #     else:            
+    #         self.predict_step = self._predict_step_for_small_patch
+    #         self.trainer.datamodule.pred_dataset.init_out_h5(self.logger._experiment.id)
+    #     return super().on_predict_epoch_start()
+    
+    # def on_predict_epoch_end(self):
+    #     if hasattr(self.trainer.datamodule.pred_dataset, 'zarr_output'):
+    #         t0 = time.time()
+    #         self.trainer.datamodule.pred_dataset.zarr_output.close()
+    #         t1 = time.time()
+    #         print(f'Time taken to close zarr output: {t1 - t0} seconds')
+    #     return super().on_predict_epoch_end()
+    def predict_step(self, sample, batch_idx): #TODO
+        return self._predict_step_for_large_tile(sample, batch_idx)
+
+
+
+    def _predict_step_for_large_tile(self, sample, batch_idx):
+        y_topleft, x_topleft = self.patch_coords_dict[batch_idx][1:]
+        y_topleft = y_topleft + self.border
+        x_topleft = x_topleft + self.border 
+        if self.feed_latlon:
+            x = self.transform(sample[0])
+            x = torch.cat([x, sample[-1]], dim=1)
+        else:
+            x = self.transform(sample[0])
+        w, h = x.shape[2:]
+        pad_w = self.trainer.datamodule.pred_dataset.patch_size - w
+        pad_h = self.trainer.datamodule.pred_dataset.patch_size - h
+        if y_topleft == 0:
+            pad_h = (self.border, 0)
+        elif y_topleft + self.patch_size > self.img_height:
+            pad_h = (0, self.border)
+        else:
+            pad_h = (0, 0)
+        if x_topleft == 0:
+            pad_w = (self.border, 0)
+        elif x_topleft + self.patch_size > self.img_width:
+            pad_w = (0, self.border)
+        else:
+            pad_w = (0, 0)
+        x = F.pad(x, (*pad_w, *pad_h), 'reflect')
+        y_hat = self.forward(x.float())
+
+   
+        prediction_no_border = self._apply_masks(y_hat, sample[1], x_topleft, y_topleft)
+        if prediction_no_border is None:
+            return
+        
+        self.full_pred[:,y_topleft:y_topleft + self.patch_size_no_border, x_topleft:x_topleft + self.patch_size_no_border] = prediction_no_border
+        del self.prediction_cache[f'{y_topleft}_{x_topleft}']
+        
+
+    def _predict_step_for_small_patch(self, sample, batch_idx):
+        # NOTE: for downstream task
+        x = self.transform(sample[0])
+        x = self.process_latlon(x, sample[3], sample[4])
+        y_hat = self.forward(x.float())
+        self.trainer.datamodule.pred_dataset.write_patch_predictions(y_hat, sample[1], sample[5], sample[6], batch_idx)
+    
+    
+    
+    @torch.no_grad()
+    def on_predict_start(self) -> None:
+        
+        self.img_height = self.trainer.datamodule.pred_dataset.img_height
+        self.img_width = self.trainer.datamodule.pred_dataset.img_width
+        self.border = self.trainer.datamodule.pred_dataset.border
+        self.patch_size = self.trainer.datamodule.pred_dataset.patch_size
+        self.patch_size_no_border = self.trainer.datamodule.pred_dataset.patch_size_no_border
+        self.patch_coords_dict = self.trainer.datamodule.pred_dataset.patch_coords_dict
+        self.mask_with_scl = self.trainer.datamodule.pred_dataset.mask_with_scl
+        self.rh_idx = self.trainer.datamodule.pred_dataset.rh_idx
+        self.prediction_cache = {}
+        self.nodata_value = self.trainer.datamodule.pred_dataset.nodata_value
+        self.scl_exclude_labels = self.trainer.datamodule.pred_dataset.scl_exclude_labels
+        self.scl_exclude_labels_tensor = torch.tensor(self.scl_exclude_labels, device=self.device)
+        print(f'img_height: {self.img_height}, img_width: {self.img_width}, border: {self.border}, patch_size_no_border: {self.patch_size_no_border}')
+        self.full_pred = np.full((len(self.rh_idx), self.img_height, self.img_width), MASKED_VALUE, dtype=np.int16)
+        self.trainer.datamodule.pred_dataset.set_prediction_fname(self.logger._experiment.id)
+        
+        
+    @torch.no_grad()
+    def on_predict_end(self):
+        self.trainer.datamodule.pred_dataset.save_predictions_as_cog(self.full_pred)

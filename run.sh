@@ -1,16 +1,17 @@
 #!/bin/bash
 ##SBATCH --account=project_465001846
 #SBATCH --partition=gpu
-##SBATCH --ntasks-per-node=1
-##SBATCH --cpus-per-task=16
-##SBATCH --mem=128G
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=128G
 #SBATCH --gres=gpu:l40s:1
-#SBATCH --time=0-23:50:00
+#SBATCH --time=1-23:50:00
 #SBATCH --job-name=run
 #SBATCH --output=./logs/%x-%A_%a.out
 #SBATCH --error=./logs/%x-%A_%a.err
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=huzh@di.ku.dk
+#SBATCH --exclude hendrixgpu26fl
 ##SBATCH --exclude hendrixgpu04fl,hendrixgpu03fl,hendrixgpu08fl,hendrixgpu11fl,hendrixgpu12fl,hendrixgpu14fl,hendrixgpu15fl,hendrixgpu18fl #for using /scratch
 echo "***************************** JOB INFO *****************************"
 echo "Job Name: $SLURM_JOB_NAME"
@@ -111,6 +112,28 @@ subcommand=${subcommand:-fit}
 case $id in
 
 # ====================================================================================
+# Quantization-aware training
+# ====================================================================================
+70)
+sync_data_to_scratch
+echo $run_id
+echo quantization-aware training;
+python run.py fit -c config/train.yaml --model config/model/xception_mix_order.yaml \
+        --data.init_args.train_fp "$data_dir/$train_data_name.beton" \
+        --data.init_args.val_fp "$data_dir/$val_data_name.beton" \
+        --data.init_args.batch_size 4096 \
+        --model.init_args.out_channels 315 \
+        --model.init_args.loss_fc.class_path models.losses.quantile_ce_loss.QuantileCELoss \
+        --model.init_args.feed_latlon True \
+        --model.init_args.filter_out_nonveg True \
+        --model.init_args.in_channels 15 \
+        --trainer.max_epochs $max_epochs \
+        --trainer.callbacks+=pytorch_lightning.callbacks.QuantizationAwareTraining \
+        --trainer.logger.init_args.id $run_id \
+        --trainer.logger.init_args.name QR_veg_geo_lc_QAT
+;;
+
+# ====================================================================================
 # Downstream tasks
 # ====================================================================================
 60)
@@ -160,21 +183,64 @@ python run.py fit -c config/train_naturalness.yaml \
 50)
 # ******************************
 # 1. Need 128GB memory
-# 2. Takes about 21 min to predict one tile on one L40s
+# 2. Takes about 21 min to predict one tile on one L40s (write 2 bands)
+# 3. Takes about 31 min to predict one tile on one L40s (write all 303 bands)
 # ******************************
 echo predict tiles 
 tile_id=32MQE
+year=2017
+run_id=cg11fpjr
+comp=$comp
+level=$SLURM_ARRAY_TASK_ID
+echo run prediction for model $run_id for tile $tile_id;
+python run.py predict -c config/predict.yaml --model config/model/xception_mix_order.yaml \
+        --optimizer.init_args.lr 0.0001 \
+
+        --data.init_args.input_lat_lon True \
+        --data.init_args.num_workers 8 \
+        --data.init_args.tile_id $tile_id \
+        --data.init_args.pred_fp ~/data/GVS/Deploy/inference_${year}.zarr \
+        --data.init_args.prediction_dir ~/data/GVS/Deploy/predictions_${year} \
+        --correct_bias True \
+        --data.init_args.comp_level $level \
+        --data.init_args.compression $comp \
+        --data.init_args.patch_size 544 \
+        --data.init_args.chunk_size 512 \
+        --data.init_args.output_format cog \
+        --trainer.logger.init_args.resume False \
+        --trainer.logger.init_args.id $run_id
+;;
+54)
+# ******************************
+# 1. Need 128GB memory
+# 2. Takes about 21 min to predict one tile on one L40s (write 2 bands)
+# 3. Takes about 31 min to predict one tile on one L40s (write all 303 bands)
+# ******************************
+echo predict tiles 
+tile_id=35NMA # 32MQE
+year=2020
+run_id=cg11fpjr
 echo run prediction for model $run_id for tile $tile_id;
 python run.py predict -c config/predict.yaml --model config/model/xception_mix_order.yaml \
         --data.init_args.input_lat_lon True \
         --data.init_args.num_workers 8 \
         --data.init_args.tile_id $tile_id \
-        --correct_bias False \
+        --data.init_args.pred_fp ~/data/GVS/Deploy/inference_${year}.zarr \
+        --data.init_args.prediction_dir ~/data/GVS/Deploy/predictions_${year}/${tile_id} \
+        --correct_bias True \
+        --data.init_args.comp_level 7 \
+        --data.init_args.compression None \
+        --data.init_args.patch_size 544 \
+        --data.init_args.chunk_size 512 \
+        --data.init_args.debug False \
+        --data.init_args.predict_full_profile False \
+        --data.init_args.output_format cog_dask \
+        --trainer.logger.init_args.resume False \
         --trainer.logger.init_args.id $run_id
-
 ;;
 51) 
 # NOTE: takes about 1h5min on LUMI for val_filtered_v1
+# NOTE: takes about 35min on A100 for val_filtered_v1
 val_data_name=val_filtered_v1
 sync_data_to_scratch
 correct_bias=True
@@ -194,8 +260,7 @@ python run.py test -c config/train.yaml --model config/model/xception_mix_order.
 
 echo generate the comparison table for canopy height predictions;
 python evaluate.py run_id=$run_id corrected=$correct_bias
-        ;;
-
+;;
 52) 
 val_data_name=val_filtered_v1
 sync_data_to_scratch
@@ -212,6 +277,28 @@ python run.py validate -c config/train.yaml --model config/model/xception_mix_or
         --trainer.callbacks+=callbacks.boxplot.BoxplotLogger
         ;;
 
+53)
+echo Test compression and comp_level
+run_id=cg11fpjr
+tile_id=32MQE
+year=2017
+compression=$comp
+echo compression $compression
+echo run prediction for model $run_id for tile $tile_id;
+python run.py predict -c config/predict.yaml --model config/model/xception_mix_order.yaml \
+        --data.init_args.input_lat_lon True \
+        --data.init_args.num_workers 8 \
+        --data.init_args.tile_id $tile_id \
+        --data.init_args.pred_fp ~/data/GVS/Deploy/inference_${year}.zarr \
+        --data.init_args.prediction_dir ~/data/GVS/Deploy/predictions_${year} \
+        --data.init_args.comp_level $SLURM_ARRAY_TASK_ID \
+        --data.init_args.compression $compression \
+        --correct_bias True \
+        --trainer.logger.init_args.offline True \
+        --trainer.logger.init_args.log_model False \
+        --trainer.logger.init_args.id $run_id
+;;
+
 # ====================================================================================
 # ablation on mask and multi-task
 # ====================================================================================
@@ -222,6 +309,7 @@ echo use latlon as an input
 python run.py $subcommand -c config/train.yaml --model config/model/xception_mix_order.yaml \
         --data.init_args.train_fp "$data_dir/$train_data_name.beton" \
         --data.init_args.val_fp "$data_dir/$val_data_name.beton" \
+        --data.init_args.distributed False \
         --model.init_args.out_channels 315 \
         --model.init_args.loss_fc.class_path models.losses.quantile_ce_loss.QuantileCELoss \
         --model.init_args.feed_latlon True \
@@ -646,8 +734,8 @@ echo Compare networks with different width; # sbatch --array=2,4 run.sh 14
 # Fast dev run
 # ====================================================================================
 01)
-train_data_name=val_filtered_v1_1m
-val_data_name=val_filtered_v1_1m
+train_data_name=debug0_filtered_v1
+val_data_name=debug1_filtered_v1
 # train_data_name=train*_filtered_v1
 # val_data_name=val_filtered_v1_1m
 num_nonlin_blocks=3
@@ -656,16 +744,21 @@ sync_data_to_scratch
 echo "$data_dir/$val_data_name.beton"
 ls "$data_dir/$val_data_name.beton"
 echo Using Xception;
-python run.py fit -c config/train.yaml --model config/model/xception_s2.yaml \
+module load gcc/11.2.0
+python run.py $subcommand -c config/qat.yaml --model config/model/xception_mix_order.yaml \
         --data.init_args.train_fp "$data_dir/$train_data_name.beton" \
         --data.init_args.val_fp "$data_dir/$val_data_name.beton" \
-        --model.init_args.num_sepconv_filters $num_sepconv_filters \
-        --model.init_args.num_nonlin_blocks $num_nonlin_blocks \
-        --optimizer.init_args.lr 0.0006 \
-        --lr_scheduler null \
+        --data.init_args.cal_fp "$data_dir/debug1_filtered_v1.beton" \
+        --data.init_args.distributed False \
+        --model.init_args.out_channels 315 \
+        --model.init_args.loss_fc.class_path models.losses.quantile_ce_loss.QuantileCELoss \
+        --model.init_args.feed_latlon True \
+        --model.init_args.filter_out_nonveg True \
+        --model.init_args.in_channels 15 \
+        --correct_bias False \
         --trainer.max_epochs $max_epochs \
-        --trainer.fast_dev_run 100 \
-        --trainer.logger.init_args.name debug # Xception_QR_rf_15_${num_sepconv_filters}_filters_3+${num_nonlin_blocks}blocks
+        --trainer.logger.init_args.id $run_id \
+        --trainer.logger.init_args.name QR_veg_geo_lc_QAT_test
         ;;
 
 *)

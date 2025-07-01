@@ -7,11 +7,10 @@ from ffcv.loader import Loader, OrderOption
 from tqdm import tqdm
 import numpy as np
 import torch
-import torchvision
 import gc
 import psutil
-from datasets._zarr_dataset_deploy import ZarrSentinel2Deploy
 from torch.utils.data import DataLoader
+from utils import get_deep_size
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +86,7 @@ class FFCVDataModel(L.LightningDataModule):
         train_fp: str=None,
         val_fp: str=None,
         test_fp: str=None,
+        cal_fp: str=None,
         pred_fp: str=None,
         distributed: bool=False,
         batches_ahead: int=3,
@@ -106,6 +106,7 @@ class FFCVDataModel(L.LightningDataModule):
         super().__init__()
         self.train_fp = Path(train_fp).expanduser()
         self.val_fp = Path(val_fp).expanduser()
+        self.cal_fp = Path(cal_fp).expanduser()
         if pred_fp is not None:
             self.pred_fp = Path(pred_fp).expanduser()
 
@@ -176,6 +177,17 @@ class FFCVDataModel(L.LightningDataModule):
         print('time taken for val dataloader: ', time.time()-t0)
         return self.test_loader
     
+    def cal_dataloader(self):
+        t0 = time.time()
+        if hasattr(self, 'cal_loader'):
+            self.cal_loader.close()
+            return self.cal_loader
+        print('loading from: ', self.cal_fp)
+        self.cal_loader = FFCVDataIter(self.cal_fp, self.batch_size, num_workers=self.num_workers,
+                distributed=self.distributed, batches_ahead=self.batches_ahead,
+                order='SEQUENTIAL', os_cache=self.os_cache, drop_last=False)
+        print('time taken for cal dataloader: ', time.time()-t0)
+        return self.cal_loader
 
     # def predict_dataloader(self):
     #     t0 = time.time()

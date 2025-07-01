@@ -238,7 +238,6 @@ class XceptionS2MixOrder(BaseModel):
     """
 
     def __init__(self, 
-                 
                  activation_layer: nn.Module,
                  norm_layer: str,
                  mid_block: str,
@@ -309,6 +308,23 @@ class XceptionS2MixOrder(BaseModel):
                 print('Unfreeze last layer (mean regressor)... args.freeze_last_mean={}'.format(self.freeze_last_mean))
                 for param in self.last_conv.parameters():
                     param.requires_grad = True
+                    
+
+        # self.fuse_model()
+        # self.qconfig = torch.ao.quantization.get_default_qat_qconfig('x86')
+        # torch.ao.quantization.prepare_qat(self, inplace=True) # performs fake quantization
+        # self.quant = QuantStub()
+        # self.dequant = DeQuantStub()
+                    
+    
+    def fuse_model(self):
+        for name, module in self.named_modules():
+            if 'ConvNormActivation' in name.split('.')[-1]:
+                torch.ao.quantization.fuse_modules_qat(module, ['0', '1', '2'], inplace=True)
+            elif 'ConvNorm' in name.split('.')[-1]:
+                torch.ao.quantization.fuse_modules_qat(module, ['0', '1'], inplace=True)
+            elif name.split('.')[-1] == 'shortcut' and len(module) == 2:
+                torch.ao.quantization.fuse_modules_qat(module, ['conv_shortcut', 'bn_shortcut'], inplace=True)
 
 
     def forward(self, x):
@@ -316,6 +332,7 @@ class XceptionS2MixOrder(BaseModel):
         Args:
             x: input tensor: first 12 channels are sentinel-2 bands, last 3 channels are lat lon encoding
         """
+        # x = self.quant(x)
         x = self.entry_block(x)
         if self.long_skip:
             shortcut = x
@@ -323,7 +340,7 @@ class XceptionS2MixOrder(BaseModel):
         if self.long_skip:
             x = x + shortcut
         predictions = self.last_conv(x)
-
+        # predictions = self.dequant(predictions)
         return predictions
     
 
