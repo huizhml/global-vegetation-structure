@@ -18,8 +18,7 @@ from lightning.pytorch.loggers import Logger
 from lightning.pytorch.utilities.rank_zero import rank_zero_warn
 from lightning.pytorch.cli import LightningArgumentParser
 from torch.optim.optimizer import Optimizer
-import modelopt.torch.quantization as mtq
-import modelopt.torch.opt as mto
+
 
 ArgsType = Optional[Union[List[str], Dict[str, Any], Namespace]]
 
@@ -27,10 +26,11 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(message)s')
 logging.getLogger()
 
 # wandb.require("core") default in wandb 0.18.0
-os.environ['USE_PYGEOS'] = '0'
+# os.environ['USE_PYGEOS'] = '0'
 os.system("taskset -c -p 0-95 %d" % os.getpid())
 os.environ['NUMEXPR_MAX_THREADS'] = '64'
 os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3,4,5,6,7'
+
 
 def namespace_to_dict(namespace):
     return {
@@ -69,20 +69,22 @@ def update_namespace_from_nested_dict(namespace, nested_dict, prefix="", partial
 
 
 class MyLightningCLI(LightningCLI):
-    def __init__(self, 
-        model_class: Optional[Union[Type[LightningModule], Callable[..., LightningModule]]] = None,
-        datamodule_class: Optional[Union[Type[LightningDataModule], Callable[..., LightningDataModule]]] = None,
-        save_config_callback: Optional[Type[SaveConfigCallback]] = SaveConfigCallback,
-        save_config_kwargs: Optional[Dict[str, Any]] = None,
-        trainer_class: Union[Type[Trainer], Callable[..., Trainer]] = Trainer,
-        trainer_defaults: Optional[Dict[str, Any]] = None,
+    def __init__(self,
+        model_class: Optional[Union[type[LightningModule], Callable[..., LightningModule]]] = None,
+        datamodule_class: Optional[Union[type[LightningDataModule], Callable[..., LightningDataModule]]] = None,
+        save_config_callback: Optional[type[SaveConfigCallback]] = SaveConfigCallback,
+        save_config_kwargs: Optional[dict[str, Any]] = None,
+        trainer_class: Union[type[Trainer], Callable[..., Trainer]] = Trainer,
+        trainer_defaults: Optional[dict[str, Any]] = None,
         seed_everything_default: Union[bool, int] = True,
-        parser_kwargs: Optional[Union[Dict[str, Any], Dict[str, Dict[str, Any]]]] = None,
+        parser_kwargs: Optional[Union[dict[str, Any], dict[str, dict[str, Any]]]] = None,
+        parser_class: type[LightningArgumentParser] = LightningArgumentParser,
         subclass_mode_model: bool = False,
         subclass_mode_data: bool = False,
         args: ArgsType = None,
         run: bool = True,
-        auto_configure_optimizers: bool = True,):
+        auto_configure_optimizers: bool = True,
+        load_from_checkpoint_support: bool = True,):
         """Receives as input pytorch-lightning classes (or callables which return pytorch-lightning classes), which are
         called / instantiated using a parsed configuration file and / or command line args.
 
@@ -130,6 +132,7 @@ class MyLightningCLI(LightningCLI):
         self.trainer_defaults = trainer_defaults or {}
         self.seed_everything_default = seed_everything_default
         self.parser_kwargs = parser_kwargs or {}
+        self.parser_class = parser_class
         self.auto_configure_optimizers = auto_configure_optimizers
 
         self.model_class = model_class
@@ -167,7 +170,7 @@ class MyLightningCLI(LightningCLI):
         if self.subcommand == 'fit' and self.config[self.subcommand].get('use_pretrained_model'):
             self.use_pretrained_model()
 
-        if self.subcommand == 'fit' and self.config[self.subcommand].get('quantize_model'):
+        if self.config[self.subcommand].get('quantize_model'):
             self.quantize_model()
 
         if self.subcommand is not None:
@@ -262,13 +265,15 @@ class MyLightningCLI(LightningCLI):
     def add_arguments_to_parser(self, parser):
         parser.add_argument("--lr_step_interval", default="step")
         parser.add_argument("--correct_bias",  type=bool, default=True)
-        parser.add_argument("--quantize_model",  type=bool, default=True)
+        parser.add_argument("--quantize_model",  type=bool, default=False)
         parser.add_argument("--use_pretrained_model",  type=bool, default=False)
         parser.add_argument("--bias_correction_column", default='me_gradual_slope_veg')
         parser.add_argument("--recalculate_bias",  type=bool, default=False)
 
     def quantize_model(self):
-        model_path = f'checkpoints/quantized_model_{self.config[self.subcommand].trainer.logger.init_args.id}.pth'
+        import modelopt.torch.quantization as mtq
+        import modelopt.torch.opt as mto
+        model_path = f'checkpoints/fake_quantized_model_{self.old_id}.pth'
         if os.path.exists(model_path):
             print('model already quantized, loading from checkpoint')
             self.model = mto.restore(self.model, model_path)
@@ -280,9 +285,6 @@ class MyLightningCLI(LightningCLI):
         # since distributed process group hasn't been initialized yet
         original_distributed = self.datamodule.distributed
         self.datamodule.distributed = False
-        cal_dataloader = self.datamodule.cal_dataloader()
-        # Restore original distributed setting
-        self.datamodule.distributed = original_distributed
         
         checkpoint = torch.load(
                 self.config[self.subcommand]['ckpt_path'],
@@ -294,14 +296,17 @@ class MyLightningCLI(LightningCLI):
         self.model = self.model.to('cuda')
 
         def forward_loop(model):
-            for sample in cal_dataloader:
-                with torch.no_grad():
-                    x = model.transform(sample[0].to('cuda'))
-                    x = model.process_slope(x, sample[3].to('cuda'))
-                    x = model.process_latlon(x, sample[4].to('cuda'), sample[5].to('cuda'))
-                    model.forward(x.float())
+            for i in range(20):
+                dataloader = self.datamodule.train_dataloader()
+                for sample in tqdm(dataloader):
+                    with torch.no_grad():
+                        x = model.transform(sample[0].to('cuda'))
+                        x = model.process_slope(x, sample[3].to('cuda'))
+                        x = model.process_latlon(x, sample[4].to('cuda'), sample[5].to('cuda'))
+                        model.forward(x.float())
         self.model = mtq.quantize(self.model, config, forward_loop)
         mto.save(self.model, model_path)
+        self.datamodule.distributed = original_distributed
 
     def parse_arguments(self, parser: LightningArgumentParser, args: ArgsType) -> None:
         """Parses command line arguments and stores it in ``self.config``."""
@@ -323,7 +328,7 @@ class MyLightningCLI(LightningCLI):
         else:
             config = self.config[subcommand]
             run_id = self.config[subcommand].trainer.logger.init_args.id
-
+        self.old_id = run_id
         # calculate the number of training steps for cosine scheduler
         if subcommand == "fit" and config.lr_scheduler:
             if config.lr_scheduler.init_args.get('num_warmup_steps') and config.lr_scheduler.init_args.get(
@@ -344,21 +349,29 @@ class MyLightningCLI(LightningCLI):
             run_path = f"{wandb_project}/{run_id}"
             run_ = api.run(run_path)
             
-            cfg = config.trainer.logger.init_args
-            if subcommand == "predict":  # NOTE: prediction will be parallelized, we don't want to log multiple predictions to the same run
-                config.trainer.logger.init_args.resume = False
-                config.trainer.logger.init_args.id = None
-                config.trainer.logger.init_args.log_model = False
-            else:
-                config.trainer.logger.init_args.resume = "must"
-            config.trainer.logger.init_args.name = run_.name
+            
             if subcommand == "fit":
                 train_fp = copy.copy(config.data.init_args.train_fp)
                 val_fp = copy.copy(config.data.init_args.val_fp)
                 cal_fp = copy.copy(config.data.init_args.cal_fp)
             elif subcommand == "test":
                 test_fp = copy.copy(config.data.init_args.test_fp)
-            if subcommand == "fit": #NOTE: resume/continue running
+            # # NOTE: resume run if training or validating or testing
+            if not config.trainer.logger.init_args.resume:
+                # Create a new run
+                config.trainer.logger.init_args.id = None
+                # evaluation, use logged config to initialize the model to be able to load the model correctly
+                try:
+                    logged_config = run_.config['config']
+                except:
+                    logged_config = {}
+                    logged_config['model'] = run_.config
+                    logged_config['model']['class_path'] = run_.config['_class_path']
+                update_namespace_from_nested_dict(config, logged_config, partial_update='model')
+                # config['model']['init_args']['evaluate_high_slope'] = True # not needed for the grouped boxplot
+            else:
+                # Resume the run, dont change the run name
+                config.trainer.logger.init_args.name = run_.name
                 model_alias = 'latest'
                 optim_config = copy.copy(config['optimizer'])
                 lr_scheduler_config = copy.copy(config['lr_scheduler'])
@@ -372,16 +385,22 @@ class MyLightningCLI(LightningCLI):
                 config['data']['init_args']['train_fp'] = train_fp
                 config['data']['init_args']['val_fp'] = val_fp
                 config['data']['init_args']['cal_fp'] = cal_fp
-            else:
-                # evaluation, use logged config to initialize the model to be able to load the model correctly
-                try:
-                    logged_config = run_.config['config']
-                except:
-                    logged_config = {}
-                    logged_config['model'] = run_.config
-                    logged_config['model']['class_path'] = run_.config['_class_path']
-                update_namespace_from_nested_dict(config, logged_config, partial_update='model')
-                # config['model']['init_args']['evaluate_high_slope'] = True # not needed for the grouped boxplot
+
+            
+            # if config.trainer.logger.init_args.resume is None:
+            #     if subcommand in ['validate', 'test'] or (subcommand == 'fit' and not config.quantize_model):
+            #         config.trainer.logger.init_args.resume = 'must'
+            #     else:
+            #         config.trainer.logger.init_args.resume = False
+            #         config.trainer.logger.init_args.id = None
+            #         config.trainer.logger.init_args.log_model = False
+            # if subcommand == "predict":  # NOTE: prediction will be parallelized, we don't want to log multiple predictions to the same run
+            #     config.trainer.logger.init_args.resume = False
+            #     config.trainer.logger.init_args.id = None
+            #     config.trainer.logger.init_args.log_model = False
+            # else:
+            #     config.trainer.logger.init_args.resume = "must"
+
 
             # check if training/validation data exists
             if subcommand == "fit" and (not os.path.exists(train_fp)):

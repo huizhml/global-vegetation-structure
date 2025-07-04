@@ -1,4 +1,5 @@
 seed_everything: 42
+quantize_model: True
 optimizer:
   class_path: torch.optim.Adam
   init_args:
@@ -64,7 +65,7 @@ model:
 
 trainer:
   accelerator: gpu
-  strategy: ddp
+  strategy: auto
     # class_path: lightning.pytorch.strategies.DDPStrategy
     # init_args:
     #   process_group_backend: gloo
@@ -87,6 +88,7 @@ trainer:
     - class_path: lightning.pytorch.callbacks.LearningRateMonitor
       init_args:
         logging_interval: step
+    - class_path: callbacks.qat_export.OnnxExportCallback
     # - class_path: callbacks.regression_metrics_logger.ErrorMetricsLogger
     #   init_args:
     #     log_every: 10
@@ -117,3 +119,4 @@ trainer:
         save_dir: logs
         log_model: 'all' # 'all' would log the model after each checkpoint being saved
         id:
+        resume: False

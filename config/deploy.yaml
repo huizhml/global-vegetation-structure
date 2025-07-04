@@ -1,0 +1,35 @@
+seed_everything: 42
+quantize_model: False
+
+data:
+  class_path: datasets._zarr_dataset_deploy.DeployDataModel
+  init_args: 
+    pred_fp: ~/data/GVS/Deploy/inference_2020.zarr 
+    tile_id: 32MQE
+    num_workers: 8
+    prediction_dir: ~/data/GVS/Deploy/2020/predictions
+    patch_size: 544
+
+model:
+  onnx_model_path: checkpoints/fake_quantized_model_finetuned1_epochs_ycfb24ae.onnx
+  transform: datasets.transforms.Normalize
+  zero_out_nonveg: False
+  filter_out_nonveg: True
+
+trainer:
+  accelerator: cpu
+  strategy: ddp
+  devices: auto
+  default_root_dir: logs/wandb
+
+
+  logger:
+      class_path: callbacks.wandb_logger.WandbLogger
+      init_args:
+        project: global-vegetation-structure-v1
+        name: test
+        job_type: train
+        save_dir: logs
+        log_model: 'all' # 'all' would log the model after each checkpoint being saved
+        id:
+        resume: False
