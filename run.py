@@ -10,7 +10,9 @@ import numpy as np
 import wandb
 import torch
 import argparse
+import atexit
 from tqdm import tqdm
+from osgeo import gdal
 from lightning import LightningModule, LightningDataModule
 from lightning.pytorch.cli import LightningCLI, SaveConfigCallback, ReduceLROnPlateau, LRSchedulerTypeUnion
 from lightning.pytorch.trainer import Trainer
@@ -18,6 +20,7 @@ from lightning.pytorch.loggers import Logger
 from lightning.pytorch.utilities.rank_zero import rank_zero_warn
 from lightning.pytorch.cli import LightningArgumentParser
 from torch.optim.optimizer import Optimizer
+from utils import create_shared_array
 
 
 ArgsType = Optional[Union[List[str], Dict[str, Any], Namespace]]
@@ -69,199 +72,7 @@ def update_namespace_from_nested_dict(namespace, nested_dict, prefix="", partial
 
 
 class MyLightningCLI(LightningCLI):
-    def __init__(self,
-        model_class: Optional[Union[type[LightningModule], Callable[..., LightningModule]]] = None,
-        datamodule_class: Optional[Union[type[LightningDataModule], Callable[..., LightningDataModule]]] = None,
-        save_config_callback: Optional[type[SaveConfigCallback]] = SaveConfigCallback,
-        save_config_kwargs: Optional[dict[str, Any]] = None,
-        trainer_class: Union[type[Trainer], Callable[..., Trainer]] = Trainer,
-        trainer_defaults: Optional[dict[str, Any]] = None,
-        seed_everything_default: Union[bool, int] = True,
-        parser_kwargs: Optional[Union[dict[str, Any], dict[str, dict[str, Any]]]] = None,
-        parser_class: type[LightningArgumentParser] = LightningArgumentParser,
-        subclass_mode_model: bool = False,
-        subclass_mode_data: bool = False,
-        args: ArgsType = None,
-        run: bool = True,
-        auto_configure_optimizers: bool = True,
-        load_from_checkpoint_support: bool = True,):
-        """Receives as input pytorch-lightning classes (or callables which return pytorch-lightning classes), which are
-        called / instantiated using a parsed configuration file and / or command line args.
 
-        Parsing of configuration from environment variables can be enabled by setting ``parser_kwargs={"default_env":
-        True}``. A full configuration yaml would be parsed from ``PL_CONFIG`` if set. Individual settings are so parsed
-        from variables named for example ``PL_TRAINER__MAX_EPOCHS``.
-
-        For more info, read :ref:`the CLI docs <lightning-cli>`.
-
-        Args:
-            model_class: An optional :class:`~lightning.pytorch.core.LightningModule` class to train on or a
-                callable which returns a :class:`~lightning.pytorch.core.LightningModule` instance when
-                called. If ``None``, you can pass a registered model with ``--model=MyModel``.
-            datamodule_class: An optional :class:`~lightning.pytorch.core.datamodule.LightningDataModule` class or a
-                callable which returns a :class:`~lightning.pytorch.core.datamodule.LightningDataModule` instance when
-                called. If ``None``, you can pass a registered datamodule with ``--data=MyDataModule``.
-            save_config_callback: A callback class to save the config.
-            save_config_kwargs: Parameters that will be used to instantiate the save_config_callback.
-            trainer_class: An optional subclass of the :class:`~lightning.pytorch.trainer.trainer.Trainer` class or a
-                callable which returns a :class:`~lightning.pytorch.trainer.trainer.Trainer` instance when called.
-            trainer_defaults: Set to override Trainer defaults or add persistent callbacks. The callbacks added through
-                this argument will not be configurable from a configuration file and will always be present for
-                this particular CLI. Alternatively, configurable callbacks can be added as explained in
-                :ref:`the CLI docs <lightning-cli>`.
-            seed_everything_default: Number for the :func:`~lightning.fabric.utilities.seed.seed_everything`
-                seed value. Set to True to automatically choose a seed value.
-                Setting it to False will avoid calling ``seed_everything``.
-            parser_kwargs: Additional arguments to instantiate each ``LightningArgumentParser``.
-            subclass_mode_model: Whether model can be any `subclass
-                <https://jsonargparse.readthedocs.io/en/stable/#class-type-and-sub-classes>`_
-                of the given class.
-            subclass_mode_data: Whether datamodule can be any `subclass
-                <https://jsonargparse.readthedocs.io/en/stable/#class-type-and-sub-classes>`_
-                of the given class.
-            args: Arguments to parse. If ``None`` the arguments are taken from ``sys.argv``. Command line style
-                arguments can be given in a ``list``. Alternatively, structured config options can be given in a
-                ``dict`` or ``jsonargparse.Namespace``.
-            run: Whether subcommands should be added to run a :class:`~lightning.pytorch.trainer.trainer.Trainer`
-                method. If set to ``False``, the trainer and model classes will be instantiated only.
-
-        """
-        self.save_config_callback = save_config_callback
-        self.save_config_kwargs = save_config_kwargs or {}
-        self.trainer_class = trainer_class
-        self.trainer_defaults = trainer_defaults or {}
-        self.seed_everything_default = seed_everything_default
-        self.parser_kwargs = parser_kwargs or {}
-        self.parser_class = parser_class
-        self.auto_configure_optimizers = auto_configure_optimizers
-
-        self.model_class = model_class
-        # used to differentiate between the original value and the processed value
-        self._model_class = model_class or LightningModule
-        self.subclass_mode_model = (model_class is None) or subclass_mode_model
-
-        self.datamodule_class = datamodule_class
-        # used to differentiate between the original value and the processed value
-        self._datamodule_class = datamodule_class or LightningDataModule
-        self.subclass_mode_data = (datamodule_class is None) or subclass_mode_data
-
-        main_kwargs, subparser_kwargs = self._setup_parser_kwargs(self.parser_kwargs)
-        self.setup_parser(run, main_kwargs, subparser_kwargs)
-        self.parse_arguments(self.parser, args)
-
-        self.subcommand = self.config["subcommand"] if run else None
-
-        self._set_seed()
-
-        self._add_instantiators()
-
-        self.before_instantiate_classes()
-        self.instantiate_classes()
-
-        correct_bias = self.subcommand in ['validate', 'test', 'predict'] and self.config[self.subcommand].correct_bias or (
-            self.config[self.subcommand].correct_bias and self.config[self.subcommand].get('quantize_model'))
-        if correct_bias:
-            self.config[self.subcommand]['model']['init_args']['evaluate_high_slope'] = True
-            self.bias_correction()
-            self.model.correct_bias = True
-        else:
-            self.model.correct_bias = False
-        
-        if self.subcommand == 'fit' and self.config[self.subcommand].get('use_pretrained_model'):
-            self.use_pretrained_model()
-
-        if self.config[self.subcommand].get('quantize_model'):
-            self.quantize_model()
-
-        if self.subcommand is not None:
-            self._run_subcommand(self.subcommand)
-
-    def use_pretrained_model(self):
-        """Load a pretrained model from a checkpoint."""
-        # Load the checkpoint into the existing model instance
-        from models.modules.xception_blocks import SepConvBlock
-        checkpoint = torch.load(self.config[self.subcommand]['ckpt_path'], weights_only=False, map_location=self.model.device)
-        self.config[self.subcommand]['ckpt_path'] = None
-        self.config_init[self.subcommand]['ckpt_path'] = None # model loaded from the checkpoint defined here
-        self.model.load_state_dict(checkpoint['state_dict'])
-        self.model.sepconv_blocks = self.model.sepconv_blocks[:3]
-        self.model.mid_block = SepConvBlock(self.model.activation_layer, norm_layer=self.model.norm_layer, in_channels=self.model.num_sepconv_filters, out_channels=self.model.num_sepconv_filters)
-        block = self.config[self.subcommand].model.init_args.nonlin_block
-        self.model.nonlin_blocks = self.model._make_sepconv_blocks(block=block, kernerl_sizes=(1, 1), num_blocks=self.config[self.subcommand].model.init_args.num_nonlin_blocks)
-
-    def bias_correction(self):
-        # check if the delta bias is logged         
-        if not self.config[self.subcommand].recalculate_bias and self.delta_bias is not None:
-            print('correct bias using logged delta bias')
-            # Load the checkpoint into the existing model instance
-            checkpoint = torch.load(self.config[self.subcommand]['ckpt_path'], weights_only=False, map_location=self.model.device)
-            self.config[self.subcommand]['ckpt_path'] = None
-            self.config_init[self.subcommand]['ckpt_path'] = None # model loaded from the checkpoint defined here
-            self.model.load_state_dict(checkpoint['state_dict'])
-            self.model.eval()
-            print(self.model.last_conv.bias)
-            if self.model.last_conv.bias.shape[0] > self.delta_bias.shape[0]:
-                self.delta_bias = torch.cat([torch.tensor(self.delta_bias), torch.zeros(12)])
-            self.model.last_conv.bias.data -= self.delta_bias
-            print(self.model.last_conv.bias)
-            return
-        print('correcting bias using training data')
-        model = self.model
-        # Load the checkpoint into the existing model instance
-        checkpoint = torch.load(self.config[self.subcommand]['ckpt_path'], weights_only=False, map_location=self.model.device)
-        self.config[self.subcommand]['ckpt_path'] = None
-        self.config_init[self.subcommand]['ckpt_path'] = None # model loaded from the checkpoint defined here
-        model.load_state_dict(checkpoint['state_dict'])
-        model.eval()
-        print(model.last_conv.bias)
-        if torch.cuda.is_available():
-            model.to('cuda')
-        
-        epochs = len(self.datamodule.train_fp)
-        self.datamodule.order = 'SEQUENTIAL'
-        for epoch in range(epochs):
-            train_dataloader = self.datamodule.train_dataloader()
-            # c = 0
-            for batch in tqdm(train_dataloader):
-                batch = [b.to(model.device) for b in batch]
-                with torch.no_grad():
-                    model.validation_step(batch, None)
-                # c += 1
-                # if c > 10:
-                #     break
-
-        errors_gradual_slope = model.val_metrics['ME/'].sum_per_error / model.val_metrics['ME/'].total
-        errors_with_steep_slope =model.val_me_with_steep_slope.sum_per_error / model.val_me_with_steep_slope.total
-        errors_gradual_slope_veg = model.val_metrics_veg['ME/'].sum_per_error / model.val_metrics_veg['ME/'].total
-
-        feature_size = errors_gradual_slope.shape[0]
-        device = model.last_conv.bias.device
-        errors = []
-        for err in [errors_gradual_slope, errors_with_steep_slope, errors_gradual_slope_veg]:
-            # correct the bias for median prediction only
-            err = torch.cat([torch.zeros((feature_size,1), device=device), err.unsqueeze(1), torch.zeros((feature_size,1), device=device)], dim=1)
-            if self.model.out_channels > err.shape[0]*3:
-                err = torch.cat([err, torch.zeros(12, device=device)])
-            else:
-                err = err.flatten()
-            errors.append(err)
-        errors = torch.stack(errors)
-        errors = errors.T
-        data = wandb.Table(
-            data=errors.tolist(),
-            columns=['me_gradual_slope', 'me_with_steep_slope', 'me_gradual_slope_veg'])
-        wandb.log({"delta_biases": data})
-
-        # last_conv.bias.data -= errors.squeeze()
-        self.delta_bias = data.get_dataframe()[self.config[self.subcommand].bias_correction_column].values
-        if self.model.last_conv.bias.shape[0] > self.delta_bias.shape[0]:
-            self.delta_bias = torch.cat([self.delta_bias, torch.zeros(12)])
-        self.model.last_conv.bias.data -= torch.tensor(self.delta_bias).to(self.model.device)
-        model.val_metrics.reset()
-        model.val_metrics_veg.reset()
-        print(model.last_conv.bias)
-            
-    
     def add_arguments_to_parser(self, parser):
         parser.add_argument("--lr_step_interval", default="step")
         parser.add_argument("--correct_bias",  type=bool, default=True)
@@ -269,45 +80,7 @@ class MyLightningCLI(LightningCLI):
         parser.add_argument("--use_pretrained_model",  type=bool, default=False)
         parser.add_argument("--bias_correction_column", default='me_gradual_slope_veg')
         parser.add_argument("--recalculate_bias",  type=bool, default=False)
-
-    def quantize_model(self):
-        import modelopt.torch.quantization as mtq
-        import modelopt.torch.opt as mto
-        model_path = f'checkpoints/fake_quantized_model_{self.old_id}.pth'
-        if os.path.exists(model_path):
-            print('model already quantized, loading from checkpoint')
-            self.model = mto.restore(self.model, model_path)
-            self.config[self.subcommand]['ckpt_path'] = None
-            self.config_init[self.subcommand]['ckpt_path'] = None
-            return
-        config = mtq.INT8_DEFAULT_CFG
-        # Temporarily disable distributed mode for calibration dataloader
-        # since distributed process group hasn't been initialized yet
-        original_distributed = self.datamodule.distributed
-        self.datamodule.distributed = False
-        
-        checkpoint = torch.load(
-                self.config[self.subcommand]['ckpt_path'],
-                weights_only=False, map_location=self.model.device)
-        self.config[self.subcommand]['ckpt_path'] = None
-        self.config_init[self.subcommand]['ckpt_path'] = None  # model loaded from the checkpoint defined here
-        self.model.load_state_dict(checkpoint['state_dict'])
-        self.model.eval()
-        self.model = self.model.to('cuda')
-
-        def forward_loop(model):
-            for i in range(20):
-                dataloader = self.datamodule.train_dataloader()
-                for sample in tqdm(dataloader):
-                    with torch.no_grad():
-                        x = model.transform(sample[0].to('cuda'))
-                        x = model.process_slope(x, sample[3].to('cuda'))
-                        x = model.process_latlon(x, sample[4].to('cuda'), sample[5].to('cuda'))
-                        model.forward(x.float())
-        self.model = mtq.quantize(self.model, config, forward_loop)
-        mto.save(self.model, model_path)
-        self.datamodule.distributed = original_distributed
-
+    
     def parse_arguments(self, parser: LightningArgumentParser, args: ArgsType) -> None:
         """Parses command line arguments and stores it in ``self.config``."""
         if args is not None and len(sys.argv) > 1:
@@ -415,7 +188,7 @@ class MyLightningCLI(LightningCLI):
             else:
                 artifact = artifacts[model_alias]
             # artifact = run_.use_artifact(f'model-{run_id}:best', type='model')
-            ckpt_path = artifact.file()
+            ckpt_path = artifact.file() #TODO: replace by get_wandb_model in utils
             self.config[subcommand].ckpt_path = ckpt_path
 
             # check if bias correction has been done and delta bias has been logged
@@ -430,6 +203,180 @@ class MyLightningCLI(LightningCLI):
             else:    
                 self.delta_bias = None
 
+    def before_instantiate_classes(self):
+        # create  shared memory array for caching predictions
+        if self.subcommand == 'predict' and self.config[self.subcommand]['data']['init_args'].get('cache_predictions'):
+            import zarr
+            from pathlib import Path
+            tile_id = self.config[self.subcommand]['data']['init_args'].get("tile_id")
+            zarr_store_path = Path(self.config[self.subcommand]['data']['init_args']['pred_fp']).expanduser()
+            try:
+                store = zarr.open(zarr_store_path, mode='r')
+            except Exception as e:
+                print(f'Error opening zarr store: {e}, conda activate py3!')
+            if zarr_store_path.name.endswith('.zarr'):
+                key = f'{tile_id}/'
+            else:
+                key = '' # open a group as a store
+            img_width, img_height = store[f'{key}s2'].shape[2:]
+            if self.config[self.subcommand]['data']['init_args'].get('predict_full_profile'):
+                size = (303, img_width, img_height) 
+            else:
+                size = (2, img_width, img_height)
+            
+            dtype = self.config[self.subcommand]['data']['init_args']['output_dtype']
+            shm = create_shared_array(f'full_pred_{tile_id}', size, dtype)
+            atexit.register(lambda: shm.close())
+            atexit.register(lambda: shm.unlink())
+
+    
+    def after_instantiate_classes(self):
+        correct_bias = self.subcommand in ['validate', 'test', 'predict'] and self.config[self.subcommand].correct_bias or (
+            self.config[self.subcommand].correct_bias and self.config[self.subcommand].get('quantize_model'))
+        if correct_bias:
+            self.config[self.subcommand]['model']['init_args']['evaluate_high_slope'] = True
+            self.bias_correction()
+            self.model.correct_bias = True
+        else:
+            self.model.correct_bias = False
+        
+        if self.subcommand == 'fit' and self.config[self.subcommand].get('use_pretrained_model'):
+            self.use_pretrained_model()
+
+        if self.config[self.subcommand].get('quantize_model'):
+            self.quantize_model()
+
+    def bias_correction(self):
+        # check if the delta bias is logged         
+        if not self.config[self.subcommand].recalculate_bias and self.delta_bias is not None:
+            print('correct bias using logged delta bias')
+            # Load the checkpoint into the existing model instance
+            checkpoint = torch.load(self.config[self.subcommand]['ckpt_path'], weights_only=False, map_location=self.model.device)
+            self.config[self.subcommand]['ckpt_path'] = None
+            self.config_init[self.subcommand]['ckpt_path'] = None # model loaded from the checkpoint defined here
+            self.model.load_state_dict(checkpoint['state_dict'])
+            self.model.eval()
+            if self.model.last_conv.bias.shape[0] > self.delta_bias.shape[0]:
+                self.delta_bias = torch.cat([torch.tensor(self.delta_bias), torch.zeros(12)])
+            self.model.last_conv.bias.data -= self.delta_bias
+            return
+        print('correcting bias using training data')
+        model = self.model
+        # Load the checkpoint into the existing model instance
+        checkpoint = torch.load(self.config[self.subcommand]['ckpt_path'], weights_only=False, map_location=self.model.device)
+        self.config[self.subcommand]['ckpt_path'] = None
+        self.config_init[self.subcommand]['ckpt_path'] = None # model loaded from the checkpoint defined here
+        model.load_state_dict(checkpoint['state_dict'])
+        model.eval()
+        print(model.last_conv.bias)
+        if torch.cuda.is_available():
+            model.to('cuda')
+        
+        epochs = len(self.datamodule.train_fp)
+        self.datamodule.order = 'SEQUENTIAL'
+        for epoch in range(epochs):
+            train_dataloader = self.datamodule.train_dataloader()
+            # c = 0
+            for batch in tqdm(train_dataloader):
+                batch = [b.to(model.device) for b in batch]
+                with torch.no_grad():
+                    model.validation_step(batch, None)
+                # c += 1
+                # if c > 10:
+                #     break
+
+        errors_gradual_slope = model.val_metrics['ME/'].sum_per_error / model.val_metrics['ME/'].total
+        errors_with_steep_slope =model.val_me_with_steep_slope.sum_per_error / model.val_me_with_steep_slope.total
+        errors_gradual_slope_veg = model.val_metrics_veg['ME/'].sum_per_error / model.val_metrics_veg['ME/'].total
+
+        feature_size = errors_gradual_slope.shape[0]
+        device = model.last_conv.bias.device
+        errors = []
+        for err in [errors_gradual_slope, errors_with_steep_slope, errors_gradual_slope_veg]:
+            # correct the bias for median prediction only
+            err = torch.cat([torch.zeros((feature_size,1), device=device), err.unsqueeze(1), torch.zeros((feature_size,1), device=device)], dim=1)
+            if self.model.out_channels > err.shape[0]*3:
+                err = torch.cat([err, torch.zeros(12, device=device)])
+            else:
+                err = err.flatten()
+            errors.append(err)
+        errors = torch.stack(errors)
+        errors = errors.T
+        data = wandb.Table(
+            data=errors.tolist(),
+            columns=['me_gradual_slope', 'me_with_steep_slope', 'me_gradual_slope_veg'])
+        wandb.log({"delta_biases": data})
+
+        # last_conv.bias.data -= errors.squeeze()
+        self.delta_bias = data.get_dataframe()[self.config[self.subcommand].bias_correction_column].values
+        if self.model.last_conv.bias.shape[0] > self.delta_bias.shape[0]:
+            self.delta_bias = torch.cat([self.delta_bias, torch.zeros(12)])
+        self.model.last_conv.bias.data -= torch.tensor(self.delta_bias).to(self.model.device)
+        model.val_metrics.reset()
+        model.val_metrics_veg.reset()
+        print(model.last_conv.bias)
+
+    def sync_data_to_scratch(self):
+        from pathlib import Path
+        import shutil
+        pred_fp = Path(self.config[self.subcommand]['data']['init_args']['pred_fp']).expanduser()
+        tile_id = self.config[self.subcommand]['data']['init_args']['tile_id']
+        pred_fp = Path(pred_fp).expanduser() / tile_id
+        shutil.copytree(pred_fp, f'/scratch/{tile_id}')
+        self.config[self.subcommand]['data']['init_args']['pred_fp'] = f'/scratch/{tile_id}'
+    
+    
+    def quantize_model(self):
+        import modelopt.torch.quantization as mtq
+        import modelopt.torch.opt as mto
+        model_path = f'checkpoints/fake_quantized_model_{self.old_id}.pth'
+        if os.path.exists(model_path):
+            print('model already quantized, loading from checkpoint')
+            self.model = mto.restore(self.model, model_path)
+            self.config[self.subcommand]['ckpt_path'] = None
+            self.config_init[self.subcommand]['ckpt_path'] = None
+            return
+        config = mtq.INT8_DEFAULT_CFG
+        # Temporarily disable distributed mode for calibration dataloader
+        # since distributed process group hasn't been initialized yet
+        original_distributed = self.datamodule.distributed
+        self.datamodule.distributed = False
+        
+        checkpoint = torch.load(
+                self.config[self.subcommand]['ckpt_path'],
+                weights_only=False, map_location=self.model.device)
+        self.config[self.subcommand]['ckpt_path'] = None
+        self.config_init[self.subcommand]['ckpt_path'] = None  # model loaded from the checkpoint defined here
+        self.model.load_state_dict(checkpoint['state_dict'])
+        self.model.eval()
+        self.model = self.model.to('cuda')
+
+        def forward_loop(model):
+            for i in range(20):
+                dataloader = self.datamodule.train_dataloader()
+                for sample in tqdm(dataloader):
+                    with torch.no_grad():
+                        x = model.transform(sample[0].to('cuda'))
+                        x = model.process_slope(x, sample[3].to('cuda'))
+                        x = model.process_latlon(x, sample[4].to('cuda'), sample[5].to('cuda'))
+                        model.forward(x.float())
+        self.model = mtq.quantize(self.model, config, forward_loop)
+        mto.save(self.model, model_path)
+        self.datamodule.distributed = original_distributed
+
+    def use_pretrained_model(self):
+        """Load a pretrained model from a checkpoint."""
+        # Load the checkpoint into the existing model instance
+        from models.modules.xception_blocks import SepConvBlock
+        checkpoint = torch.load(self.config[self.subcommand]['ckpt_path'], weights_only=False, map_location=self.model.device)
+        self.config[self.subcommand]['ckpt_path'] = None
+        self.config_init[self.subcommand]['ckpt_path'] = None # model loaded from the checkpoint defined here
+        self.model.load_state_dict(checkpoint['state_dict'])
+        self.model.sepconv_blocks = self.model.sepconv_blocks[:3]
+        self.model.mid_block = SepConvBlock(self.model.activation_layer, norm_layer=self.model.norm_layer, in_channels=self.model.num_sepconv_filters, out_channels=self.model.num_sepconv_filters)
+        block = self.config[self.subcommand].model.init_args.nonlin_block
+        self.model.nonlin_blocks = self.model._make_sepconv_blocks(block=block, kernerl_sizes=(1, 1), num_blocks=self.config[self.subcommand].model.init_args.num_nonlin_blocks)
+    
     # override from
     # https://github.com/Lightning-AI/pytorch-lightning/blob/f3f10d460338ca8b2901d5cd43456992131767ec/src/lightning/pytorch/cli.py#L605-L606
     def configure_optimizers(
