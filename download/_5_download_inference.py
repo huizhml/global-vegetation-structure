@@ -23,7 +23,7 @@ import zarr
 from hydra.core.config_store import ConfigStore
 from dataclasses import dataclass, field
 import warnings
-
+import os
 from download._utils import utm_to_wgs84, build_parquet_file_table, filter_parquet_files, row_to_stac_item, get_patch
 from download._const import S2_ITEM_PROPS, STAC_ITEM_KEYS
 from download._dask_downloader import DaskDownloader
@@ -62,18 +62,53 @@ class WorldS2(DaskDownloader):
                     n_parallel: int = 8,
                     n_iamges_per_tile: int = 20,
                     total_splits: int = 21,
+                    output_format: str = 'h5',
                     debug: bool=False,
                     **kwargs):
         super().__init__(n_parallel=n_parallel, max_retries=3, **kwargs)
         self.total_splits = total_splits
         self.n_tiles_per_split = 900 # for total_splits = 21
         self.n_iamges_per_tile = n_iamges_per_tile
+        self.output_format = output_format
         self.s2_parquet = Path(s2_parquet).expanduser()
         self.wc_parq_file = Path(wc_parq_file).expanduser()
         self.save_dir = Path(f'{save_dir}').expanduser()
         self.save_dir.mkdir(exist_ok=True, parents=True)
-        (self.save_dir/f'{year}').mkdir(exist_ok=True, parents=True)
-        self.store_name = f'{store_name}_{year}.zarr'
+        (self.save_dir / f'{year}').mkdir(exist_ok=True, parents=True) # for download flags
+        
+        chunk_size = 1024
+        if output_format == 'zarr':
+            compressor = zarr.codecs.BloscCodec(cname=comp_name, clevel=comp_level)
+            self.store_name = f'{store_name}_{year}.zarr'
+            self.comp = {
+                        's2': {
+                            "compressors": compressor,
+                            # "shards": (1, 1, shard_size, shard_size),
+                            "chunks": (1, 1, chunk_size, chunk_size)
+                        },
+                        'esa_wc': {
+                            "compressors": compressor,
+                            # "shards": (shard_size, shard_size),
+                            "chunks": (chunk_size, chunk_size)
+                        }
+                    }
+        elif output_format == 'h5':
+            self.store_name = f'{store_name}_{year}'
+            (self.save_dir/f'{self.store_name}').mkdir(exist_ok=True, parents=True)
+            self.comp = { # don't compress, too slow
+                's2': {
+                    'zlib': False,
+                    # "compressors": None,
+                    # "shards": (1, 1, shard_size, shard_size),
+                    "chunksizes": (1, 1, chunk_size, chunk_size)
+                },
+                'esa_wc': {
+                    'zlib': False,
+                    # "compressors": None,
+                    # "shards": (shard_size, shard_size),
+                    "chunksizes": (chunk_size, chunk_size)
+                }
+            }
         self.max_cloud_cover = max_cloud_cover
         self.max_water_percentage = max_water_percentage
         self.debug = debug
@@ -83,20 +118,7 @@ class WorldS2(DaskDownloader):
             'B01', 'B04', 'B03', 'B02', 'B05', 'B06', 'B07', 'B08', 'B8A',
             'B09', 'B11', 'B12', 'SCL'
         ]
-        compressor = zarr.codecs.BloscCodec(cname=comp_name, clevel=comp_level)
-        chunk_size = 1024
-        self.comp = {
-            's2': {
-                "compressors": compressor,
-                # "shards": (1, 1, shard_size, shard_size),
-                "chunks": (1, 1, chunk_size, chunk_size)
-            },
-            'esa_wc': {
-                "compressors": compressor,
-                # "shards": (shard_size, shard_size),
-                "chunks": (chunk_size, chunk_size)
-            }
-        }
+        
         
         
     def download_by_api_query(self, specified_tiles=None, collection_id='sentinel-2-l2a', **kwargs):
@@ -114,6 +136,10 @@ class WorldS2(DaskDownloader):
             
     @delayed
     def query_and_download_tile(self, tile, row,wc_df,collection_id='sentinel-2-l2a'):
+        '''
+        For downloading Sentinel-2 images from 2017, no metadata saved for this year. 
+        And the bulk downloading was not working becuase Microsoft may move the metadata parquet files to somewhere else.
+        '''
         file = self.save_dir / f'{self.store_name}'
         flag = self.save_dir / f'{self.year}/{tile}_done'
         if flag.exists():
@@ -194,12 +220,7 @@ class WorldS2(DaskDownloader):
             print(f'Downloading S2 images for specified tiles: {specified_tiles}')
         else:
             postfix = ''
-        if job_id >= self.total_splits:
-            raise ValueError(f'Job ID {job_id} is greater than the total number of splits {self.total_splits}')
-        files = self.save_dir.glob(f'deploy_s2_items_{self.year}*{postfix}.parquet')
-        if specified_tiles is None and len(list(files)) < self.total_splits or (specified_tiles is not None and len(list(files)) < 1):
-            s2_df = self.retrive_s2_items(specified_tiles=specified_tiles)
-            
+        
         if specified_tiles is None:
             s2_df = gpd.read_parquet(self.save_dir / f'deploy_s2_items_{self.year}_part{job_id}.parquet')
         else:
@@ -261,17 +282,21 @@ class WorldS2(DaskDownloader):
         del images.attrs['spec']
         del images.attrs['crs']
         ds = xr.merge([images, wc_image], join='outer')
-        if file.exists():
-            try:
-                print('saveing to ', file)
-                store = ds.to_zarr(file, mode='a', group=f'{tile}', encoding=self.comp)
-                print(store)
+        if self.output_format == 'zarr':
+            if file.exists():
+                try:
+                    print('saveing to ', file)
+                    store = ds.to_zarr(file, mode='a', group=f'{tile}', encoding=self.comp)
+                    print(store)
+                    flag.touch()
+                except Exception as err:
+                    print(err)
+                    print(f'{tile} failed')
+            else:
+                ds.to_zarr(file, mode='w', group=f'{tile}', encoding=self.comp)
                 flag.touch()
-            except Exception as err:
-                print(err)
-                print(f'{tile} failed')
-        else:
-            ds.to_zarr(file, mode='w', group=f'{tile}', encoding=self.comp)
+        elif self.output_format == 'h5':
+            ds.to_netcdf(file / f'{tile}.h5', engine='h5netcdf', encoding=self.comp)
             flag.touch()
 
     def check_images_per_tile(self):
@@ -304,11 +329,19 @@ class WorldS2(DaskDownloader):
         return df
 
 
-    def retrive_s2_items(self,specified_tiles=None):
+    def retrive_s2_items(self, total_splits, specified_tiles=None):
         '''
         Retrieve metadata of the top 10 least cloud covered images for each S2 tile using S2 snapshot
         15019 S2 tiles in land area.
         '''
+        # check s2 metadata file completeness
+        files = self.save_dir.glob(f'deploy_s2_items_{self.year}*{postfix}.parquet')
+        if len(list(files)) == total_splits:
+            print(f'There are {len(list(files))} previously generated s2 metadata files, which is equal to the desired {total_splits} splits, skipping...')
+            return
+        if specified_tiles is None and len(list(files)) > 0 and len(list(files)) < total_splits:
+            print(f'There are {len(list(files))} previously generated s2 metadata files, but less than desired {total_splits} splits,  removing them and regenerating...')
+            os.remove(self.save_dir / f'deploy_s2_items_{self.year}*.parquet')
         print(f'Downloading STAC parquet files for Sentinel-2')
         s2_tiles_df = pd.read_parquet(self.s2_parquet, columns=['Name', 'growing_months'])
         s2_tiles_df = s2_tiles_df.set_index('Name')
@@ -323,7 +356,7 @@ class WorldS2(DaskDownloader):
 
         if specified_tiles is None:
             tiles = s2_tiles_df.index.drop_duplicates().tolist()
-            tiles_list = [tiles[i*self.n_tiles_per_split:(i+1)*self.n_tiles_per_split] for i in range(self.total_splits)]
+            tiles_list = [tiles[i*self.n_tiles_per_split:(i+1)*self.n_tiles_per_split] for i in range(total_splits)]
             postfix = ''
         else:
             tiles_list = [specified_tiles]
@@ -451,12 +484,13 @@ def main(cfg):
 
 if __name__ == '__main__':
 
-    from dask.distributed import Client, LocalCluster, performance_report
+    from dask.distributed import Client, LocalCluster
     from dask import config
-    config.set({'distributed.scheduler.locks.lease-timeout': 60000000000000}) 
+    dask.config.set({"distributed.worker.profile.enabled": False})
+    config.set({'distributed.scheduler.locks.lease-timeout': 6000000}) 
     # might fix the communication error caused by I/O. ref: https://github.com/dask/distributed/issues/3129#issuecomment-1684858307
     dask.config.set({"distributed.comm.retry.count": 10})
-    dask.config.set({"distributed.comm.timeouts.connect": 60000000000000})
+    dask.config.set({"distributed.comm.timeouts.connect": 6000000})
     dask.config.set({'dataframe.query-planning': False})  # NOTE: dask expr causes the computing of s2 geoparqut hanging
     # NOTE: avoid coverting the assets dict to a long string of type string[pyarrow]
     dask.config.set({"dataframe.convert-string": False})
