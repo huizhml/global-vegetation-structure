@@ -63,7 +63,7 @@ model:
 
 trainer:
   accelerator: gpu
-  strategy: auto
+  strategy: ddp
     # class_path: lightning.pytorch.strategies.DDPStrategy
     # init_args:
     #   process_group_backend: gloo
@@ -80,7 +80,7 @@ trainer:
   #   class_path: lightning.pytorch.profilers.PyTorchProfiler
   #   init_args:
   #     sort_by_key: self_cpu_memory_usage
-  sync_batchnorm: True
+  sync_batchnorm: False
   # enable_checkpointing: False
   callbacks:
     - class_path: lightning.pytorch.callbacks.LearningRateMonitor

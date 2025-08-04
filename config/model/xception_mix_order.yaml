@@ -1,7 +1,7 @@
 class_path: models.xception_s2.XceptionS2MixOrder
 init_args:
-  in_channels: 12
-  out_channels: 303
+  in_channels: 15
+  out_channels: 315
   entry_block_filters: [128, 256]
   long_skip: True
   activation_layer: torch.nn.ReLU

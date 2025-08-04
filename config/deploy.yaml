@@ -9,9 +9,10 @@ data:
     num_workers: 8
     prediction_dir: ~/data/GVS/Deploy/2020/predictions
     patch_size: 544
+    input_lat_lon: True
 
 model:
-  onnx_model_path: checkpoints/fake_quantized_model_finetuned1_epochs_ycfb24ae.onnx
+  onnx_model_path: checkpoints/model_cg11fpjr_fp16.onnx
   transform: datasets.transforms.Normalize
   zero_out_nonveg: False
   filter_out_nonveg: True

@@ -18,8 +18,12 @@ data:
   init_args: 
     pred_fp: ~/data/GVS/Deploy/inference_2020.zarr 
     tile_id: 32MQE
-    num_workers: 8
-    prediction_dir: ~/data/GVS/Deploy/predictions_2020
+    num_workers: 4
+    batch_size: 1
+    prediction_dir: ~/data/GVS/Deploy/2020/predictions
+    output_dtype: int16
+    cache_predictions: False
+
 
 model:
   class_path: models.unet.UNet
@@ -56,7 +60,7 @@ model:
 
 trainer:
   accelerator: gpu
-  # strategy: auto
+  strategy: auto
   devices: auto
   default_root_dir: logs/wandb
   # val_check_interval: 100000
@@ -70,12 +74,8 @@ trainer:
   #   class_path: lightning.pytorch.profilers.PyTorchProfiler
   #   init_args:
   #     sort_by_key: self_cpu_memory_usage
-  sync_batchnorm: True
+  sync_batchnorm: False
   # enable_checkpointing: False
-  # callbacks:
-  #   - class_path: callbacks.image_writer.ImageWriter
-  #     init_args:
-  #       output_format: cog_dask
 
   logger:
       class_path: callbacks.wandb_logger.WandbLogger
@@ -84,5 +84,7 @@ trainer:
         name: test
         job_type: train
         save_dir: logs
-        log_model: True # 'all' would log the model after each epoch
         id:
+        # Don't change below
+        log_model: False # 'all' would log the model after each epoch
+        resume: False
