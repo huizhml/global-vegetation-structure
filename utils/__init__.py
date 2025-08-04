@@ -5,6 +5,8 @@ from datetime import datetime
 from pyproj import Transformer
 import torch
 import numpy as np
+from multiprocessing import shared_memory
+from typing import Union
 
 def setup_default_logging(log_path, string = 'Train', default_level=logging.INFO,
                           format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s"):
@@ -126,3 +128,26 @@ def print_size_of_model(model):
     torch.save(model.state_dict(), "temp.p")
     print('Size (MB):', os.path.getsize("temp.p")/1e6)
     os.remove('temp.p')
+
+
+def create_shared_array(name: str, shape, dtype=np.float32):
+    dtype = np.dtype(dtype)
+    shm = shared_memory.SharedMemory(create=True, size=np.prod(shape) * dtype.itemsize, name=name)
+    array = np.ndarray(shape, dtype=dtype, buffer=shm.buf)
+    array[:] = -1  # initialize cache with dummy values
+    return shm
+
+
+def get_wandb_ckpt_path(run= None, run_id: str=None, wandb_project: str=None, model_alias: Union[str, int] = 'best'):
+    if run is None:
+        import wandb
+        api = wandb.Api()
+        run = api.run(f"{wandb_project}/{run_id}")
+    artifacts = run.logged_artifacts()
+    artifacts = [artifact for artifact in artifacts if artifact.type == 'model']
+    if isinstance(model_alias, str):
+        artifact = [art for art in artifacts if model_alias in art.aliases][0]
+    else:
+        artifact = artifacts[model_alias]
+    ckpt_path = artifact.file()
+    return ckpt_path
