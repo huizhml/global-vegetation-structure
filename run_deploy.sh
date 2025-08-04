@@ -1,8 +1,10 @@
 #!/bin/bash
 ##SBATCH --account=project_465001846
 #SBATCH --partition=ml4good
-##SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=4
+#SBATCH --ntasks=1
+#SBATCH --mincpus=4
+#SBATCH --nodes=1
 #SBATCH --mem=48G
 #SBATCH --gres=gpu:1
 #SBATCH --time=24-00:00:00

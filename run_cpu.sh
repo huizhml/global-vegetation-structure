@@ -32,7 +32,7 @@ else
     echo "Host is $hostname. Translate from $input_dir"
 fi
 
-input_dir=/scratch/predictions_${year}
+# input_dir=/scratch/predictions_${year}
 
 tile_id_file=${HOME}/data/GVS/Deploy/deploy_s2_items_${year}_part${part}.txt
 echo "Translate tiles from $tile_id_file"
@@ -51,9 +51,9 @@ while true; do
             else
                 echo "Prediction command completed successfully"
                 rm -rf $input_dir/${tile_id}_GTiff
+                touch ${translate_flag}
             fi
             echo "***************************** END INFERENCE *****************************"
-            touch ${translate_flag}
         fi
     done < "$tile_id_file"  
 done

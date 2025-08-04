@@ -1,7 +1,7 @@
 #!/bin/bash
 ##SBATCH --account=project_465001846
-#SBATCH --partition=gpu
-#SBATCH --ntasks-per-node=1
+#SBATCH --partition=ml4good
+##SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=128G
 #SBATCH --gres=gpu:l40s:1
@@ -111,26 +111,82 @@ max_epochs=${max_epochs:-200}
 subcommand=${subcommand:-fit}
 case $id in
 
+80)
+echo run onnx inference
+tile_id=32MQE
+year=2020
+comp=None
+level=7
+python run.py predict -c config/deploy.yaml \
+        --data.init_args.input_lat_lon True \
+        --data.init_args.num_workers 8 \
+        --data.init_args.tile_id $tile_id \
+        --data.init_args.pred_fp ~/data/GVS/Deploy/inference_${year}.zarr \
+        --data.init_args.prediction_dir ~/data/GVS/Deploy/predictions_${year} \
+        --correct_bias False \
+        --data.init_args.comp_level $level \
+        --data.init_args.compression $comp \
+        --data.init_args.patch_size 544 \
+        --data.init_args.chunk_size 512 \
+        --data.init_args.output_format cog \
+        --model.init_args.onnx_model_path checkpoints/fake_quantized_model_finetuned1_epochs_ycfb24ae.onnx \
+        --trainer.logger.init_args.resume False \
+        --trainer.logger.init_args.name QR_veg_geo_lc_QAT_inference_test
+;;
 # ====================================================================================
 # Quantization-aware training
 # ====================================================================================
 70)
+# ******************************
+# 1. Need multiple GPUs, I got CUDA out of memory error when using 1 GPU
+# 2. Takes about 15min to train one epoch 7min to evaluate one epoch on 4 L40s
+
+# ******************************
+max_epochs=100
 sync_data_to_scratch
-echo $run_id
-echo quantization-aware training;
-python run.py fit -c config/train.yaml --model config/model/xception_mix_order.yaml \
+echo "$data_dir/$val_data_name.beton"
+ls "$data_dir/$val_data_name.beton"
+echo QAT finetuning;
+module load gcc/11.2.0
+run_id=cg11fpjr
+python run.py $subcommand -c config/qat.yaml --model config/model/xception_mix_order.yaml \
         --data.init_args.train_fp "$data_dir/$train_data_name.beton" \
         --data.init_args.val_fp "$data_dir/$val_data_name.beton" \
-        --data.init_args.batch_size 4096 \
+        --data.init_args.cal_fp "$data_dir/$train_data_name.beton" \
+        --data.init_args.distributed True \
         --model.init_args.out_channels 315 \
         --model.init_args.loss_fc.class_path models.losses.quantile_ce_loss.QuantileCELoss \
         --model.init_args.feed_latlon True \
         --model.init_args.filter_out_nonveg True \
         --model.init_args.in_channels 15 \
+        --quantize_model True \
+        --correct_bias False \
         --trainer.max_epochs $max_epochs \
-        --trainer.callbacks+=pytorch_lightning.callbacks.QuantizationAwareTraining \
         --trainer.logger.init_args.id $run_id \
-        --trainer.logger.init_args.name QR_veg_geo_lc_QAT
+        --trainer.logger.init_args.name QR_veg_geo_lc_QAT_finetune
+        ;;
+71)
+echo Calibrate model for QAT
+sync_data_to_scratch
+echo "$data_dir/$val_data_name.beton"
+ls "$data_dir/$val_data_name.beton"
+echo Using Xception;
+module load gcc/11.2.0
+python run.py fit -c config/qat.yaml --model config/model/xception_mix_order.yaml \
+        --data.init_args.train_fp "$data_dir/$train_data_name.beton" \
+        --data.init_args.val_fp "$data_dir/$val_data_name.beton" \
+        --data.init_args.distributed False \
+        --data.init_args.batch_size 1024 \
+        --data.init_args.order 'SEQUENTIAL' \
+        --model.init_args.out_channels 315 \
+        --model.init_args.loss_fc.class_path models.losses.quantile_ce_loss.QuantileCELoss \
+        --model.init_args.feed_latlon True \
+        --model.init_args.filter_out_nonveg True \
+        --model.init_args.in_channels 15 \
+        --quantize_model True \
+        --correct_bias False \
+        --trainer.logger.init_args.id $run_id \
+        --trainer.logger.init_args.name QR_veg_geo_lc_QAT_test
 ;;
 
 # ====================================================================================
@@ -182,51 +238,87 @@ python run.py fit -c config/train_naturalness.yaml \
 
 50)
 # ******************************
-# 1. Need 128GB memory
+# 1. Need 48GB memory
 # 2. Takes about 21 min to predict one tile on one L40s (write 2 bands)
 # 3. Takes about 31 min to predict one tile on one L40s (write all 303 bands)
 # ******************************
-echo predict tiles 
-tile_id=32MQE
-year=2017
+echo predict tiles on Hendrix
+tile_id=20XNR # 32MQE
+year=2024
 run_id=cg11fpjr
-comp=$comp
-level=$SLURM_ARRAY_TASK_ID
-echo run prediction for model $run_id for tile $tile_id;
-python run.py predict -c config/predict.yaml --model config/model/xception_mix_order.yaml \
-        --optimizer.init_args.lr 0.0001 \
-
-        --data.init_args.input_lat_lon True \
-        --data.init_args.num_workers 8 \
-        --data.init_args.tile_id $tile_id \
-        --data.init_args.pred_fp ~/data/GVS/Deploy/inference_${year}.zarr \
-        --data.init_args.prediction_dir ~/data/GVS/Deploy/predictions_${year} \
-        --correct_bias True \
-        --data.init_args.comp_level $level \
-        --data.init_args.compression $comp \
-        --data.init_args.patch_size 544 \
-        --data.init_args.chunk_size 512 \
-        --data.init_args.output_format cog \
-        --trainer.logger.init_args.resume False \
-        --trainer.logger.init_args.id $run_id
+echo run prediction for model $run_id for tile $tile_id in year $year;
+        python run.py predict -c config/predict.yaml --model config/model/xception_mix_order.yaml \
+                --data.init_args.input_lat_lon True \
+                --data.init_args.num_workers 4 \
+                --data.init_args.tile_id $tile_id \
+                --data.init_args.pred_fp ~/data/GVS/Deploy/inference_${year}.zarr \
+                --data.init_args.prediction_dir ~/data/GVS/Deploy/predictions_GTiff_${year}/${tile_id}_GTiff \
+                --data.init_args.year $year \
+                --correct_bias True \
+                --data.init_args.patch_size 544 \
+                --data.init_args.chunk_size 512 \
+                --data.init_args.debug False \
+                --data.init_args.predict_full_profile True \
+                --data.init_args.output_format gtiff \
+                --trainer.logger.init_args.resume False \
+                --trainer.logger.init_args.offline True \
+                --trainer.logger.init_args.id $run_id 
 ;;
 54)
 # ******************************
+# 1. Need 48GB memory
+# 2. Takes ~21 min to predict one tile on one L40s (write 2 bands)
+# 3. Takes ~31 min to predict one tile on one L40s (write all 303 bands)
+#/scratch/$tile_id
+# ******************************
+echo predict tiles on LUMI
+tile_id=20XNR # 32MQE
+year=2024
+run_id=cg11fpjr
+echo run prediction for model $run_id for tile $tile_id in year $year;
+python run.py predict -c config/predict.yaml --model config/model/xception_mix_order.yaml \
+        --data.init_args.input_lat_lon True \
+        --data.init_args.num_workers 8 \
+        --data.init_args.tile_id $tile_id \
+        --data.init_args.metadata_file ~/data/GVS/Deploy/deploy_s2_items_${year}_part0.parquet \
+        --data.init_args.pred_fp ~/data/GVS/Deploy/inference_${year} \
+        --data.init_args.prediction_dir ~/data/GVS/Deploy/predictions_GTiff_${year}/${tile_id}_GTiff \
+        --data.init_args.year $year \
+        --data.init_args.batch_size 1 \
+        --data.init_args.cache_predictions False \
+        --data.init_args.stream_input True \
+        --correct_bias True \
+        --data.init_args.compression None \
+        --data.init_args.patch_size 544 \
+        --data.init_args.chunk_size 512 \
+        --data.init_args.debug False \
+        --data.init_args.predict_full_profile True \
+        --data.init_args.output_format gtiff \
+        --trainer.logger.init_args.resume False \
+        --trainer.logger.init_args.offline False \
+        --trainer.logger.init_args.id $run_id 
+;;
+55)
+# ******************************
 # 1. Need 128GB memory
-# 2. Takes about 21 min to predict one tile on one L40s (write 2 bands)
-# 3. Takes about 31 min to predict one tile on one L40s (write all 303 bands)
+# 2. Takes ~21 min to predict one tile on one L40s (write 2 bands)
+# 3. Takes ~31 min to predict one tile on one L40s (write all 303 bands)
+#/scratch/$tile_id
 # ******************************
 echo predict tiles 
-tile_id=35NMA # 32MQE
+tile_id=32MQE # 32MQE
 year=2020
 run_id=cg11fpjr
 echo run prediction for model $run_id for tile $tile_id;
 python run.py predict -c config/predict.yaml --model config/model/xception_mix_order.yaml \
         --data.init_args.input_lat_lon True \
-        --data.init_args.num_workers 8 \
+        --data.init_args.num_workers 4 \
         --data.init_args.tile_id $tile_id \
         --data.init_args.pred_fp ~/data/GVS/Deploy/inference_${year}.zarr \
-        --data.init_args.prediction_dir ~/data/GVS/Deploy/predictions_${year}/${tile_id} \
+        --data.init_args.prediction_dir ~/data/GVS/Deploy/predictions_${year}/${tile_id}_fp32_infer \
+        --data.init_args.year $year \
+        --data.init_args.batch_size 1 \
+        --data.init_args.cache_predictions False \
         --correct_bias True \
         --data.init_args.comp_level 7 \
         --data.init_args.compression None \
@@ -234,9 +326,9 @@ python run.py predict -c config/predict.yaml --model config/model/xception_mix_o
         --data.init_args.chunk_size 512 \
         --data.init_args.debug False \
         --data.init_args.predict_full_profile False \
-        --data.init_args.output_format cog_dask \
+        --data.init_args.output_format gtiff \
         --trainer.logger.init_args.resume False \
-        --trainer.logger.init_args.id $run_id
+        --trainer.logger.init_args.id $run_id 
 ;;
 51) 
 # NOTE: takes about 1h5min on LUMI for val_filtered_v1
@@ -736,10 +828,12 @@ echo Compare networks with different width; # sbatch --array=2,4 run.sh 14
 01)
 train_data_name=debug0_filtered_v1
 val_data_name=debug1_filtered_v1
+distributed=False
 # train_data_name=train*_filtered_v1
 # val_data_name=val_filtered_v1_1m
 num_nonlin_blocks=3
 num_sepconv_filters=256
+max_epochs=1
 sync_data_to_scratch
 echo "$data_dir/$val_data_name.beton"
 ls "$data_dir/$val_data_name.beton"
@@ -748,19 +842,19 @@ module load gcc/11.2.0
 python run.py $subcommand -c config/qat.yaml --model config/model/xception_mix_order.yaml \
         --data.init_args.train_fp "$data_dir/$train_data_name.beton" \
         --data.init_args.val_fp "$data_dir/$val_data_name.beton" \
-        --data.init_args.cal_fp "$data_dir/debug1_filtered_v1.beton" \
-        --data.init_args.distributed False \
+        --data.init_args.cal_fp "$data_dir/val_filtered_v1_1m.beton" \
+        --data.init_args.distributed $distributed \
         --model.init_args.out_channels 315 \
         --model.init_args.loss_fc.class_path models.losses.quantile_ce_loss.QuantileCELoss \
         --model.init_args.feed_latlon True \
         --model.init_args.filter_out_nonveg True \
         --model.init_args.in_channels 15 \
+        --quantize_model True \
         --correct_bias False \
         --trainer.max_epochs $max_epochs \
         --trainer.logger.init_args.id $run_id \
         --trainer.logger.init_args.name QR_veg_geo_lc_QAT_test
         ;;
-
 *)
 echo runnning nothing ;;
 esac
