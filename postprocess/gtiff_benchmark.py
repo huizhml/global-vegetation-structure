@@ -8,7 +8,6 @@ import configparser
 import sys
 import subprocess
 import tempfile
-import time
 
 def parse_config(config_file='config.ini'):
     """
@@ -34,28 +33,26 @@ def parse_config(config_file='config.ini'):
 
     return config_dict
         
-def time_command(cmd=['sleep','1'], rep=1):
+def perf(cmd=['sleep','1'], rep=1):
     """
-    Use python's time module and subprocess to run a command and 
-    return the average execution time in seconds.
+    Use python's subprocess module to run a command with 'perf stat' and 
+    return the 'task-clock' part of the perf stat output.
     """
-    times = []
-    
-    for _ in range(rep):
-        start_time = time.time()
-        result = subprocess.run(cmd, stdout=subprocess.PIPE,
-                               stderr=subprocess.PIPE)
-        end_time = time.time()
-        
-        if result.returncode != 0:
-            raise Exception("Running benchmark failed as command returned a "
-                            "non-zero return code. Here are some hints "
-                            "from stderr: {}".format(result.stderr))
-        
-        times.append(end_time - start_time)
-    
-    # Return average time in seconds
-    return sum(times) / len(times)
+    command = ['perf', 'stat', '-x', '^','-r', str(rep)]
+    command.extend(cmd)
+    result = subprocess.run(command, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE)
+    if result.returncode != 0:
+        raise Exception("Running benchmark failed as perf returned a "
+                        "non-zero return code. Here are some hints "
+                        "from perf's stderr: {}".format(result.stderr))
+               
+    try:
+        return float(result.stderr.split(b'^')[0].decode("utf-8"))/1000
+    except:
+        raise Exception("Running benchmark failed for "
+                        "some reason. Here are some hints "
+                        "from perf's stderr: {}".format(result.stderr))
 
 if __name__ == '__main__':
     
@@ -70,14 +67,14 @@ if __name__ == '__main__':
                         default=os.path.join(base_dir,'input_rasters'))
     args = parser.parse_args()
     
-    # Test that timing works
-    print("Testing that timing works...")
+    # Test that perf stat is working
+    print("Testing that stat perf works...")
     try:
-        task_clock = time_command()
+        task_clock = perf()
         print("Looks good!")
     except Exception as e:
-        print("Something went wrong testing the timing command! Without "
-              "proper timing this is not going to work...")
+        print("Something went wrong testing out a stat perf command! Without "
+              "perf stat this is not going to work...")
         sys.exit(1)
     
     # Parse configuration file and input files
@@ -113,7 +110,7 @@ if __name__ == '__main__':
                 if "jpeg" in option: # JPEGSetupEncode seems to support only 8 bit only
                     cmd.extend(["ot","Byte"])
                 try:
-                    task_clock = time_command(cmd=cmd, rep=args.repetitions)
+                    task_clock = perf(cmd=cmd, rep=args.repetitions)
                     file_size = os.stat(option_file).st_size / (1024.0*1024.0)
                     compression_ratio = base_file_size / file_size
                     savings = 1 - (file_size / base_file_size)
@@ -139,7 +136,7 @@ if __name__ == '__main__':
                        '-co', 'TILED=NO', '-co', 'COMPRESS=NONE']
                        
                 try:
-                    task_clock = time_command(cmd=cmd, rep=args.repetitions)
+                    task_clock = perf(cmd=cmd, rep=args.repetitions)
                     speed = (1/task_clock) * base_file_size
                     print("READ test: Completed {} repetitions. Average time: {:.2f}s Speed: {:.2f}Mb/s".format(args.repetitions, task_clock, speed))
                 except Exception as e:
