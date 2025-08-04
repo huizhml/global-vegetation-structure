@@ -1,3 +1,4 @@
+
 from typing import List
 import time
 import dask.delayed
@@ -8,6 +9,7 @@ import math
 from pathlib import Path
 from multiprocessing import shared_memory
 from torch.utils.data import Dataset
+from osgeo import gdal
 import lightning as L
 import rasterio
 from rasterio.windows import Window
@@ -15,22 +17,19 @@ import torch.nn.functional as F
 from pyproj import Transformer
 from utils import get_dense_latlon
 import os
-import json
 from rasterio.io import MemoryFile
 from rio_cogeo.cogeo import cog_translate
 from rio_cogeo.profiles import cog_profiles
 from rasterio.transform import Affine
 import geopandas as gpd
 from shapely.geometry import box
-import h5py
-import shutil
 from download._const import S2_ITEM_PROPS
 from download._utils import get_patch, row_to_stac_item
 import dask
 import dask.array as da
-from osgeo import gdal
 from dask.distributed import get_client
-
+import h5py
+import xarray as xr
 
 MASKED_VALUE = {
     'int16': 32767,
@@ -108,6 +107,11 @@ class BaseDeployDataset(Dataset):
         self.img_width, self.img_height = self.store[f'{self.key}s2'].shape[2:]  # Get shape without loading array
         self.crs = f'EPSG:{self.store[f"{self.key}epsg"][()].item()}'
         transformer = Transformer.from_crs(self.crs, "EPSG:4326", always_xy=True)
+        n_images = self.store[f'{self.key}s2'].shape[0]
+        if n_images <= 10: # Less than 10 images available, no need to cache predictions
+            self.img_slices = [slice(None)]
+        else:
+            self.img_slices = [slice(0,10), slice(10,20)]
         
         if self.input_lat_lon:
             lon_mask = self.store[f'{self.key}x'][:].astype(np.float32) # in local crs
@@ -199,9 +203,12 @@ class BaseDeployDataset(Dataset):
                 if x_coord > x_dim - self.patch_size:
                     # move last patch left if it would exceed the image right border
                     x_coord = x_dim - self.patch_size
-                patch_coords_dict[patch_idx] = (slice(0,10), y_coord - self.border, x_coord - self.border)
-                patch_coords_dict[patch_idx+1] = (slice(10,20), y_coord - self.border, x_coord - self.border)
-                patch_idx += 2
+                for img_slice in self.img_slices:
+                    patch_coords_dict[patch_idx] = (img_slice, y_coord - self.border, x_coord - self.border)
+                    patch_idx += 1
+                # patch_coords_dict[patch_idx] = (slice(0,10), y_coord - self.border, x_coord - self.border)
+                # patch_coords_dict[patch_idx+1] = (slice(10,20), y_coord - self.border, x_coord - self.border)
+                # patch_idx += 2 # 2 images per patch
         return patch_coords_dict
 
     
@@ -213,38 +220,39 @@ class BaseDeployDataset(Dataset):
         scl = scl[:, :, self.border:self.patch_size - self.border, self.border:self.patch_size - self.border].to(torch.float32)
         
         location_key = f'{y_topleft}_{x_topleft}'
-        if location_key not in self.prediction_cache:
+        if len(self.img_slices) > 1 and location_key not in self.prediction_cache:
             self.prediction_cache[location_key] = prediction_no_border
             self.prediction_cache[f'{location_key}_scl'] = scl
             self.prediction_cache[f'{location_key}_esa_wc'] = esa_wc
             return None
-        else: # ready to write
+        
+        if len(self.img_slices) > 1:
             prediction_no_border = torch.cat([self.prediction_cache[location_key], prediction_no_border], dim=0)
             scl = torch.cat([self.prediction_cache[f'{location_key}_scl'], scl], dim=0)
             esa_wc = torch.cat([self.prediction_cache[f'{location_key}_esa_wc'], esa_wc], dim=0)
-            if self.mask_with_scl:
-                # mask snow and cloud (medium and high density). In some cases the probability cloud mask might miss some clouds
-                scl_mask = torch.isin(scl, self.scl_exclude_labels)
-                
-            # masks applied to all input images
-            nodata_mask = scl == 0
-            scl[nodata_mask] = float('nan')
-            esa_wc[nodata_mask] = float('nan')
-            nodata_mask = nodata_mask.repeat(1, 303, 1, 1)
-            prediction_no_border[nodata_mask] = float('nan') # mask the prediction when input is nodata
-            water_mask_scl = torch.mode(scl, dim=0).values == self.scl_water
+        if self.mask_with_scl:
+            # mask snow and cloud (medium and high density). In some cases the probability cloud mask might miss some clouds
+            scl_mask = torch.isin(scl, self.scl_exclude_labels)
             
-            built_up_mask = torch.mode(esa_wc, dim=0).values == self.esa_built_up
-            water_mask_esa = torch.mode(esa_wc, dim=0).values == self.esa_water
-            esa_wc_mask = esa_wc == self.esa_snow
-            prediction_no_border = torch.where(scl_mask | esa_wc_mask, torch.nan, prediction_no_border)
-            prediction_no_border, _ = torch.nanmedian(prediction_no_border, dim=0)
-            prediction_no_border = torch.where(water_mask_scl | water_mask_esa | built_up_mask, torch.nan, prediction_no_border)
-            prediction_no_border.mul_(10).round_()  # In-place operations
-            prediction_no_border = torch.nan_to_num(prediction_no_border, nan=self.nodata_value)            
-            # Move to CPU once and do all numpy operations together
-            prediction_no_border = prediction_no_border.cpu().numpy().astype(self.output_dtype)
-            return prediction_no_border 
+        # masks applied to all input images
+        nodata_mask = scl == 0
+        scl[nodata_mask] = float('nan')
+        esa_wc[nodata_mask] = float('nan')
+        nodata_mask = nodata_mask.repeat(1, 303, 1, 1)
+        prediction_no_border[nodata_mask] = float('nan') # mask the prediction when input is nodata
+        water_mask_scl = torch.mode(scl, dim=0).values == self.scl_water
+        
+        built_up_mask = torch.mode(esa_wc, dim=0).values == self.esa_built_up
+        water_mask_esa = torch.mode(esa_wc, dim=0).values == self.esa_water # predicted esa wc
+        esa_wc_mask = esa_wc == self.esa_snow
+        prediction_no_border = torch.where(scl_mask | esa_wc_mask, torch.nan, prediction_no_border)
+        prediction_no_border, _ = torch.nanmedian(prediction_no_border, dim=0)
+        prediction_no_border = torch.where(water_mask_scl | water_mask_esa | built_up_mask, torch.nan, prediction_no_border)
+        prediction_no_border.mul_(10).round_()  # In-place operations
+        prediction_no_border = torch.nan_to_num(prediction_no_border, nan=self.nodata_value)            
+        # Move to CPU once and do all numpy operations together
+        prediction_no_border = prediction_no_border.cpu().numpy().astype(self.output_dtype)
+        return prediction_no_border 
         
      
 class CachedDeployDataset(BaseDeployDataset):
@@ -387,9 +395,10 @@ class ChunkedWriteDataset(BaseDeployDataset):
         darr = da.from_array(self.pred_table, chunks=(1,))
         darr = darr.map_blocks(write_patch_predictions, x_topleft, y_topleft, self.nodata_value, meta=np.array((1,2), dtype=darr.dtype))
         darr.compute(scheduler='threads')
-        del self.prediction_cache[f'{y_topleft}_{x_topleft}']
-        del self.prediction_cache[f'{y_topleft}_{x_topleft}_scl']
-        del self.prediction_cache[f'{y_topleft}_{x_topleft}_esa_wc']
+        if self.prediction_cache.get(f'{y_topleft}_{x_topleft}') is not None:
+            del self.prediction_cache[f'{y_topleft}_{x_topleft}']
+            del self.prediction_cache[f'{y_topleft}_{x_topleft}_scl']
+            del self.prediction_cache[f'{y_topleft}_{x_topleft}_esa_wc']
 
 
     def init_gtiff(self, prediction_fp: Path):
@@ -471,32 +480,139 @@ def collate_batch(batch):
 class S2DatasetStream(BaseDeployDataset):
     def __init__(self, 
                  metadata_file: str, 
+                 h5_dir: str,
                  tile_id: str = None, 
-                 s2_img_file: str = None,
                  prediction_dir: str = None,
                  patch_size=512, border=16,
                  img_idx: int = None,
                  predict_full_profile: bool = True,
+                 debug: bool = False,
                  input_lat_lon=False,
                  mask_with_scl=True,
                  n_iamges_per_tile: int = 20,
+                 year: int = 2020,
+                 chunk_size: int = 512,
+                 output_format: str = 'cog',
+                 output_dtype: str = 'int16',
+                 impute_cloud_with_mean: bool = False,
                  **kwargs):
         self.metadata_file = Path(metadata_file).expanduser()
-        self.s2_img_file = Path(s2_img_file).expanduser()
+        self.h5_file = Path(h5_dir).expanduser() / f'{tile_id}.h5'
+        self.output_format = output_format
+        self.output_dtype = output_dtype
         self.tile_id = tile_id
         self.n_iamges_per_tile = n_iamges_per_tile
         self.prediction_dir = prediction_dir
         self.patch_size = patch_size
         self.border = border
+        self.patch_size_no_border = self.patch_size - 2 * self.border
         self.img_idx = img_idx
+        self.debug = debug
+        self.input_lat_lon = input_lat_lon
+        self.mask_with_scl = mask_with_scl
         self.predict_full_profile = predict_full_profile
-        self.bands = [
+        self.year = year
+        self.chunk_size = chunk_size
+        self.impute_cloud_with_mean = impute_cloud_with_mean
+        # if not self.h5_file.exists():
+        #     print(f'{self.h5_file} does not exist, downloading...')
+        #     self.download_tile()
+        self.store = h5py.File(self.h5_file, 'r')
+        if not hasattr(self, 'mean') and self.impute_cloud_with_mean:
+            print('Calculating mean and std of the training data')
+            t0 = time.time()
+            data = xr.open_dataset(self.h5_file, engine='h5netcdf', chunks={'time': 1, 'band': 1, 'y': 1024, 'x': 1024})
+            data = data.s2
+            cloud_mask = data.sel(band=['SCL']).isin([8,9])
+            masked_input = xr.where(cloud_mask.data, np.nan, data.isel(band=slice(12)))
+            self.mean = masked_input.mean(dim=('y','x')).compute()
+            self.mean = self.mean.data
+            # self.mean = np.ones((20, 12))*3000
+            print(self.mean)
+            print(f'Time taken to calculate mean: {time.time() - t0:.2f} seconds')
+
+
+        self.key = ""
+        self.img_height, self.img_width = self.store['s2'].shape[2:]
+        self.transform = Affine(*self.store['s2'].attrs['transform']).to_gdal()
+        self.crs = f'EPSG:{self.store[f"{self.key}epsg"][()].item()}'
+        transformer = Transformer.from_crs(self.crs, "EPSG:4326", always_xy=True)
+        
+        if self.input_lat_lon:
+            lon_mask = self.store[f'{self.key}x'][:].astype(np.float32) # in local crs
+            lat_mask = self.store[f'{self.key}y'][:].astype(np.float32)
+            lon_mask, lat_mask = transformer.transform(lon_mask, lat_mask, radians=True)
+            lon, lat = np.meshgrid(lon_mask, lat_mask)
+            sin_lon = np.sin(lon)
+            cos_lon = np.cos(lon)
+            lat = (lat - LAT_MEAN) / LAT_STD
+            sin_lon = (sin_lon - LON_SIN_MEAN) / LON_SIN_STD
+            cos_lon = (cos_lon - LON_COS_MEAN) / LON_COS_STD
+            self.coords_input = np.stack([lat, sin_lon, cos_lon], axis=0).astype(np.float32)
+
+        # ********** Set up RH & image indices **********
+        if predict_full_profile:
+            self.rh_idx = slice(0, 303)
+            self.rh_dim = 303
+        else:
+            self.rh_idx = [RH100_idx, RH98_idx]
+            self.rh_dim = 2
+        self.tile_id = tile_id
+        self.bands = slice(12)
+        
+        if img_idx is None:
+            self.img_idx = slice(None)
+        else:
+            self.img_idx = slice(img_idx, img_idx + 1)
+        n_images = self.store[f'{self.key}s2'].shape[0]
+        if n_images <= 10: # no need to cache predictions
+            self.img_slices = [slice(None)]
+        else:
+            self.img_slices = [slice(0,10), slice(10,20)]
+        
+        self.patch_coords_dict = self._get_patch_coords()
+        print('--------------------------------')
+        print(f"Image shape: {self.img_width}, {self.img_height}")
+        print(f"Number of patches: {len(self.patch_coords_dict)}")
+        print('--------------------------------')
+        
+        # ********** Prediction Configuration **********
+        self.nodata_value = MASKED_VALUE[self.output_dtype]
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        # cloud shadows, CLOUD_MEDIUM_PROBABILITY, CLOUD_HIGH_PROBABILITY, SNOW, water, nodata
+        # self.scl_exclude_labels = torch.tensor([0, 1, 3, 10, 11, 65535], dtype=torch.uint16, device=device) # scl is uint16
+        # self.scl_cloud = torch.tensor([8, 9], dtype=torch.uint16, device=device)
+        self.scl_exclude_labels = torch.tensor([0, 1, 3, 8, 9, 10, 11, 65535], dtype=torch.uint16, device=device)
+        self.scl_cloud_mask_buffer = 7
+        y, x = torch.meshgrid(torch.arange(-self.scl_cloud_mask_buffer, self.scl_cloud_mask_buffer+1), torch.arange(-self.scl_cloud_mask_buffer, self.scl_cloud_mask_buffer+1), indexing='ij')
+        self.kernel = ((x**2 + y**2) <= self.scl_cloud_mask_buffer**2).float().unsqueeze(0).unsqueeze(0)
+        # self.esa_exclude_labels = torch.tensor([5, 8], dtype=torch.uint8, device=device) # built-up, water
+        self.scl_water = 6
+        self.esa_snow = 7
+        self.esa_built_up = 5
+        self.esa_water = 8
+        # self.scl_zero_canopy_height = torch.tensor([5, 6], dtype=torch.uint16, device=device)  # "not vegetated", "water"
+        self.prediction_cache = {}
+        
+        if not prediction_dir:
+            self.prediction_dir = self.h5_file.parent.parent / f'predictions_{self.year}' / self.tile_id
+        else:
+            self.prediction_dir = Path(prediction_dir).expanduser()
+        self.prediction_dir.mkdir(exist_ok=True)
+        self.prediction_fp = self.prediction_dir / f'{self.tile_id}'
+    
+    
+    def download_tile(self):
+        '''
+        This function is mainly used for streaming Sentinel-2 data (2024) on LUMI.
+        I decided to not download ESA World Cover, because:
+        1. We don't have ground truth for 2024.
+        2. We don't need it for inference.
+        '''
+        bands = [
             'B01', 'B04', 'B03', 'B02', 'B05', 'B06', 'B07', 'B08', 'B8A',
             'B09', 'B11', 'B12', 'SCL'
         ]
-        
-    
-    def download_tile(self):
         s2_df = gpd.read_parquet(self.metadata_file)
         tile_df = s2_df[s2_df['s2:mgrs_tile'] == self.tile_id].set_index('id')
         if len(tile_df)>self.n_iamges_per_tile:
@@ -506,36 +622,80 @@ class S2DatasetStream(BaseDeployDataset):
                 idx = tile_df.groupby('orbit')['eo:cloud_cover'].nsmallest(self.n_iamges_per_tile//2).index.get_level_values(1)
                 tile_df = tile_df.loc[idx]
         tile_df['datetime'] = tile_df['datetime'].dt.strftime('%Y-%m-%d %H:%M:%S.%f')
-        bbox = box(*tile_df.total_bounds)
+        # bbox = box(*tile_df.total_bounds) # For esa world cover
+        # epsg = items[0].properties['proj:epsg']
         items = row_to_stac_item(tile_df, S2_ITEM_PROPS)  
-        epsg = items[0].properties['proj:epsg']
-        image = get_patch(items, self.bands, dtype='uint16', fill_value=np.uint16(0))
+        image = get_patch(items, bands, dtype='uint16', fill_value=np.uint16(0))
         image.name = 's2'
-        self.image = image
-        self.img_width, self.img_height = self.image.shape[2:]
-        self.transform = self.image.transform
-        self.crs = self.image.crs
-        self.patch_coords_dict = self._get_patch_coords()
+        del image.attrs['spec']
+        del image.attrs['crs']
+        t0=time.time()
+        image.to_netcdf(self.h5_file, engine='h5netcdf', encoding={'s2': {'zlib': False, 'chunksizes': (1, 1, 1024, 1024)}})
+        print(f'Time taken to save image: {time.time() - t0:.2f} seconds')
         
-    def __getitem__(self, idx):
-        img_batch_idx, y_topleft, x_topleft = self.patch_coords_dict[idx]
-        patch = self.image.isel[img_batch_idx, :, y_topleft:y_topleft + self.patch_size, x_topleft:x_topleft + self.patch_size]
-        t0 = time.time()
-        patch = patch.compute()
-        print(f'Time taken to compute patch: {time.time() - t0:.2f} seconds')
-        patch = patch.astype(np.float32)
-        return torch.from_numpy(patch)
-        # # Add lat/lon channels if needed
-        # if self.input_lat_lon:
-        #     latlon = self.coords_input[:, y_topleft:y_topleft + self.patch_size, x_topleft:x_topleft + self.patch_size]
-        #     latlon = np.tile(latlon[None, :, :,:], (patch.shape[0], 1,1,1))
-        #     return torch.from_numpy(patch), torch.from_numpy(latlon)
-        # else:
-        #     return torch.from_numpy(patch)
+    def initialize_output(self):
+        self.options = [
+            'TILED=YES',
+            'BLOCKXSIZE={}'.format(self.chunk_size), # a different block size than the actual patch size is slow
+            'BLOCKYSIZE={}'.format(self.chunk_size),
+            'PREDICTOR=2',
+            'NUM_THREADS=ALL_CPUS',
+            'COMPRESS=None',
+            'INTERLEAVE=BAND'
+        ]
+        if self.predict_full_profile:
+            output_files = [self.prediction_fp.with_stem(f'RH{i}_Q{j}_uncompressed') for i in range(self.rh_dim//3) for j in range(3)]
+        else:
+            output_files = [self.prediction_fp.with_stem(f'RH{i//3}_Q1_uncompressed') for i in self.rh_idx]
+        
+        self.tiff_writers = [self.init_gtiff(output_file) for output_file in output_files]
+        dtype = np.dtype(
+            [("raster_writer", gdal.Dataset), ("array", 'float16', (self.patch_size_no_border, self.patch_size_no_border))]
+        )
+        self.pred_table = np.full((self.rh_dim), None, dtype=dtype)
+        
+    def write_patch_predictions(self, prediction,scl, idx):
+        y_topleft, x_topleft = self.patch_coords_dict[idx][1:]
+        y_topleft = y_topleft + self.border
+        x_topleft = x_topleft + self.border
+        prediction_no_border = self._apply_masks(prediction, scl, x_topleft, y_topleft)
+        if prediction_no_border is None:
+            return
+        for i in range(self.rh_dim):
+            self.pred_table[i] = (self.tiff_writers[i], prediction_no_border[i])
+        darr = da.from_array(self.pred_table, chunks=(1,))
+        darr = darr.map_blocks(write_patch_predictions, x_topleft, y_topleft, self.nodata_value, meta=np.array((1,2), dtype=darr.dtype))
+        darr.compute(scheduler='threads')
+        if self.prediction_cache.get(f'{y_topleft}_{x_topleft}') is not None:
+            del self.prediction_cache[f'{y_topleft}_{x_topleft}']
+            del self.prediction_cache[f'{y_topleft}_{x_topleft}_scl']
+            del self.prediction_cache[f'{y_topleft}_{x_topleft}_esa_wc']
 
-        
-        
-                 
+
+    def init_gtiff(self, prediction_fp: Path):
+        prediction_fp = prediction_fp.with_suffix('.tif')
+        if prediction_fp.exists():
+            os.remove(prediction_fp)
+        driver = gdal.GetDriverByName('GTiff')
+        tiff_output = driver.Create(
+            str(prediction_fp),
+            xsize=self.img_width,
+            ysize=self.img_height,
+            bands=1,
+            eType=gdal.GDT_Int16,
+            options=self.options
+        )
+        tiff_output.SetGeoTransform(self.transform)
+        tiff_output.SetProjection(self.crs)
+        tiff_output.SetMetadataItem('Year', str(self.year))
+        tiff_output.SetMetadataItem('Sentinel-2 tile', self.tile_id)
+        return tiff_output
+
+
+    def __del__(self):
+        if hasattr(self, 'store'):
+            self.store.close()
+
 class DeployDataModel(L.LightningDataModule):
 
     def __init__(self,
@@ -559,7 +719,7 @@ class DeployDataModel(L.LightningDataModule):
         self.cache_predictions = cache_predictions
         if stream_input:
             self.pred_dataset = S2DatasetStream(
-                metadata_file=pred_fp,
+                h5_dir=pred_fp,
                 tile_id=tile_id,
                 prediction_dir=prediction_dir,
                 patch_size=patch_size,
@@ -615,25 +775,31 @@ class DeployDataModel(L.LightningDataModule):
 
 # Example usage
 if __name__ == '__main__':
-    dataset = BaseDeployDataset(
-        zarr_store_path='~/data/GVS/Deploy/inference_2020.zarr',
-        tile_id='32MQE',
-        prediction_dir='~/data/GVS/Deploy/32MQE',
+    # dataset = ChunkedWriteDataset(
+    #     zarr_store_path='~/data/GVS/Deploy/inference_2020.zarr',
+    #     tile_id='32MQE',
+    #     prediction_dir='~/data/GVS/Deploy/predictions_2020',
+    #     patch_size=544,
+    #     border=16,
+    #     comp_level=7,
+    #     debug=False,
+    # )
+    dataset = S2DatasetStream(
+        metadata_file='~/data/GVS/Deploy/deploy_s2_items_2024_part7.parquet',
+        h5_dir='~/flash/data/GVS/Deploy/inference_2024',
+        tile_id='32MRE',
+        prediction_dir='~/data/GVS/Deploy/predictions_2024/11UMP_GTiff',
+        
         patch_size=544,
         border=16,
-        comp_level=7,
     )
-    # dataset = S2DatasetStream(
-    #     metadata_file='~/data/GVS/Deploy/deploy_s2_items_2020_part0.parquet',
-    #     tile_id='11UMP',
-    #     s2_img_file='~/data/GVS/Deploy/inference_2020.zarr',
-    #     prediction_dir='~/data/GVS/Deploy/32MQE',
-    #     patch_size=512,
-    #     border=16,
-    # )
-    for data in dataset:
-        print(data[0].shape)
-        
-
+    # dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, num_workers=4, collate_fn=collate_batch)
+    # for data in dataloader:
+    #     print(data[0].shape)
+    image, scl, latlon = dataset[0]
+    scl_cloud_mask = torch.isin(scl, [8,9])
+    masked_mean_input = dataset.mean[:10, :, None, None] * scl_cloud_mask
+    image_imputed = torch.where(scl_cloud_mask, 0, image)
+    image_imputed = image + masked_mean_input
 
 

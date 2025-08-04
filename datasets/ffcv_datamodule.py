@@ -106,7 +106,8 @@ class FFCVDataModel(L.LightningDataModule):
         super().__init__()
         self.train_fp = Path(train_fp).expanduser()
         self.val_fp = Path(val_fp).expanduser()
-        self.cal_fp = Path(cal_fp).expanduser()
+        if cal_fp is not None:
+            self.cal_fp = Path(cal_fp).expanduser()
         if pred_fp is not None:
             self.pred_fp = Path(pred_fp).expanduser()
 

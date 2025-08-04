@@ -6,7 +6,8 @@ from torch import Tensor
 from kornia.enhance import normalize
 
 from const import ESA_WC
-
+dtype = torch.float16
+dtype_np = np.float16
 # n = 1.1436e+08
 MEAN = np.array([ 591.9929, 1358.6575, 1095.0650,  742.5692, 1770.5934, 2552.1747,
         2871.7724, 2944.7146, 3076.3806, 3082.8677, 2874.3502, 2170.4143
