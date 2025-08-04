@@ -1,48 +1,37 @@
-name: ffcv
+name: py3
 channels:
-  - pytorch
   - conda-forge
   - defaults
-  - menpo
 dependencies:
-  - python>=3.9, <3.11
+  - python==3.11
+  - pip==23.2.1
   - tqdm
-  - numpy<2.0
   - numba
-  - einops
   - wandb
-  - pytorch-lightning
-  - lightning-bolts
-  - torchmetrics
-  - scipy
-  - timm
   - matplotlib
   - pandas
-  - lightning
-  - umap-learn
   - h5py
   - pkg-config
-  - libjpeg-turbo
+  - libjpeg-turbo=3.1.0
+  - libtiff=4.6.0
+  - gdal=3.8.5
+  - rasterio=1.4.3
+  - rio-cogeo=4.4.0
   - conda-forge::opencv
   - ipykernel
   - jupyterlab
   - geopandas
   - pip
   - pip:
-      - --extra-index-url https://download.pytorch.org/whl/rocm5.6/
-      - pytorch-triton-rocm==2.2.0
-      - torch==2.2.2+rocm5.6
-      - torchaudio==2.2.2+rocm5.6
-      - torchvision==0.17.2+rocm5.6
-      - tqdm
+      - jsonschema
+      - matplotlib
+      - numpy
+      - scikit-learn
+      - scipy
       - seaborn
       - ipdb
       - pytest
       - lightly
-      - ipdb
-      - geobench
-      - black
-      - ffcv
       - kornia
       - contextily
       - hydra-core
@@ -53,3 +42,19 @@ dependencies:
       - h5netcdf
       - xarray
       - jsonargparse
+      - zarr
+      - earthengine-api
+      - pystac
+      - pyproj
+      - pystac-client
+      - stackstac
+      - planetary_computer
+      - backoff
+      - adlfs
+      - torchsummary
+      - --extra-index-url https://download.pytorch.org/whl/rocm5.6/
+      - torch==2.2.1+rocm5.6
+      - torchaudio==2.2.1+rocm5.6
+      - torchvision==0.17.1+rocm5.6
+      - lightning==2.2.0
+      - torchmetrics==1.3.0
