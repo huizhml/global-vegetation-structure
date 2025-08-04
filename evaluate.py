@@ -198,6 +198,7 @@ def add_biome(val_df_fp, sota_chm_df_dir):
 def compare_result_precision(run_id, corrected=False):
     suffix = '_corrected' if corrected else ''
     ddf_ours = pd.read_parquet(f'output/canopy_height_predictions_{run_id}{suffix}.parquet')
+    ddf_ours = ddf_ours.astype(float)
     ddf_ours = ddf_ours[(ddf_ours['slope_mask']==1) & (ddf_ours['veg_mask']==1)]
     columns = ddf_ours.columns
     pred_cols = [c for c in columns if c.startswith('RH') and '_GEDI' not in c]
