@@ -19,8 +19,8 @@ class OnnxExportCallback(Callback):
         mto.save(pl_module, model_path)
         print(f'saved quantized model to {model_path}')
         onnx_path = f'checkpoints/fake_quantized_model_finetuned{trainer.max_epochs}_epochs_{trainer.logger._experiment.id}.onnx'
-        
-        input_tensor = torch.randn(1, pl_module.in_channels, 544, 544).to('cuda')
+        input_tensor = torch.randn(1, 12, 544, 544).to('cuda')
+        import ipdb; ipdb.set_trace()
         torch.onnx.export(
             pl_module, input_tensor,
             onnx_path, export_params=True, opset_version=13, do_constant_folding=True, input_names=['input'],

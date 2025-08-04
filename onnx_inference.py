@@ -10,39 +10,18 @@ from datasets._zarr_dataset_deploy import DeployDataModel
 from datasets.transforms import Normalize
 
 
-def prepare_batch(sample, transform, dataset, batch_idx, feed_latlon=False):
-    y_topleft, x_topleft = dataset.patch_coords_dict[batch_idx][1:]
-    y_topleft = y_topleft + dataset.border
-    x_topleft = x_topleft + dataset.border 
+def prepare_batch(sample, transform, feed_latlon=True):
     if feed_latlon:
         x = transform(sample[0])
         x = torch.cat([x, sample[-1]], dim=1)
     else:
         x = transform(sample[0])
-    w, h = x.shape[2:]
-    pad_w = dataset.patch_size - w
-    pad_h = dataset.patch_size - h
-    if y_topleft == 0:
-        pad_h = (dataset.border, 0)
-    elif y_topleft + dataset.patch_size > dataset.img_height:
-        pad_h = (0, dataset.border)
-    else:
-        pad_h = (0, 0)
-    if x_topleft == 0:
-        pad_w = (dataset.border, 0)
-    elif x_topleft + dataset.patch_size > dataset.img_width:
-        pad_w = (0, dataset.border)
-    else:
-        pad_w = (0, 0)
-    x = F.pad(x, (*pad_w, *pad_h), 'reflect')
     return x
 
 @hydra.main(config_name="deploy", config_path="config", version_base="1.2")
 def main(cfg):
     datamodule = DeployDataModel(**cfg.data.init_args)
-    pred_dataloader = datamodule.predict_dataloader()
-    
-    
+    pred_dataloader = datamodule.predict_dataloader()    
     assert 'CUDAExecutionProvider' in onnxruntime.get_available_providers()
     sess_options = onnxruntime.SessionOptions()
     sess_options.optimized_model_filepath = str(Path(cfg.model.onnx_model_path).expanduser())
@@ -58,8 +37,8 @@ def main(cfg):
     binding = session.io_binding()
      
     for batch_idx, sample in tqdm(enumerate(pred_dataloader)):
-        x = prepare_batch(sample, transform, datamodule.pred_dataset, batch_idx)
-        x_tensor = x[:2].contiguous().to(torch.float16).cuda() # (2, 15, 544, 544)
+        x = prepare_batch(sample, transform)
+        x_tensor = x.contiguous().to(torch.float16).cuda() # (2, 15, 544, 544)
         binding.bind_input(
             'input',
             device_type='cuda',
@@ -68,8 +47,8 @@ def main(cfg):
             shape=tuple(x_tensor.shape),
             buffer_ptr=x_tensor.data_ptr(),
         )
-        y_shape = (2, 315, 544, 544)
-        y_tensor = torch.empty(y_shape, dtype=torch.float32, device='cuda').contiguous()
+        y_shape = (20, 315, 544, 544)
+        y_tensor = torch.empty(y_shape, dtype=torch.float16, device='cuda').contiguous()
         binding.bind_output(
             'output',
             device_type='cuda',
@@ -80,8 +59,6 @@ def main(cfg):
         )
         # y_tensor = session.run(None, ort_inputs)
         session.run_with_iobinding(binding)
-        if batch_idx == 100:
-            break
     profile = session.end_profiling()
     print('profile written to ', profile)
     
