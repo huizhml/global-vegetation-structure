@@ -243,14 +243,16 @@ python run.py fit -c config/train_naturalness.yaml \
 # 3. Takes about 31 min to predict one tile on one L40s (write all 303 bands)
 # ******************************
 echo predict tiles on Hendrix
-tile_id=20XNR # 32MQE
-year=2024
+tile_id=10WFA # 32MQE
+year=2020
 run_id=cg11fpjr
 echo run prediction for model $run_id for tile $tile_id in year $year;
         python run.py predict -c config/predict.yaml --model config/model/xception_mix_order.yaml \
+                --data.class_path datasets._zarr_dataset_deploy_debug.DeployDataModel \
                 --data.init_args.input_lat_lon True \
                 --data.init_args.num_workers 4 \
                 --data.init_args.tile_id $tile_id \
+                --data.init_args.metadata_file ~/data/GVS/Deploy/s2_deploy_items_${year}_part0_unique_images.parquet \
                 --data.init_args.pred_fp ~/data/GVS/Deploy/inference_${year}.zarr \
                 --data.init_args.prediction_dir ~/data/GVS/Deploy/predictions_GTiff_${year}/${tile_id}_GTiff \
                 --data.init_args.year $year \

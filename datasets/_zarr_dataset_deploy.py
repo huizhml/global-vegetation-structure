@@ -15,6 +15,7 @@ import rasterio
 from rasterio.windows import Window
 import torch.nn.functional as F
 from pyproj import Transformer
+import pandas as pd
 from utils import get_dense_latlon
 import os
 from rasterio.io import MemoryFile
@@ -30,6 +31,7 @@ import dask.array as da
 from dask.distributed import get_client
 import h5py
 import xarray as xr
+from collections import defaultdict
 
 MASKED_VALUE = {
     'int16': 32767,
@@ -51,6 +53,7 @@ class BaseDeployDataset(Dataset):
     Input data (S2) has nodata value of 0.
     """
     def __init__(self, zarr_store_path, tile_id: str = None, prediction_dir: str = None,
+                 metadata_file: str = None,
                  patch_size=512, border=16,
                  img_idx: int = None,
                  predict_full_profile: bool = True,
@@ -85,7 +88,7 @@ class BaseDeployDataset(Dataset):
             self.rh_dim = 2
         self.tile_id = tile_id
         self.bands = bands or slice(12)
-        
+        self.metadata_file = Path(metadata_file).expanduser()
         if img_idx is None:
             self.img_idx = slice(None)
         else:
@@ -108,10 +111,22 @@ class BaseDeployDataset(Dataset):
         self.crs = f'EPSG:{self.store[f"{self.key}epsg"][()].item()}'
         transformer = Transformer.from_crs(self.crs, "EPSG:4326", always_xy=True)
         n_images = self.store[f'{self.key}s2'].shape[0]
+        
         if n_images <= 10: # Less than 10 images available, no need to cache predictions
             self.img_slices = [slice(None)]
         else:
-            self.img_slices = [slice(0,10), slice(10,20)]
+            
+            df = pd.read_parquet(self.metadata_file, columns=['id', 'eo:cloud_cover', 's2:mgrs_tile', 's2:nodata_pixel_percentage', 'orbit'])
+            df = df[df['s2:mgrs_tile'] == self.tile_id]
+            ids_from_zarr = self.store[f'{self.key}id'][:]
+            df = df[df['id'].isin(ids_from_zarr)]
+            df = df.reset_index(drop=True)
+            df['s2:nodata_pixel_percentage'] = df['s2:nodata_pixel_percentage'].round()
+            df = df.sort_values(['s2:nodata_pixel_percentage', 'eo:cloud_cover']).iloc[:20]
+            ids = df['id']
+            idx = [np.where(ids_from_zarr == i)[0][0] for i in ids]
+            self.img_slices = [idx[:10], idx[10:]]
+            
         
         if self.input_lat_lon:
             lon_mask = self.store[f'{self.key}x'][:].astype(np.float32) # in local crs
@@ -142,7 +157,7 @@ class BaseDeployDataset(Dataset):
         self.esa_built_up = 5
         self.esa_water = 8
         # self.scl_zero_canopy_height = torch.tensor([5, 6], dtype=torch.uint16, device=device)  # "not vegetated", "water"
-        self.prediction_cache = {}
+        self.prediction_cache = defaultdict(list)
         
         if not prediction_dir:
             self.prediction_dir = zarr_store_path.parent / f'predictions_{self.year}' / self.tile_id
@@ -216,27 +231,33 @@ class BaseDeployDataset(Dataset):
         
         prediction_no_border = prediction[:, self.rh_idx, self.border:self.patch_size - self.border, self.border:self.patch_size - self.border]
         esa_wc = prediction[:, -12:, self.border:self.patch_size - self.border, self.border:self.patch_size - self.border]
-        esa_wc = torch.argmax(esa_wc, dim=1, keepdim=True).to(torch.float32)
-        scl = scl[:, :, self.border:self.patch_size - self.border, self.border:self.patch_size - self.border].to(torch.float32)
+        esa_wc = torch.argmax(esa_wc, dim=1, keepdim=True).to(torch.int8)
+        scl = scl[:, :, self.border:self.patch_size - self.border, self.border:self.patch_size - self.border]
         
         location_key = f'{y_topleft}_{x_topleft}'
-        if len(self.img_slices) > 1 and location_key not in self.prediction_cache:
-            self.prediction_cache[location_key] = prediction_no_border
-            self.prediction_cache[f'{location_key}_scl'] = scl
-            self.prediction_cache[f'{location_key}_esa_wc'] = esa_wc
+        if len(self.img_slices) > 1 and len(self.prediction_cache[location_key]) < len(self.img_slices)-1:
+            self.prediction_cache[location_key].append(prediction_no_border)
+            self.prediction_cache[f'{location_key}_scl'].append(scl)
+            self.prediction_cache[f'{location_key}_esa_wc'].append(esa_wc)
             return None
         
-        if len(self.img_slices) > 1:
-            prediction_no_border = torch.cat([self.prediction_cache[location_key], prediction_no_border], dim=0)
-            scl = torch.cat([self.prediction_cache[f'{location_key}_scl'], scl], dim=0)
-            esa_wc = torch.cat([self.prediction_cache[f'{location_key}_esa_wc'], esa_wc], dim=0)
+        if len(self.img_slices) > 1 and len(self.prediction_cache[location_key]) == len(self.img_slices)-1:
+            prediction_no_border = torch.cat(self.prediction_cache[location_key] + [prediction_no_border], dim=0)
+            scl = torch.cat(self.prediction_cache[f'{location_key}_scl'] + [scl], dim=0)
+            esa_wc = torch.cat(self.prediction_cache[f'{location_key}_esa_wc'] + [esa_wc], dim=0)
+            del self.prediction_cache[location_key]
+            del self.prediction_cache[f'{location_key}_scl']
+            del self.prediction_cache[f'{location_key}_esa_wc']
+            
         if self.mask_with_scl:
             # mask snow and cloud (medium and high density). In some cases the probability cloud mask might miss some clouds
             scl_mask = torch.isin(scl, self.scl_exclude_labels)
             
         # masks applied to all input images
         nodata_mask = scl == 0
+        scl = scl.to(torch.float32)
         scl[nodata_mask] = float('nan')
+        esa_wc = esa_wc.to(torch.float32)
         esa_wc[nodata_mask] = float('nan')
         nodata_mask = nodata_mask.repeat(1, 303, 1, 1)
         prediction_no_border[nodata_mask] = float('nan') # mask the prediction when input is nodata
@@ -246,6 +267,7 @@ class BaseDeployDataset(Dataset):
         water_mask_esa = torch.mode(esa_wc, dim=0).values == self.esa_water # predicted esa wc
         esa_wc_mask = esa_wc == self.esa_snow
         prediction_no_border = torch.where(scl_mask | esa_wc_mask, torch.nan, prediction_no_border)
+        
         prediction_no_border, _ = torch.nanmedian(prediction_no_border, dim=0)
         prediction_no_border = torch.where(water_mask_scl | water_mask_esa | built_up_mask, torch.nan, prediction_no_border)
         prediction_no_border.mul_(10).round_()  # In-place operations
@@ -280,8 +302,6 @@ class CachedDeployDataset(BaseDeployDataset):
         if prediction_no_border is None:
             return
         self.full_pred[:,y_topleft:y_topleft + self.patch_size_no_border, x_topleft:x_topleft + self.patch_size_no_border] = prediction_no_border
-        del self.prediction_cache[f'{y_topleft}_{x_topleft}']
-        del self.prediction_cache[f'{y_topleft}_{x_topleft}_scl']
             
             
     def save_predictions(self, *args, **kwargs):
@@ -395,10 +415,6 @@ class ChunkedWriteDataset(BaseDeployDataset):
         darr = da.from_array(self.pred_table, chunks=(1,))
         darr = darr.map_blocks(write_patch_predictions, x_topleft, y_topleft, self.nodata_value, meta=np.array((1,2), dtype=darr.dtype))
         darr.compute(scheduler='threads')
-        if self.prediction_cache.get(f'{y_topleft}_{x_topleft}') is not None:
-            del self.prediction_cache[f'{y_topleft}_{x_topleft}']
-            del self.prediction_cache[f'{y_topleft}_{x_topleft}_scl']
-            del self.prediction_cache[f'{y_topleft}_{x_topleft}_esa_wc']
 
 
     def init_gtiff(self, prediction_fp: Path):
