@@ -21,28 +21,62 @@ echo "Time requested: $SLURM_TIMELIMIT"
 scontrol show job $SLURM_JOB_ID | grep "TRES="
 echo "********************************************************************"
 
-part=${1:-0}
+part=${SLURM_ARRAY_TASK_ID:-0}
+line_num=${1:-0}
 year=${2:-2020}
 hostname=$(hostname)
-source setup_env.sh
-config_dir=${HOME}/data/GVS/Deploy/lumi_job_files
+
+use_flash=${3:-False}
+echo "use_flash=$use_flash"
+if [ "$use_flash" == "True" ]; then
+    save_dir=${HOME}/flash/data/GVS/Deploy/inference_${year}
+    download_data=True # Download data in inference pipeline
+else
+    save_dir=${HOME}/data/GVS/Deploy/inference_${year}
+    download_data=False
+fi
+
+config_dir=${HOME}/data/GVS/Deploy/slurm_job_files
 tile_id_file=${config_dir}/deploy_s2_items_${year}_part${part}.txt
-echo "Stream tiles listed in $tile_id_file"
-# Get tile ID from line number specified by SLURM array task ID
-while IFS= read -r tile_id; do
-    sync_flag="${HOME}/data/GVS/Deploy/sync_flags_${year}/${tile_id}_done"
-    if [ ! -f "$sync_flag" ] && [ ! -f "${HOME}/data/GVS/Deploy/inference_${year}/${tile_id}.h5" ]; then
-        echo "***************************** START STREAMING *****************************"
-        echo Stream input data for tile $tile_id in year $year;
-        python -m download._7_stream_tile metadata_file=${config_dir}/deploy_s2_items_${year}_part${part}.parquet tile_id=$tile_id output_dir=${HOME}/data/GVS/Deploy/inference_${year} n_iamges_per_tile=20
-        exit_status=$?  
-        if [ $exit_status -ne 0 ]; then
-            echo "Stream command failed with exit status $exit_status"
-        else
-            echo "Stream command completed successfully"
-            touch ${HOME}/data/GVS/Deploy/stream_flags_${year}/${tile_id}_done
-        fi
-        echo "***************************** END STREAMING *****************************"
+tile_id=$(sed -n "${line_num}p" "$tile_id_file")
+echo "Processing tile ID: $tile_id, line $line_num from $tile_id_file"
+
+
+if [ -f "${HOME}/data/GVS/Deploy/stream_flags_${year}/${tile_id}_done" ]; then
+    echo "Tile $tile_id already processed, skip"
+    exit 0
+fi
+
+sync_flag_new="${HOME}/data/GVS/Deploy/sync_flags_${year}/${tile_id}_best_images_done"
+if [ ! -f "$sync_flag_new" ] && [ ! -f "${save_dir}/${tile_id}.h5" ]; then
+    echo "***************************** START STREAMING *****************************"
+    echo Stream input data for tile $tile_id in year $year;
+    python -m download._7_stream_tile metadata_file=${config_dir}/deploy_s2_items_${year}_part${part}.parquet tile_id=$tile_id output_dir=${save_dir} n_iamges_per_tile=20
+    exit_status=$?  
+    if [ $exit_status -ne 0 ]; then
+        echo "Stream command failed with exit status $exit_status"
+    else
+        echo "Stream command completed successfully"
+        touch ${HOME}/data/GVS/Deploy/stream_flags_${year}/${tile_id}_best_images_done
     fi
-done < "$tile_id_file"  
+    echo "***************************** END STREAMING *****************************"
+fi
+
+# while IFS= read -r tile_id; do
+#     sync_flag="${HOME}/data/GVS/Deploy/sync_flags_${year}/${tile_id}_done"
+#     sync_flag_new="${HOME}/data/GVS/Deploy/sync_flags_${year}/${tile_id}_best_images_done"
+#     if [ ! -f "$sync_flag" ] && [ ! -f "$sync_flag_new" ] && [ ! -f "${save_dir}/${tile_id}.h5" ]; then
+#         echo "***************************** START STREAMING *****************************"
+#         echo Stream input data for tile $tile_id in year $year;
+#         python -m download._7_stream_tile metadata_file=${config_dir}/deploy_s2_items_${year}_part${part}.parquet tile_id=$tile_id output_dir=${save_dir} n_iamges_per_tile=20
+#         exit_status=$?  
+#         if [ $exit_status -ne 0 ]; then
+#             echo "Stream command failed with exit status $exit_status"
+#         else
+#             echo "Stream command completed successfully"
+#             touch ${HOME}/data/GVS/Deploy/stream_flags_${year}/${tile_id}_best_images_done
+#         fi
+#         echo "***************************** END STREAMING *****************************"
+#     fi
+# done < "$tile_id_file"  
 

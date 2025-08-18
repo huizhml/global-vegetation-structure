@@ -1,15 +1,15 @@
 #!/bin/bash
 ##SBATCH --account=project_465000894
-#SBATCH --partition=gpu
-#SBATCH --cpus-per-task=16
-#SBATCH --mem=240GB
+#SBATCH --partition=ml4good
+#SBATCH --cpus-per-task=32
+#SBATCH --mem=128GB
 #SBATCH --time=1-00:00:00
 #SBATCH --job-name=submit
 #SBATCH --output=./logs/%x-%A_%a.out
 #SBATCH --error=./logs/%x-%A_%a.err
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=huzh@di.ku.dk
-#SBATCH --exclude hendrixgpu01fl,hendrixgpu02fl,hendrixgpu03fl,hendrixgpu04fl,hendrixgpu05fl,hendrixgpu06fl,hendrixgpu07fl,hendrixgpu08fl,hendrixgpu09fl,hendrixgpu10fl,hendrixgpu11fl,hendrixgpu12fl,hendrixgpu13fl,hendrixgpu14fl,hendrixgpu15fl,hendrixgpu17fl,hendrixgpu18fl,hendrixgpu19fl,hendrixgpu20fl,hendrixgpu21fl
+##SBATCH --exclude hendrixgpu01fl,hendrixgpu02fl,hendrixgpu03fl,hendrixgpu04fl,hendrixgpu05fl,hendrixgpu06fl,hendrixgpu07fl,hendrixgpu08fl,hendrixgpu09fl,hendrixgpu10fl,hendrixgpu11fl,hendrixgpu12fl,hendrixgpu13fl,hendrixgpu14fl,hendrixgpu15fl,hendrixgpu17fl,hendrixgpu18fl,hendrixgpu19fl,hendrixgpu20fl,hendrixgpu21fl
 hostname
 echo "Job Name: $SLURM_JOB_NAME"
 echo "Partition: $SLURM_JOB_PARTITION"
@@ -17,7 +17,6 @@ echo "CPUs per task: $SLURM_CPUS_PER_TASK"
 echo "Number of tasks: $SLURM_NTASKS"
 echo "Time requested: $SLURM_TIMELIMIT"
 scontrol show job $SLURM_JOB_ID | grep "TRES="
-conda activate ffcv
 
 data_dir=${HOME}/data/GEDI
 
@@ -66,6 +65,7 @@ if hostname | grep -q "hendrix"; then
         if [[ " ${host_list[@]} " =~ " $number " ]]; then
                 echo "node $number has scratch folder"
                 input_dir=/scratch
+                rsync -av --progress ${HOME}/data/GVS/cal.h5 $input_dir/cal.h5
                 
         else
                 echo "node $number does not have scratch folder"
@@ -79,9 +79,9 @@ if hostname | grep -q "hendrix"; then
 #         shuffle_indices=True +debug=$debug version=$3
 
 python -m datasets._4_convert_to_beton \
-        h5_file=$input_dir/val.h5 \
-        index_table=$data_dir/split_test0.1_cal0.1_val0.1_seed42_v1/index_table_val \
-        shuffle_indices=False +debug=$debug version=$3 +create_subset=False
+        h5_file=$input_dir/cal.h5 \
+        index_table=$data_dir/split_test0.1_cal0.1_val0.1_seed42_v1/index_table_cal \
+        shuffle_indices=False +debug=$debug version=1 +create_subset=False
 ;;
 
 5)
@@ -113,6 +113,12 @@ python -m datasets.statistical_analysis \
 echo aggregate the GEDI data;
 python -m datasets._6_visual_check task=aggregate_gedi_by_biome beton_fps=${data_dir}/train_subsets/test*_v3.beton
 ;;
+10)
+echo download inference data by api query;
+python -m download._5_download_inference task=download_by_api_query year=2024 specified_tiles_file=~/data/GVS/Deploy/tiles_without_images_and_metadata_2024.txt;;
+11)
+echo download inference data by metadata;
+python -m download._5_download_inference task=download year=2024 job_id=0;;
 *)
 echo runnning nothing ;;
 esac

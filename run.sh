@@ -243,16 +243,16 @@ python run.py fit -c config/train_naturalness.yaml \
 # 3. Takes about 31 min to predict one tile on one L40s (write all 303 bands)
 # ******************************
 echo predict tiles on Hendrix
-tile_id=10WFA # 32MQE
-year=2020
+tile_id=01JCH # 32MQE
+year=2024
 run_id=cg11fpjr
 echo run prediction for model $run_id for tile $tile_id in year $year;
         python run.py predict -c config/predict.yaml --model config/model/xception_mix_order.yaml \
-                --data.class_path datasets._zarr_dataset_deploy_debug.DeployDataModel \
                 --data.init_args.input_lat_lon True \
                 --data.init_args.num_workers 4 \
                 --data.init_args.tile_id $tile_id \
-                --data.init_args.metadata_file ~/data/GVS/Deploy/s2_deploy_items_${year}_part0_unique_images.parquet \
+                --data.init_args.stream_input False \
+                --data.init_args.metadata_file none  \
                 --data.init_args.pred_fp ~/data/GVS/Deploy/inference_${year}.zarr \
                 --data.init_args.prediction_dir ~/data/GVS/Deploy/predictions_GTiff_${year}/${tile_id}_GTiff \
                 --data.init_args.year $year \
@@ -274,30 +274,23 @@ echo run prediction for model $run_id for tile $tile_id in year $year;
 #/scratch/$tile_id
 # ******************************
 echo predict tiles on LUMI
-tile_id=20XNR # 32MQE
+tile_id=32MQD # 32MQE
 year=2024
 run_id=cg11fpjr
 echo run prediction for model $run_id for tile $tile_id in year $year;
 python run.py predict -c config/predict.yaml --model config/model/xception_mix_order.yaml \
-        --data.init_args.input_lat_lon True \
-        --data.init_args.num_workers 8 \
         --data.init_args.tile_id $tile_id \
-        --data.init_args.metadata_file ~/data/GVS/Deploy/deploy_s2_items_${year}_part0.parquet \
-        --data.init_args.pred_fp ~/data/GVS/Deploy/inference_${year} \
-        --data.init_args.prediction_dir ~/data/GVS/Deploy/predictions_GTiff_${year}/${tile_id}_GTiff \
+        --data.init_args.metadata_file ~/data/GVS/Deploy/slurm_job_files_${year}/deploy_s2_items_${year}_part0.parquet \
+        --data.init_args.download_data True \
+        --data.init_args.pred_fp ~/flash/data/GVS/Deploy/inference_${year} \
+        --data.init_args.prediction_dir ~/flash/data/GVS/Deploy/predictions_GTiff_${year}/${tile_id}_GTiff \
         --data.init_args.year $year \
-        --data.init_args.batch_size 1 \
         --data.init_args.cache_predictions False \
         --data.init_args.stream_input True \
-        --correct_bias True \
-        --data.init_args.compression None \
-        --data.init_args.patch_size 544 \
-        --data.init_args.chunk_size 512 \
         --data.init_args.debug False \
-        --data.init_args.predict_full_profile True \
-        --data.init_args.output_format gtiff \
         --trainer.logger.init_args.resume False \
         --trainer.logger.init_args.offline False \
+        --trainer.logger.init_args.save_dir /tmp \
         --trainer.logger.init_args.id $run_id 
 ;;
 55)

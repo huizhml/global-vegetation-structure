@@ -59,8 +59,9 @@ def configure_slurm_jobs_with_priority(
             job_id += 1
     else:
         if len(prioritized_tiles_with_images) < n_tiles_per_job:
-            prioritized_tiles_with_images.extend(rest_tile_with_images[:n_tiles_per_job - len(prioritized_tiles_with_images)])
-            rest_tile_with_images = rest_tile_with_images[n_tiles_per_job- len(prioritized_tiles_with_images):]
+            n_from_rest_tiles = n_tiles_per_job - len(prioritized_tiles_with_images)
+            prioritized_tiles_with_images.extend(rest_tile_with_images[:n_from_rest_tiles])
+            rest_tile_with_images = rest_tile_with_images[n_from_rest_tiles:]
         prioritized_images = all_images[all_images['s2:mgrs_tile'].isin(prioritized_tiles_with_images)]
         prioritized_images.to_parquet(new_slurm_job_dir / f'deploy_s2_items_{year}_part0.parquet')
         assert len(prioritized_tiles_with_images) == n_tiles_per_job, 'prioritized_tiles_with_images should be equal to n_tiles_per_job'
@@ -105,9 +106,9 @@ def resplite_parquet_files(parquet_dir, save_dir, n_tiles_per_job=72):
 @dataclass
 class DeployConfig:
     parquet_dir: str = '~/data/GVS/Deploy/'
-    save_dir: str = '~/data/GVS/Deploy/slurm_job_files_2024'
+    save_dir: str = '~/data/GVS/Deploy/slurm_job_files_2020'
     s2_grid_file: str = '~/data/GVS/S2_tiles_with_growing_months.parquet'
-    year: int = 2024
+    year: int = 2020
     n_tiles_per_job: int=200
     prioritized_countries: list = field(default_factory=lambda: ['Gabon', 'Switzerland'])
 

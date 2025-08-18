@@ -5,56 +5,67 @@ channels:
 dependencies:
   - python==3.11
   - pip==23.2.1
-  - tqdm
-  - numba
-  - wandb
-  - matplotlib
-  - pandas
-  - h5py
-  - pkg-config
-  - libjpeg-turbo=3.1.0
-  - libtiff=4.6.0
-  - gdal=3.8.5
-  - rasterio=1.4.3
-  - rio-cogeo=4.4.0
-  - conda-forge::opencv
-  - ipykernel
-  - jupyterlab
-  - geopandas
-  - pip
   - pip:
       - jsonschema
       - matplotlib
       - numpy
       - scikit-learn
       - scipy
-      - seaborn
-      - ipdb
-      - pytest
-      - lightly
-      - kornia
-      - contextily
-      - hydra-core
-      - dask==2024.4.1
-      - dask-jobqueue
-      - dask-geopandas
-      - xarray-datatree
-      - h5netcdf
-      - xarray
-      - jsonargparse
-      - zarr
-      - earthengine-api
-      - pystac
-      - pyproj
-      - pystac-client
-      - stackstac
-      - planetary_computer
-      - backoff
-      - adlfs
-      - torchsummary
-      - --extra-index-url https://download.pytorch.org/whl/rocm5.6/
-      - torch==2.2.1+rocm5.6
-      - torchaudio==2.2.1+rocm5.6
-      - torchvision==0.17.1+rocm5.6
-      - lightning==2.2.0
-      - torchmetrics==1.3.0
+  # - tqdm
+  # - numba
+  # - wandb
+  # - timm
+  # - matplotlib
+  # - pandas
+  # - h5py
+  # - pkg-config
+  # - libjpeg-turbo=3.1.0
+  # - libtiff=4.6.0
+  # - gdal=3.8.5
+  # - rasterio=1.4.3
+  # - rio-cogeo=4.4.0
+  # - conda-forge::opencv
+  # - ipykernel
+  # - jupyterlab
+  # - geopandas
+  # - pip
+  # - pip:
+  #     - seaborn
+  #     - ipdb
+  #     - pytest
+  #     - lightly
+  #     - ipdb
+      # - ffcv
+      # - kornia
+      # - contextily
+      # - hydra-core
+      # - dask==2024.4.1
+      # - dask-jobqueue
+      # - dask-geopandas
+      # - xarray-datatree
+      # - h5netcdf
+      # - xarray
+      # - jsonargparse
+      # - triton # Implemented optimized quantization kernels, 40% faster (https://nvidia.github.io/TensorRT-Model-Optimizer/getting_started/_installation_for_Linux.html)
+      # - onnxruntime-gpu
+      # - "nvidia-modelopt[all]"
+      # - 'jsonargparse[signatures]>=4.27.7'
+      # - zarr
+      # - earthengine-api
+      # - pystac
+      # - pyproj
+      # - pystac-client
+      # - stackstac
+      # - planetary_computer
+      # - backoff
+      # - adlfs
+      # - torchsummary
+      # - --extra-index-url https://download.pytorch.org/whl/rocm5.6/
+      # - pytorch-triton-rocm==2.2.0
+      # - torch==2.2.2+rocm5.6
+      # - torchaudio==2.2.2+rocm5.6
+      # - torchvision==0.17.2+rocm5.6
+      # - pytorch-lightning
+  # - lightning
+  #   - lightning-bolts
+  # - torchmetrics

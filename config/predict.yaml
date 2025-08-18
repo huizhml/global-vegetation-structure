@@ -1,5 +1,5 @@
 seed_everything: 42
-correct_bias: False
+correct_bias: True
 optimizer:
   class_path: torch.optim.Adam
   init_args:
@@ -18,12 +18,17 @@ data:
   init_args: 
     pred_fp: ~/data/GVS/Deploy/inference_2020.zarr 
     tile_id: 32MQE
-    num_workers: 4
+    num_workers: 8
     batch_size: 1
     prediction_dir: ~/data/GVS/Deploy/2020/predictions
     output_dtype: int16
     cache_predictions: False
-
+    input_lat_lon: True
+    compression: None
+    patch_size: 544
+    chunk_size: 512
+    predict_full_profile: True
+    output_format: gtiff 
 
 model:
   class_path: models.unet.UNet

@@ -32,7 +32,7 @@ logging.getLogger()
 # os.environ['USE_PYGEOS'] = '0'
 os.system("taskset -c -p 0-95 %d" % os.getpid())
 os.environ['NUMEXPR_MAX_THREADS'] = '64'
-os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3,4,5,6,7'
+# os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3,4,5,6,7'
 
 
 def namespace_to_dict(namespace):
