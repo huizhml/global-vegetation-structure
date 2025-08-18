@@ -121,10 +121,11 @@ class WorldS2(DaskDownloader):
         
         
         
-    def download_by_api_query(self, specified_tiles=None, collection_id='sentinel-2-l2a', **kwargs):
+    def download_by_api_query(self, specified_tiles_df=None, collection_id='sentinel-2-l2a', **kwargs):
         s2_tiles_df = gpd.read_parquet(self.s2_parquet, columns=['Name', 'growing_months', 'geometry'])
         s2_tiles_df = s2_tiles_df.set_index('Name')
-        if specified_tiles is not None:
+        if specified_tiles_df is not None:
+            specified_tiles = specified_tiles_df['Name'].unique()
             s2_tiles_df = s2_tiles_df.loc[specified_tiles]
         wc_df = self.retrive_wc_items()
         wc_df = wc_df.sjoin(s2_tiles_df, how='inner')
@@ -147,13 +148,19 @@ class WorldS2(DaskDownloader):
             return
         api = pystac_client.Client.open(stac_endpoint, modifier=planetary_computer.sign_inplace, stac_io=stac_api_io)
         datetime = f'{self.year}-01-01/{self.year}-12-31'
-        
-        search = api.search(collections=collection_id, bbox=row.geometry.bounds, datetime=datetime, 
+        bbox = row.geometry.bounds
+        bbox = [bbox[0], bbox[1], min(bbox[2], 180), bbox[3]]
+
+        search = api.search(collections=collection_id, bbox=bbox, datetime=datetime, 
                             query={'eo:cloud_cover': {'lt': self.max_cloud_cover},
                                     's2:nodata_pixel_percentage': {'lt': 90},
                                     's2:mgrs_tile': {'eq': tile}})
         items = search.item_collection()
+        if len(items) == 0:
+            print(f'{tile} has no images, bbox={bbox}, skipping...')
+            return
         df = gpd.GeoDataFrame.from_features(items.to_dict(), crs='epsg:4326')
+        df['id'] = df['s2:product_uri'].str.replace(r'_[A-Z]\d{4}', '', regex=True).str.replace('.SAFE', '')
         month = pd.to_datetime(df['datetime']).dt.month
         df = df[month.isin(row.growing_months)]
         # get top 30 images, 10 from the best orbits and 20 from the rest
@@ -178,56 +185,74 @@ class WorldS2(DaskDownloader):
         df = pd.concat([best, rest])
         
         # get top 20 images
+        df = df.drop_duplicates(subset='id')
         if len(df)>self.n_iamges_per_tile:
+            df = df.sort_values(['s2:nodata_pixel_percentage', 'eo:cloud_cover'])
             if (df['s2:nodata_pixel_percentage']==0).sum() > 0:
-                df = df.sort_values(['s2:nodata_pixel_percentage', 'eo:cloud_cover']).head(self.n_iamges_per_tile)
+                df = df.head(self.n_iamges_per_tile)
             else:
                 idx = df.groupby('orbit')['eo:cloud_cover'].nsmallest(self.n_iamges_per_tile//2).index.get_level_values(1)
                 df = df.loc[idx]
-        items = [item for item in items.items if item.properties['s2:granule_id'] in df['s2:granule_id'].values]
+        df = gpd.GeoDataFrame(df, geometry='geometry', crs='EPSG:4326')
+        # df.to_parquet(self.save_dir/ f'{self.year}_{tile}_images.parquet')
         epsg = int(items[0].properties['proj:code'][5:])
+        items = [item for item in items.items if item.id in df['id'].values]
         images = get_patch(items, self.bands, dtype='uint16', fill_value=np.uint16(0), epsg=epsg)
         images.name = 's2'
         wc_df = wc_df[wc_df.Name == tile]
         wc_df['datetime'] = wc_df['start_datetime'].dt.strftime('%Y-%m-%d %H:%M:%S.%f')
         wc_df = wc_df.set_index('id')
-        wc_items = row_to_stac_item(wc_df, ['datetime'])
-        wc_image = get_patch(wc_items, ['map'], bounds=images.spec.bounds, epsg=epsg, dtype='uint16', fill_value=np.uint16(0))
-        wc_image = wc_image.max(dim='time', skipna=True).squeeze()
-        wc_image.name = 'esa_wc'
-        del images.attrs['spec']
-        del images.attrs['crs']
-        ds = xr.merge([images, wc_image], join='outer')
+        if not wc_df.empty:
+            wc_items = row_to_stac_item(wc_df, ['datetime'])
+            wc_image = get_patch(wc_items, ['map'], bounds=images.spec.bounds, epsg=epsg, dtype='uint16', fill_value=np.uint16(0))
+            wc_image = wc_image.max(dim='time', skipna=True).squeeze()
+            wc_image.name = 'esa_wc'
+            ds = xr.merge([images, wc_image], join='outer')
+            comp = self.comp
+        else:
+            ds = xr.Dataset()
+            ds['s2'] = images
+            comp = {'s2': self.comp['s2']}
+            
+        del ds.s2.attrs['spec']
+        del ds.s2.attrs['crs']
+        
         print(ds)
         if file.exists():
             try:
                 print('saveing to ', file)
-                store = ds.to_zarr(file, mode='a', group=f'{tile}', encoding=self.comp)
+                store = ds.to_zarr(file, mode='a', group=f'{tile}', encoding=comp)
                 print(store)
                 flag.touch()
             except Exception as err:
                 print(err)
                 print(f'{tile} failed')
         else:
-            ds.to_zarr(file, mode='w', group=f'{tile}', encoding=self.comp)
+            ds.to_zarr(file, mode='w', group=f'{tile}', encoding=comp)
             flag.touch()
 
             
             
-    def download(self, job_id, specified_tiles=None, **kwargs):
-        if specified_tiles is not None:
+    def download(self, job_id, specified_tiles_df=None, **kwargs):
+        if specified_tiles_df is not None:
             postfix = '_specified'
-            print(f'Downloading S2 images for specified tiles: {specified_tiles}')
+            print(f'Downloading S2 images for specified tiles: {specified_tiles_df}')
         else:
             postfix = ''
         
-        if specified_tiles is None:
-            s2_df = gpd.read_parquet(self.save_dir / f'deploy_s2_items_{self.year}_part{job_id}.parquet')
+        if specified_tiles_df is None:
+            s2_df = gpd.read_parquet(self.save_dir / f'slurm_job_files_{self.year}/deploy_s2_items_{self.year}_part{job_id}.parquet')
+            s2_tiles = s2_df['s2:mgrs_tile'].unique() # 15019 tiles
+            s2_df = s2_df.set_index('s2:mgrs_tile')
         else:
-            s2_df = gpd.read_parquet(self.save_dir / f'deploy_s2_items_{self.year}_part{job_id}_specified.parquet')
-        s2_tiles = s2_df['s2:mgrs_tile'].unique() # 15019 tiles
-        s2_df = s2_df.set_index('s2:mgrs_tile')
-
+            s2_tiles = specified_tiles_df['Name'].unique()
+            idx = specified_tiles_df[f'meta_file_idx_{self.year}'].unique().astype(int)
+            meta_files = [self.save_dir / f'slurm_job_files_{self.year}/deploy_s2_items_{self.year}_part{i}.parquet' for i in idx]
+            s2_df = dgp.read_parquet(meta_files, gather_spatial_partitions=False)
+            s2_df = s2_df.compute()
+            s2_df = s2_df.set_index('s2:mgrs_tile')
+            s2_df = s2_df.loc[s2_tiles]
+            s2_df['datetime'] = pd.to_datetime(s2_df['datetime'], utc=True)
         # self.store_name = f'inference_part{job_id}.zarr'
         if self.debug:
             process_tiles = s2_tiles[:8] # ['32MQE'] if job_id == 7 else ['32TMT']
@@ -255,19 +280,22 @@ class WorldS2(DaskDownloader):
     @delayed
     def download_tile(self, df):
         tile = df.index[0]
+        df = df.drop_duplicates(subset='id')
         df = df.set_index('id')
         if len(df)>self.n_iamges_per_tile:
+            df = df.sort_values(['s2:nodata_pixel_percentage', 'eo:cloud_cover'])
             if (df['s2:nodata_pixel_percentage']==0).sum() > 0:
-                df = df.sort_values(['s2:nodata_pixel_percentage', 'eo:cloud_cover']).head(self.n_iamges_per_tile)
+                df = df.head(self.n_iamges_per_tile)
             else:
                 idx = df.groupby('orbit')['eo:cloud_cover'].nsmallest(self.n_iamges_per_tile//2).index.get_level_values(1)
                 df = df.loc[idx]
+        
         df['datetime'] = df['datetime'].dt.strftime('%Y-%m-%d %H:%M:%S.%f')
         file = self.save_dir / f'{self.store_name}'
         flag = self.save_dir / f'{self.year}/{tile}_done'
-        if flag.exists():
-            logger.info(f'{tile} exists, skipping...')
-            return
+        # if flag.exists():
+        #     logger.info(f'{tile} exists, skipping...')
+        #     return
         bbox = box(*df.total_bounds)
         wc_df = self.wc_df[self.wc_df.geometry.intersects(bbox)]
         items = row_to_stac_item(df, S2_ITEM_PROPS)  
@@ -275,28 +303,37 @@ class WorldS2(DaskDownloader):
         images = get_patch(items, self.bands, dtype='uint16', fill_value=np.uint16(0))
         images.name = 's2'
         wc_df = wc_df.set_index('id')
-        wc_items = row_to_stac_item(wc_df, ['datetime'])
-        wc_image = get_patch(wc_items, ['map'], bounds=images.spec.bounds, epsg=epsg, dtype='uint16', fill_value=np.uint16(0))
-        wc_image = wc_image.max(dim='time', skipna=True).squeeze()
-        wc_image.name = 'esa_wc'
-        del images.attrs['spec']
-        del images.attrs['crs']
-        ds = xr.merge([images, wc_image], join='outer')
+        if not wc_df.empty:
+            wc_items = row_to_stac_item(wc_df, ['datetime'])
+            wc_image = get_patch(wc_items, ['map'], bounds=images.spec.bounds, epsg=epsg, dtype='uint16', fill_value=np.uint16(0))
+            wc_image = wc_image.max(dim='time', skipna=True).squeeze()
+            wc_image.name = 'esa_wc'
+            del images.attrs['spec']
+            del images.attrs['crs']
+            ds = xr.merge([images, wc_image], join='outer')
+            
+            comp = self.comp
+        else:
+            del images.attrs['spec']
+            del images.attrs['crs']
+            ds = xr.Dataset({'s2': images}, coords=images.coords, attrs=images.attrs)
+
+
         if self.output_format == 'zarr':
             if file.exists():
                 try:
                     print('saveing to ', file)
-                    store = ds.to_zarr(file, mode='a', group=f'{tile}', encoding=self.comp)
+                    store = ds.to_zarr(file, mode='a', group=f'{tile}', encoding=comp)
                     print(store)
                     flag.touch()
                 except Exception as err:
                     print(err)
                     print(f'{tile} failed')
             else:
-                ds.to_zarr(file, mode='w', group=f'{tile}', encoding=self.comp)
+                ds.to_zarr(file, mode='w', group=f'{tile}', encoding=comp)
                 flag.touch()
         elif self.output_format == 'h5':
-            ds.to_netcdf(file / f'{tile}.h5', engine='h5netcdf', encoding=self.comp)
+            ds.to_netcdf(file / f'{tile}.h5', engine='h5netcdf', encoding=comp)
             flag.touch()
 
     def check_images_per_tile(self):
@@ -310,7 +347,6 @@ class WorldS2(DaskDownloader):
         print(len(df))
         count_per_tile = df.groupby('s2:mgrs_tile').size()
         s2_images = s2_tile.join(count_per_tile.to_frame('images_count'), how='left')
-        import ipdb; ipdb.set_trace()
         s2_images.plot(column='images_count', legend=True, legend_kwds={'label': "Number of images", 'orientation': "horizontal"})
         plt.savefig( 'output/deploy_data/distribution_map_images_per_tile.png')
 
@@ -420,7 +456,8 @@ class WorldS2(DaskDownloader):
 
 
         df['orbit'] = df['id'].str.extract(r'_R(\d{3})_')
-        if (df['s2:nodata_pixel_percentage']==0).sum() > 0:
+        # if there's a best orbit that covers the whole tile, 
+        if (df['s2:nodata_pixel_percentage']==0).sum() > 0: 
             best_orbits = df[df['s2:nodata_pixel_percentage']==0]['orbit'].unique()
             best = df[df['orbit'].isin(best_orbits)]
             rest = df[~df['orbit'].isin(best_orbits)]
@@ -455,9 +492,10 @@ class MyConfig:
     max_cloud_cover: int = 90
     max_water_percentage: int = 99
     total_splits: int = 21
-    job_id: int = 7
+    job_id: int = 5
     specified_tiles_file: str='' # download/evaluation_tiles.txt
     n_parallel: int = 8
+    output_format: str = 'zarr'
     debug: bool = False
     task: str = 'download'
 
@@ -470,15 +508,14 @@ def main(cfg):
     from omegaconf import open_dict
     t0 = time.time()
     if len(cfg.specified_tiles_file) > 0:
-        with open(cfg.specified_tiles_file) as f:
-            specified_tiles = [line.strip() for line in f.readlines() if line.strip()]
+        specified_tiles_df = pd.read_csv(cfg.specified_tiles_file)
     else:
-        specified_tiles = None
+        specified_tiles_df = None
     # Add specified_tiles to cfg using OmegaConf merge
     # with open_dict(cfg):
         # cfg.specified_tiles = specified_tiles
     s2 = WorldS2(**cfg)
-    getattr(s2, cfg.task)(**cfg, specified_tiles=specified_tiles)
+    getattr(s2, cfg.task)(**cfg, specified_tiles_df=specified_tiles_df)
     # s2.check_images_per_tile()
     print(f"Time taken: {time.time() - t0:.2f}s")
 
