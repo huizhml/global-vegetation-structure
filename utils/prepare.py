@@ -33,11 +33,35 @@ ASSET_TABLE_DT = np.dtype(
 )
 
 
+class Mimetype(NamedTuple):
+    type: str
+    subtype: Optional[str]
+    parameters: Set[str]
+
+    @classmethod
+    def from_str(cls, mimetype: str) -> Mimetype:
+        parts = [p.strip() for p in mimetype.split(";")]
+        type, *subtype = parts[0].split("/")
+        if len(subtype) == 0:
+            subtype = None
+        else:
+            assert len(subtype) == 1
+            subtype = subtype[0]
+        return cls(type, subtype, set(parts[1:]))
+
+    def is_valid_for(self, target: Mimetype) -> bool:
+        return (
+            self.type == target.type
+            and (self.subtype == target.subtype if target.subtype else True)
+            and target.parameters.issubset(self.parameters)
+        )
+
+
 def prepare_items(
     items: ItemSequence,
-    assets: Optional[Union[List[str], AbstractSet[str]]] = frozenset([
-        "image/tiff", "image/x.geotiff", "image/vnd.stac.geotiff", "image/jp2"
-    ]),
+    assets: Optional[Union[List[str], AbstractSet[str]]] = frozenset(
+        ["image/tiff", "image/x.geotiff", "image/vnd.stac.geotiff", "image/jp2"]
+    ),
     epsg: Optional[int] = None,
     resolution: Optional[Union[IntFloat, Resolutions]] = None,
     bounds: Optional[Bbox] = None,
@@ -46,7 +70,6 @@ def prepare_items(
     rescale: bool = True,
     dtype: np.dtype = np.dtype("float64"),
 ) -> Tuple[np.ndarray, RasterSpec, List[str], ItemSequence]:
-
     if bounds is not None and bounds_latlon is not None:
         raise ValueError(
             f"Cannot give both `bounds` {bounds} and `bounds_latlon` {bounds_latlon}."
@@ -63,8 +86,7 @@ def prepare_items(
         asset_ids = list(max((item["assets"] for item in items), key=len))
     elif isinstance(assets, AbstractSet):
         allowed_mimetypes = [Mimetype.from_str(t) for t in assets]
-        type_strs_by_id: dict[
-            str, set[Optional[str]]] = collections.defaultdict(set)
+        type_strs_by_id: dict[str, set[Optional[str]]] = collections.defaultdict(set)
         for item in items:
             for asset_id, asset in item["assets"].items():
                 type_strs_by_id[asset_id].add(asset.get("type"))
@@ -82,22 +104,25 @@ def prepare_items(
                 f"You're filtering for assets that match the mimetype(s) {assets}, but since {len(ids_without_type)} "
                 f"(out of {len(type_strs_by_id)}) asset(s) have no `type` specified on any item, those will be "
                 "dropped. Consider passing a list of asset IDs instead to the `assets=` parameter.\n"
-                f"Assets with no type: {ids_without_type}", )
+                f"Assets with no type: {ids_without_type}",
+            )
 
         asset_ids = [
-            asset_id for asset_id, asset_mimetypes in mimetypes_by_id.items()
-            if asset_mimetypes and all(
+            asset_id
+            for asset_id, asset_mimetypes in mimetypes_by_id.items()
+            if asset_mimetypes
+            and all(
                 any(
                     asset_mt.is_valid_for(allowed_mt)
-                    for allowed_mt in allowed_mimetypes)
-                for asset_mt in asset_mimetypes)
+                    for allowed_mt in allowed_mimetypes
+                )
+                for asset_mt in asset_mimetypes
+            )
         ]
     else:
         asset_ids = assets
 
-    asset_table = np.full((len(items), len(asset_ids)),
-                          None,
-                          dtype=ASSET_TABLE_DT)
+    asset_table = np.full((len(items), len(asset_ids)), None, dtype=ASSET_TABLE_DT)
 
     # TODO support item-assets https://github.com/radiantearth/stac-spec/tree/master/extensions/item-assets
 
@@ -107,7 +132,12 @@ def prepare_items(
         raise ValueError("Zero asset IDs requested")
 
     for item_i, item in enumerate(items):
-        item_epsg = item["properties"].get("proj:epsg")
+        # ********* Changed here *********
+        # proj:code is the new way to get the epsg code
+        if item['stac_version'] == '1.0.0':
+            item_epsg = item["properties"].get("proj:epsg")
+        else:
+            item_epsg = int(item["properties"].get('proj:code')[5:])
         item_bbox = item["properties"].get("proj:bbox")
         item_shape = item["properties"].get("proj:shape")
         item_transform = item["properties"].get("proj:transform")
@@ -128,7 +158,7 @@ def prepare_items(
             if raster_bands is not None:
                 if len(raster_bands) != 1:
                     raise ValueError(
-                        f"raster:bands has {len(raster_bands)} elements for asset {asset_id!r}. "
+                        f"raster:bands has {len(raster_bands)} elements for asset {id!r}. "
                         "Multi-band rasters are not currently supported.\n"
                         "If you don't care about this asset, you can skip it by giving a list "
                         "of asset IDs you *do* want in `assets=`, and leaving this one out."
@@ -140,7 +170,7 @@ def prepare_items(
                 asset_offset = 0
 
             if rescale:
-                if not np.can_cast(asset_scale, dtype):
+                if not np.can_cast(type(asset_scale), dtype):
                     raise ValueError(
                         f"`rescale=True`, but safe casting cannot be completed between "
                         f"asset scale value {asset_scale} and output dtype {dtype}.\n"
@@ -149,7 +179,7 @@ def prepare_items(
                         "values, pass a different `dtype=` (typically `float`)."
                     )
 
-                if not np.can_cast(asset_offset, dtype):
+                if not np.can_cast(type(asset_offset), dtype):
                     raise ValueError(
                         f"`rescale=True`, but safe casting cannot be completed between "
                         f"asset offset value {asset_offset} and output dtype {dtype}.\n"
@@ -166,7 +196,8 @@ def prepare_items(
                     raise ValueError(
                         f"Cannot pick a common CRS, since asset {id!r} of item "
                         f"{item_i} {item['id']!r} does not have one.\n\n"
-                        "Please specify a CRS with the `epsg=` argument.")
+                        "Please specify a CRS with the `epsg=` argument."
+                    )
                 if out_epsg is None:
                     out_epsg = asset_epsg
                 elif out_epsg != asset_epsg:
@@ -174,15 +205,16 @@ def prepare_items(
                         f"Cannot pick a common CRS, since assets have multiple CRSs: asset {id!r} of item "
                         f"{item_i} {item['id']!r} is in EPSG:{asset_epsg}, "
                         f"but assets before it were in EPSG:{out_epsg}.\n\n"
-                        "Please specify a CRS with the `epsg=` argument.")
+                        "Please specify a CRS with the `epsg=` argument."
+                    )
 
-            assert isinstance(out_epsg,
-                              int), f"`out_epsg` not found. {out_epsg=}"
+            assert isinstance(out_epsg, int), f"`out_epsg` not found. {out_epsg=}"
             # ^ because if it was None initially, and we didn't error out in the above check, it's now always set
 
             if bounds_latlon is not None and out_bounds is None:
                 out_bounds = bounds = geom_utils.reproject_bounds(
-                    bounds_latlon, 4326, out_epsg)
+                    bounds_latlon, 4326, out_epsg
+                )
                 # NOTE: we wait to reproject until now, so we can use the inferred CRS
 
             # Compute the asset's bbox in the output CRS.
@@ -191,27 +223,28 @@ def prepare_items(
 
             # If there's a `proj:bbox` (and it's actually for the asset, not the item overall),
             # just reproject that and use it
-            # if isinstance(asset_transform, np.ndarray):
-            #     asset_transform = asset_transform.tolist()
-            # if isinstance(asset_shape, np.ndarray):
-            #     asset_shape = asset_shape.tolist()
-
-            if (asset_bbox is not None and asset_epsg is not None
-                    and asset_transform == item_transform
-                    and asset_shape == item_shape
-                    # TODO this still misses the case where the asset overrides bbox, but not transform/shape.
-                    # At that point would need to significantly restructure the code
-                    # to express this complex of prioritization:
-                    # bbox from asset, then transform from asset, then bbox from item,
-                    # then transform from item, then latlon bbox from item
-                ):
+            if (
+                asset_bbox is not None
+                and asset_epsg is not None
+                and asset_transform == item_transform
+                and asset_shape == item_shape
+                # TODO this still misses the case where the asset overrides bbox, but not transform/shape.
+                # At that point would need to significantly restructure the code
+                # to express this complex of prioritization:
+                # bbox from asset, then transform from asset, then bbox from item,
+                # then transform from item, then latlon bbox from item
+            ):
                 asset_bbox_proj = geom_utils.reproject_bounds(
-                    asset_bbox, asset_epsg, out_epsg)
+                    asset_bbox, asset_epsg, out_epsg
+                )
 
             # If there's no bbox (or asset-level metadata is more accurate), compute one from the shape and geotrans
             else:
-                if (asset_transform is not None and asset_shape is not None
-                        and asset_epsg is not None):
+                if (
+                    asset_transform is not None
+                    and asset_shape is not None
+                    and asset_epsg is not None
+                ):
                     asset_affine = affine.Affine(*asset_transform[:6])
                     asset_bbox_proj = geom_utils.bounds_from_affine(
                         asset_affine,
@@ -231,7 +264,8 @@ def prepare_items(
                         else:
                             # TODO handle error
                             asset_bbox_proj = geom_utils.reproject_bounds(
-                                bbox_lonlat, 4326, out_epsg)
+                                bbox_lonlat, 4326, out_epsg
+                            )
                             item_bbox_proj = asset_bbox_proj
                             # ^ so we can reuse for other assets
                     else:
@@ -241,8 +275,7 @@ def prepare_items(
             if resolution is None:
                 # Prefer computing resolutions from a geotrans, if it exists
                 if asset_transform is not None and asset_epsg is not None:
-                    asset_affine = asset_affine or affine.Affine(
-                        *asset_transform[:6])
+                    asset_affine = asset_affine or affine.Affine(*asset_transform[:6])
                     if asset_epsg == out_epsg:
                         # Fastpath-ish when asset is already in the output CRS:
                         # pull directly from geotrans coefficients
@@ -253,20 +286,22 @@ def prepare_items(
                                 "has a non-rectilinear geotrans "
                                 f'(its data is is not axis-aligned, or "north-up"): {asset_transform}. '
                                 "We should be able to handle this but just don't want to deal with it right now.\n\n"
-                                "Please specify the `resolution=` argument.")
+                                "Please specify the `resolution=` argument."
+                            )
                         res_x, res_y = abs(asset_affine.a), abs(asset_affine.e)
                     else:
                         # Asset is in a different CRS; create a 1-pixel box and reproject
                         # to figure out its width/height in the output CRS
-                        px_corner_xs, px_corner_ys = (asset_affine *
-                                                      np.array([(0, 0), (0, 1),
-                                                                (1, 1),
-                                                                (1, 0)]).T)
+                        px_corner_xs, px_corner_ys = (
+                            asset_affine * np.array([(0, 0), (0, 1), (1, 1), (1, 0)]).T
+                        )
 
                         transformer = geom_utils.cached_transformer(
-                            asset_epsg, out_epsg, always_xy=True)
+                            asset_epsg, out_epsg, always_xy=True
+                        )
                         out_px_corner_xs, out_px_corner_ys = transformer.transform(
-                            px_corner_xs, px_corner_ys, errcheck=True)
+                            px_corner_xs, px_corner_ys, errcheck=True
+                        )
 
                         res_y = max(out_px_corner_ys) - min(out_px_corner_ys)
                         res_x = max(out_px_corner_xs) - min(out_px_corner_xs)
@@ -284,15 +319,14 @@ def prepare_items(
                             "or on the item\n\n"
                             "Please specify the `resolution=` argument to set the output resolution manually. "
                             f"(Remember that resolution must be in the units of your CRS (http://epsg.io/{out_epsg})"
-                            "---not necessarily meters.")
+                            "---not necessarily meters."
+                        )
 
                     # NOTE: this would be inaccurate if `proj:bbox` was provided,
                     # but the geotrans was non-rectilinear
                     # TODO check for that if there's a geotrans??
-                    res_y = (asset_bbox_proj[3] -
-                             asset_bbox_proj[1]) / asset_shape[0]
-                    res_x = (asset_bbox_proj[2] -
-                             asset_bbox_proj[0]) / asset_shape[1]
+                    res_y = (asset_bbox_proj[3] - asset_bbox_proj[1]) / asset_shape[0]
+                    res_x = (asset_bbox_proj[2] - asset_bbox_proj[0]) / asset_shape[1]
 
                 if out_resolutions_xy is None:
                     out_resolutions_xy = (res_x, res_y)
@@ -319,13 +353,16 @@ def prepare_items(
                         f"- A `bbox` set on the item {item['id']!r}\n\n"
                         "Please specify the `bounds=` or `bounds_latlon=` argument to set the output bounds manually."
                     )
-                out_bounds = (asset_bbox_proj if out_bounds is None
-                              else geom_utils.union_bounds(
-                                  asset_bbox_proj, out_bounds))
+                out_bounds = (
+                    asset_bbox_proj
+                    if out_bounds is None
+                    else geom_utils.union_bounds(asset_bbox_proj, out_bounds)
+                )
             else:
                 # Drop asset if it doesn't overlap with the output bounds at all
                 if asset_bbox_proj is not None and not geom_utils.bounds_overlap(
-                        asset_bbox_proj, bounds):
+                    asset_bbox_proj, bounds
+                ):
                     # I've got a blank space in my ndarray, baby / And I'll write your name
                     continue
 
@@ -344,6 +381,7 @@ def prepare_items(
 
     if snap_bounds:
         out_bounds = geom_utils.snapped_bounds(out_bounds, out_resolutions_xy)
+    
     spec = RasterSpec(
         epsg=out_epsg,
         bounds=out_bounds,
@@ -358,12 +396,11 @@ def prepare_items(
 
     if item_isnan.any() or asset_id_isnan.any():
         asset_table = asset_table[np.ix_(~item_isnan, ~asset_id_isnan)]
-        asset_ids = [
-            id for id, isnan in zip(asset_ids, asset_id_isnan) if not isnan
-        ]
+        asset_ids = [id for id, isnan in zip(asset_ids, asset_id_isnan) if not isnan]
         items = [item for item, isnan in zip(items, item_isnan) if not isnan]
 
     return asset_table, spec, asset_ids, items
+
 
 def to_coords(
     items: ItemSequence,
@@ -373,18 +410,17 @@ def to_coords(
     properties: Union[bool, str, Sequence[str]] = True,
     band_coords: bool = True,
 ) -> Tuple[Dict[str, Union[pd.Index, np.ndarray, list]], List[str]]:
-
     times = pd.to_datetime(
         [item["properties"]["datetime"] for item in items],
-        # infer_datetime_format=True,
-        errors="coerce",
+        errors="raise",
+        format="ISO8601",
     )
+    # Convert to UTC and drop timezone info if present, since xarray can't handle
+    # tz-aware DatetimeIndexes: https://github.com/pydata/xarray/issues/3291.
+    # Since all STAC timestamps should be UTC (https://github.com/radiantearth/stac-spec/issues/1095),
+    # we feel safe assuming that if `times.tz is None`, it's already in UTC.
     if times.tz is not None:
-        # xarray can't handle tz-aware DatetimeIndexes, so we convert to UTC and drop the timezone
-        # https://github.com/pydata/xarray/issues/3291.
-        # The `tz is None` case is typically a manifestation of https://github.com/pandas-dev/pandas/issues/41047.
-        # Since all STAC timestamps should be UTC (https://github.com/radiantearth/stac-spec/issues/1095),
-        # we feel safe assuming that any tz-naive datetimes are already in UTC.
+        # `tz_convert(None)` converts to UTC and drops timezone information.
         times = times.tz_convert(None)
 
     dims = ["time", "band", "y", "x"]

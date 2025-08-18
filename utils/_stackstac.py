@@ -24,11 +24,12 @@ from utils.prepare import prepare_items, to_coords, to_attrs
 
 
 def stack(
-    items: Union[ItemCollectionIsh, ItemIsh, Sequence[PystacItem],
-                 Sequence[SatstacItem]],
-    assets: Optional[Union[List[str], AbstractSet[str]]] = frozenset([
-        "image/tiff", "image/x.geotiff", "image/vnd.stac.geotiff", "image/jp2"
-    ]),
+    items: Union[
+        ItemCollectionIsh, ItemIsh, Sequence[PystacItem], Sequence[SatstacItem]
+    ],
+    assets: Optional[Union[List[str], AbstractSet[str]]] = frozenset(
+        ["image/tiff", "image/x.geotiff", "image/vnd.stac.geotiff", "image/jp2"]
+    ),
     epsg: Optional[int] = None,
     resolution: Optional[Union[IntFloat, Resolutions]] = None,
     bounds: Optional[Bbox] = None,
@@ -45,7 +46,8 @@ def stack(
     band_coords: bool = True,
     gdal_env: Optional[LayeredEnv] = None,
     errors_as_nodata: Tuple[Exception, ...] = (
-        RasterioIOError("HTTP response code: 404"), ),
+        RasterioIOError("HTTP response code: 404"),
+    ),
     reader: Type[Reader] = AutoParallelRioReader,
 ) -> xr.DataArray:
     """
@@ -278,8 +280,6 @@ def stack(
     """
     plain_items = items_to_plain(items)
 
-    plain_items = arr_to_list(plain_items)
-
     if sortby_date is not False:
         plain_items = sorted(
             plain_items,
@@ -324,12 +324,3 @@ def stack(
         attrs=to_attrs(spec),
         name="stackstac-" + dask.base.tokenize(arr),
     )
-
-
-def arr_to_list(ls):
-    for item in ls:
-        for key, val in item['assets'].items():
-            for k, v in val.items():
-                if isinstance(v, np.ndarray):
-                    item['assets'][key][k] = v.tolist()
-    return ls

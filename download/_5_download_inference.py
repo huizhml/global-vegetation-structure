@@ -24,6 +24,8 @@ from hydra.core.config_store import ConfigStore
 from dataclasses import dataclass, field
 import warnings
 import os
+# from stackstac import stack
+from utils._stackstac import stack
 from download._utils import utm_to_wgs84, build_parquet_file_table, filter_parquet_files, row_to_stac_item, get_patch
 from download._const import S2_ITEM_PROPS, STAC_ITEM_KEYS
 from download._dask_downloader import DaskDownloader
@@ -132,10 +134,11 @@ class WorldS2(DaskDownloader):
         
         # for tile, row in s2_tiles_df.iterrows():
             # self.query_and_download_tile(tile, row, wc_df,collection_id).compute()
+        s2_tiles_df = s2_tiles_df.loc[['01UCT']]
         tasks = [self.query_and_download_tile(tile, row, wc_df,collection_id) for tile, row in s2_tiles_df.iterrows()]
         dask.compute(*tasks)
             
-    @delayed
+    # @delayed
     def query_and_download_tile(self, tile, row,wc_df,collection_id='sentinel-2-l2a'):
         '''
         For downloading Sentinel-2 images from 2017, no metadata saved for this year. 
@@ -143,14 +146,13 @@ class WorldS2(DaskDownloader):
         '''
         file = self.save_dir / f'{self.store_name}'
         flag = self.save_dir / f'{self.year}/{tile}_done'
-        if flag.exists():
-            logger.info(f'{tile} exists, skipping...')
-            return
+        # if flag.exists():
+        #     logger.info(f'{tile} exists, skipping...')
+        #     return
         api = pystac_client.Client.open(stac_endpoint, modifier=planetary_computer.sign_inplace, stac_io=stac_api_io)
         datetime = f'{self.year}-01-01/{self.year}-12-31'
         bbox = row.geometry.bounds
         bbox = [bbox[0], bbox[1], min(bbox[2], 180), bbox[3]]
-
         search = api.search(collections=collection_id, bbox=bbox, datetime=datetime, 
                             query={'eo:cloud_cover': {'lt': self.max_cloud_cover},
                                     's2:nodata_pixel_percentage': {'lt': 90},
@@ -197,26 +199,25 @@ class WorldS2(DaskDownloader):
         # df.to_parquet(self.save_dir/ f'{self.year}_{tile}_images.parquet')
         epsg = int(items[0].properties['proj:code'][5:])
         items = [item for item in items.items if item.id in df['id'].values]
-        images = get_patch(items, self.bands, dtype='uint16', fill_value=np.uint16(0), epsg=epsg)
+        images = stack(items, self.bands, dtype='uint16', fill_value=np.uint16(0), epsg=epsg, resolution=10, rescale=False)
         images.name = 's2'
-        wc_df = wc_df[wc_df.Name == tile]
-        wc_df['datetime'] = wc_df['start_datetime'].dt.strftime('%Y-%m-%d %H:%M:%S.%f')
-        wc_df = wc_df.set_index('id')
-        if not wc_df.empty:
-            wc_items = row_to_stac_item(wc_df, ['datetime'])
-            wc_image = get_patch(wc_items, ['map'], bounds=images.spec.bounds, epsg=epsg, dtype='uint16', fill_value=np.uint16(0))
-            wc_image = wc_image.max(dim='time', skipna=True).squeeze()
-            wc_image.name = 'esa_wc'
-            ds = xr.merge([images, wc_image], join='outer')
-            comp = self.comp
-        else:
-            ds = xr.Dataset()
-            ds['s2'] = images
-            comp = {'s2': self.comp['s2']}
+        # wc_df = wc_df[wc_df.Name == tile]
+        # wc_df['datetime'] = wc_df['start_datetime'].dt.strftime('%Y-%m-%d %H:%M:%S.%f')
+        # wc_df = wc_df.set_index('id')
+        # if not wc_df.empty:
+        #     wc_items = row_to_stac_item(wc_df, ['datetime'])
+        #     wc_image = stack(wc_items, ['map'], bounds=images.spec.bounds, epsg=epsg, dtype='uint16', fill_value=np.uint16(0))
+        #     import ipdb; ipdb.set_trace()
+        #     wc_image = wc_image.max(dim='time', skipna=True).squeeze()
+        #     wc_image.name = 'esa_wc'
+        #     ds = xr.merge([images, wc_image], join='outer')
+        #     comp = self.comp
+        # else:
+        del images.attrs['spec']
+        del images.attrs['crs']
+        ds = xr.Dataset({'s2': images}, coords=images.coords, attrs=images.attrs)
+        comp = {'s2': self.comp['s2']}
             
-        del ds.s2.attrs['spec']
-        del ds.s2.attrs['crs']
-        
         print(ds)
         if file.exists():
             try:
@@ -300,12 +301,12 @@ class WorldS2(DaskDownloader):
         wc_df = self.wc_df[self.wc_df.geometry.intersects(bbox)]
         items = row_to_stac_item(df, S2_ITEM_PROPS)  
         epsg = items[0].properties['proj:epsg']
-        images = get_patch(items, self.bands, dtype='uint16', fill_value=np.uint16(0))
+        images = stack(items, self.bands, dtype='uint16', fill_value=np.uint16(0), rescale=False)
         images.name = 's2'
         wc_df = wc_df.set_index('id')
         if not wc_df.empty:
             wc_items = row_to_stac_item(wc_df, ['datetime'])
-            wc_image = get_patch(wc_items, ['map'], bounds=images.spec.bounds, epsg=epsg, dtype='uint16', fill_value=np.uint16(0))
+            wc_image = stack(wc_items, ['map'], bounds=images.spec.bounds, epsg=epsg, dtype='uint16', fill_value=np.uint16(0), rescale=False)
             wc_image = wc_image.max(dim='time', skipna=True).squeeze()
             wc_image.name = 'esa_wc'
             del images.attrs['spec']
