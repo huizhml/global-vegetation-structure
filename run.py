@@ -420,7 +420,7 @@ def cli_main():
                          subclass_mode_model=True,
                          subclass_mode_data=True, 
                          save_config_callback=LoggerSaveConfigCallback,
-                        #  parser_kwargs={"parser_mode": "omegaconf"},
+                         parser_kwargs={"parser_mode": "omegaconf"},
                          ) # omegaconf: allow variable interpolation
 
     # cli.trainer.fit(cli.model, datamodule=cli.datamodule)
