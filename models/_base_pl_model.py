@@ -87,8 +87,9 @@ class BaseModel(LightningModule):
         return torch.cat([x, slope.unsqueeze(1)], dim=1)
 
     def _process_latlon(self, x, lon, lat):
-        lon = lon.unsqueeze(1).repeat(1, 15, 1)
-        lat = lat.unsqueeze(2).repeat(1, 1, 15)
+        patch_size = lon.shape[1]
+        lon = lon.unsqueeze(1).repeat(1, patch_size, 1)
+        lat = lat.unsqueeze(2).repeat(1, 1, patch_size)
         sin_lon = torch.sin(lon * torch.pi / 180)
         cos_lon = torch.cos(lon * torch.pi / 180)
         lat = (lat - LAT_MEAN) / LAT_STD
@@ -208,8 +209,8 @@ class BaseModel(LightningModule):
         self.log_dict(self.val_metrics.compute(), on_epoch=True, on_step=False, sync_dist=True)
         self.log_dict(self.val_metrics_veg.compute(), on_epoch=True, on_step=False, sync_dist=True)
 
-    def on_test_epoch_start(self):
-        self = self.half()
+    # def on_test_epoch_start(self):
+    #     self = self.half()
 
     def test_step(self, sample, batch_idx):
         '''
@@ -217,7 +218,7 @@ class BaseModel(LightningModule):
         '''
         x = self.transform(sample[0])
         slope_mask = self.get_slope_mask(sample[3][..., 7, 7])
-        veg_mask = get_veg_mask(sample[2])
+        veg_mask = get_veg_mask(sample[2].long())
         if self.feed_latlon:
             lon = sample[4].unsqueeze(1).repeat(1, 15, 1)
             lat = sample[5].unsqueeze(2).repeat(1, 1, 15)
@@ -227,36 +228,23 @@ class BaseModel(LightningModule):
             sin_lon = (sin_lon - LON_SIN_MEAN) / LON_SIN_STD
             cos_lon = (cos_lon - LON_COS_MEAN) / LON_COS_STD
             x = torch.cat([x, lat.unsqueeze(1), sin_lon.unsqueeze(1), cos_lon.unsqueeze(1)], dim=1)
-        y_hat = self.forward(x.half())
-        y_hat = y_hat[:, :303, 7, 7].reshape(-1, 101, 3)
-        return y_hat[:, :, 1], sample[1].half(), slope_mask.unsqueeze(1), veg_mask.unsqueeze(1)
-    
-    # def on_predict_epoch_start(self):
-    #     if hasattr(self.trainer.datamodule.pred_dataset, 'tile_id'):
-    #         self.trainer.datamodule.pred_dataset.set_prediction_fname(self.logger._experiment.id)
-    #         self.predict_step = self._predict_step_for_large_tile
-    #         self.on_predict_epoch_end = self.trainer.datamodule.pred_dataset.finalize_output
-    #     else:            
-    #         self.predict_step = self._predict_step_for_small_patch
-    #         self.trainer.datamodule.pred_dataset.init_out_h5(self.logger._experiment.id)
-    #     return super().on_predict_epoch_start()
-    
+        y_hat = self.forward(x.float())
+        y_hat = y_hat[:, :303, 7, 7]#.reshape(-1, 101, 3)
+        return y_hat, sample[1], slope_mask.unsqueeze(1), veg_mask.unsqueeze(1)
     
     def on_predict_epoch_start(self):
         # self = self.half()
         self = torch.compile(self)
-        if not self.trainer.datamodule.cache_predictions:
-            self.trainer.datamodule.pred_dataset.initialize_output()
-        # self.trainer.datamodule.pred_dataset.set_prediction_fname(self.logger._experiment.id)
-        # # Only compile if no profiler is active to avoid conflicts
-        # if not hasattr(self.trainer, 'profiler') or self.trainer.profiler is None:
-        #     self = torch.compile(self)
+        if hasattr(self.trainer.datamodule.pred_dataset, 'tile_id'):
+            if not self.trainer.datamodule.cache_predictions:
+                self.trainer.datamodule.pred_dataset.initialize_output()
+            # self.trainer.datamodule.pred_dataset.set_prediction_fname(self.logger._experiment.id)
+            self.predict_step = self._predict_step_for_large_tile
+        else:            
+            self.predict_step = self._predict_step_for_small_patch
+            self.trainer.datamodule.pred_dataset.init_out_h5(self.logger._experiment.id)
+    
     @torch.no_grad()
-    def predict_step(self, sample, batch_idx): #TODO
-        return self._predict_step_for_large_tile(sample, batch_idx)
-
-
-
     def _predict_step_for_large_tile(self, sample, batch_idx):
         # y_topleft, x_topleft = self.trainer.datamodule.pred_dataset.patch_coords_dict[batch_idx][1]
         if self.feed_latlon:
@@ -269,16 +257,19 @@ class BaseModel(LightningModule):
         self.trainer.datamodule.pred_dataset.write_patch_predictions(y_hat, sample[1], batch_idx)
 
         
-
+    @torch.no_grad()
     def _predict_step_for_small_patch(self, sample, batch_idx):
         # NOTE: for downstream task
         x = self.transform(sample[0])
         x = self.process_latlon(x, sample[3], sample[4])
+        if x.isnan().any():
+            raise ValueError('x contains nan')
         y_hat = self.forward(x.float())
-        self.trainer.datamodule.pred_dataset.write_patch_predictions(y_hat, sample[1], sample[5], sample[6], batch_idx)
+        self.trainer.datamodule.pred_dataset.write_patch_predictions(y_hat, sample[0], sample[1], sample[5], sample[6], batch_idx)
     
         
     @torch.no_grad()
     def on_predict_end(self):
-        if self.trainer.datamodule.cache_predictions:
-            self.trainer.datamodule.pred_dataset.save_predictions()
+        if hasattr(self.trainer.datamodule.pred_dataset, 'tile_id'):
+            if self.trainer.datamodule.cache_predictions:
+                self.trainer.datamodule.pred_dataset.save_predictions()

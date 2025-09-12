@@ -3,15 +3,15 @@
 #SBATCH --partition=ml4good
 ##SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=128G
-#SBATCH --gres=gpu:l40s:1
+#SBATCH --mem=64G
+#SBATCH --gres=gpu:1
 #SBATCH --time=1-23:50:00
 #SBATCH --job-name=run
 #SBATCH --output=./logs/%x-%A_%a.out
 #SBATCH --error=./logs/%x-%A_%a.err
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=huzh@di.ku.dk
-#SBATCH --exclude hendrixgpu26fl
+#SBATCH --exclude hendrixgpu26fl,hendrixgpu11fl,hendrixgpu12fl
 ##SBATCH --exclude hendrixgpu04fl,hendrixgpu03fl,hendrixgpu08fl,hendrixgpu11fl,hendrixgpu12fl,hendrixgpu14fl,hendrixgpu15fl,hendrixgpu18fl #for using /scratch
 echo "***************************** JOB INFO *****************************"
 echo "Job Name: $SLURM_JOB_NAME"
@@ -110,29 +110,35 @@ run_id=${run_id:-null}
 max_epochs=${max_epochs:-200}
 subcommand=${subcommand:-fit}
 case $id in
-
 80)
-echo run onnx inference
-tile_id=32MQE
-year=2020
-comp=None
-level=7
-python run.py predict -c config/deploy.yaml \
-        --data.init_args.input_lat_lon True \
-        --data.init_args.num_workers 8 \
-        --data.init_args.tile_id $tile_id \
-        --data.init_args.pred_fp ~/data/GVS/Deploy/inference_${year}.zarr \
-        --data.init_args.prediction_dir ~/data/GVS/Deploy/predictions_${year} \
-        --correct_bias False \
-        --data.init_args.comp_level $level \
-        --data.init_args.compression $comp \
-        --data.init_args.patch_size 544 \
-        --data.init_args.chunk_size 512 \
-        --data.init_args.output_format cog \
-        --model.init_args.onnx_model_path checkpoints/fake_quantized_model_finetuned1_epochs_ycfb24ae.onnx \
-        --trainer.logger.init_args.resume False \
-        --trainer.logger.init_args.name QR_veg_geo_lc_QAT_inference_test
+# ====================================================================================
+# Conformal prediction
+# ====================================================================================
+# NOTE: takes about 1h5min on LUMI for val_filtered_v1
+# NOTE: takes about 35min on A100 for val_filtered_v1
+run_id=cg11fpjr
+test_data_name=test_filtered_v1
+# sync_data_to_scratch
+data_dir=${HOME}/data/GVS/train_subsets
+correct_bias=True
+echo get sparse prediction for model $run_id on $test_data_name;
+python run.py test -c config/train.yaml --model config/model/xception_mix_order.yaml \
+        --data.init_args.train_fp "$data_dir/$train_data_name.beton" \
+        --data.init_args.test_fp "$data_dir/$test_data_name.beton" \
+        --data.init_args.batch_size 4096 \
+        --data.init_args.distributed False \
+        --model.init_args.evaluate_high_slope True \
+        --correct_bias $correct_bias \
+        --bias_correction_column me_gradual_slope_veg \
+        --recalculate_bias False \
+        --trainer.logger.init_args.id $run_id \
+        --trainer.callbacks+=callbacks.prediction_logger.PredictionLogger \
+        --trainer.callbacks.save_dir ~/data/GVS/uncertainty/ \
+        --trainer.callbacks.outfile_suffix _corrected
+        # --trainer.callbacks.output_rh_idxs "[0,25,50,95,98,100]"
+
 ;;
+
 # ====================================================================================
 # Quantization-aware training
 # ====================================================================================
@@ -189,45 +195,135 @@ python run.py fit -c config/qat.yaml --model config/model/xception_mix_order.yam
         --trainer.logger.init_args.name QR_veg_geo_lc_QAT_test
 ;;
 
+72)
+echo run onnx inference
+tile_id=32MQE
+year=2020
+comp=None
+level=7
+python run.py predict -c config/deploy.yaml \
+        --data.init_args.input_lat_lon True \
+        --data.init_args.num_workers 8 \
+        --data.init_args.tile_id $tile_id \
+        --data.init_args.pred_fp ~/data/GVS/Deploy/inference_${year}.zarr \
+        --data.init_args.prediction_dir ~/data/GVS/Deploy/predictions_${year} \
+        --correct_bias False \
+        --data.init_args.comp_level $level \
+        --data.init_args.compression $comp \
+        --data.init_args.patch_size 544 \
+        --data.init_args.chunk_size 512 \
+        --data.init_args.output_format cog \
+        --model.init_args.onnx_model_path checkpoints/fake_quantized_model_finetuned1_epochs_ycfb24ae.onnx \
+        --trainer.logger.init_args.resume False \
+        --trainer.logger.init_args.name QR_veg_geo_lc_QAT_inference_test
+;;
+
 # ====================================================================================
 # Downstream tasks
 # ====================================================================================
 60)
-sync_data_to_scratch
+# sync_data_to_scratch
+run_id=cg11fpjr
 echo $run_id
 echo predict for downstream task;
 python run.py predict -c config/predict.yaml --model config/model/xception_mix_order.yaml \
         --data.class_path datasets._h5_dataset.SparsePredDataModule \
-        --data.init_args.pred_fp ~/data/GVS/downstream_task_data/s2_2017_nounsure.h5 \
+        --data.init_args.pred_fp ~/data/GVS/downstream_task_data/s2_2017_ps31.h5 \
         --data.init_args.prediction_dir ~/data/GVS/downstream_task_data/rhs_predictions_2017 \
-        --data.init_args.batch_size 4096 \
+        --data.init_args.batch_size 2048 \
         --trainer.logger.init_args.id $run_id
 ;;
 61)
-sync_data_to_scratch
+# sync_data_to_scratch
+run_id=0crmfaia
 echo $run_id
 echo downstream task training with full profile;
 python run.py fit -c config/train_naturalness.yaml \
         --data.class_path datasets._h5_dataset.NaturalnessDataModule \
-        --data.init_args.h5_file ~/data/GVS/downstream_task_data/rhs_predictions_2017_${run_id}.h5 \
-        --data.init_args.naturalness_fp ~/data/GVS/downstream_task_data/naturalness/reference_data_set_updated.csv \
+        --data.init_args.h5_file ~/data/GVS/downstream_task_data/rhs_predictions_2017_${run_id}_ps31.h5 \
+        --data.init_args.naturalness_fp ~/data/GVS/downstream_task_data/naturalness/reference_data_set_updated.with_images.csv \
         --data.init_args.mean_std_fp ~/data/GVS/downstream_task_data/naturalness/mean_std_${run_id}.npz \
+        --model.init_args.transform.init_args.mean_std_fp ~/data/GVS/downstream_task_data/naturalness/mean_std_${run_id}.npz \
+        --model.init_args.transform.init_args.input_rhs True \
+        --model.init_args.in_channels 113 \
         --data.init_args.batch_size 1024 \
-        --trainer.logger.init_args.name naturalness_full_profile_${run_id}
+        --data.init_args.class_balance False \
+        --trainer.logger.init_args.name naturalness_s2_rhs
 ;;
 
 62)
-sync_data_to_scratch
+# sync_data_to_scratch
+run_id=0crmfaia
 echo $run_id
-echo downstream task training with canopy top height;
+echo downstream task training with s2 only;
 python run.py fit -c config/train_naturalness.yaml \
         --data.class_path datasets._h5_dataset.NaturalnessDataModule \
-        --data.init_args.h5_file ~/data/GVS/downstream_task_data/rhs_predictions_2017_${run_id}.h5 \
-        --data.init_args.naturalness_fp ~/data/GVS/downstream_task_data/naturalness/reference_data_set_updated.csv \
-        --data.init_args.batch_size 2048 \
+        --data.init_args.h5_file ~/data/GVS/downstream_task_data/rhs_predictions_2017_${run_id}_ps31.h5 \
+        --data.init_args.naturalness_fp ~/data/GVS/downstream_task_data/naturalness/reference_data_set_updated.with_images.csv \
+        --data.init_args.mean_std_fp ~/data/GVS/downstream_task_data/naturalness/mean_std_${run_id}.npz \
+        --model.init_args.transform.init_args.mean_std_fp ~/data/GVS/downstream_task_data/naturalness/mean_std_${run_id}.npz \
+        --model.init_args.in_channels 12 \
+        --model.init_args.transform.init_args.input_rhs False \
+        --data.init_args.batch_size 1024 \
+        --data.init_args.class_balance False \
+        --trainer.logger.init_args.name naturalness_s2
+;;
+
+63)
+# sync_data_to_scratch
+run_id=0crmfaia
+echo $run_id
+echo downstream task training with s2 and top height;
+python run.py fit -c config/train_naturalness.yaml \
+        --data.class_path datasets._h5_dataset.NaturalnessDataModule \
+        --data.init_args.h5_file ~/data/GVS/downstream_task_data/rhs_predictions_2017_${run_id}_ps31.h5 \
+        --data.init_args.naturalness_fp ~/data/GVS/downstream_task_data/naturalness/reference_data_set_updated.with_images.csv \
+        --data.init_args.mean_std_fp ~/data/GVS/downstream_task_data/naturalness/mean_std_${run_id}.npz \
         --data.init_args.use_full_profile False \
-        --model.init_args.in_channels 1 \
-        --trainer.logger.init_args.name naturalness_canopy_top_height_${run_id}
+        --model.init_args.transform.init_args.input_top_height True \
+        --model.init_args.transform.init_args.mean_std_fp ~/data/GVS/downstream_task_data/naturalness/mean_std_${run_id}.npz \
+        --model.init_args.in_channels 13 \
+        --data.init_args.batch_size 1024 \
+        --data.init_args.class_balance False \
+        --trainer.logger.init_args.name naturalness_s2_rh98
+;;
+64)
+# sync_data_to_scratch
+run_id=0crmfaia
+echo $run_id
+echo downstream task training with rhs only;
+python run.py fit -c config/train_naturalness.yaml \
+        --data.class_path datasets._h5_dataset.NaturalnessDataModule \
+        --data.init_args.h5_file ~/data/GVS/downstream_task_data/rhs_predictions_2017_${run_id}_ps31.h5 \
+        --data.init_args.naturalness_fp ~/data/GVS/downstream_task_data/naturalness/reference_data_set_updated.with_images.csv \
+        --data.init_args.mean_std_fp ~/data/GVS/downstream_task_data/naturalness/mean_std_${run_id}.npz \
+        --data.init_args.use_full_profile True \
+        --model.init_args.transform.init_args.rhs_only True \
+        --model.init_args.transform.init_args.mean_std_fp ~/data/GVS/downstream_task_data/naturalness/mean_std_${run_id}.npz \
+        --model.init_args.in_channels 101 \
+        --lr_scheduler.init_args.max_lr 0.0001 \
+        --data.init_args.batch_size 1024 \
+        --data.init_args.class_balance False \
+        --trainer.logger.init_args.name naturalness_rhs_only
+;;
+65)
+echo run random forest with s2 and rhs;
+python run_rf.py
+;;
+
+66)
+echo run random forest with s2 only;
+python run_rf.py s2_only=True
+;;
+
+67)
+echo run random forest with rhs only;
+python run_rf.py rhs_only=True
+;;
+
+68)
+echo run random forest with s2 and rh98;
+python run_rf.py use_full_profile=False
 ;;
 
 # ====================================================================================
@@ -243,7 +339,7 @@ python run.py fit -c config/train_naturalness.yaml \
 # 3. Takes about 31 min to predict one tile on one L40s (write all 303 bands)
 # ******************************
 echo predict tiles on Hendrix
-tile_id=01JCH # 32MQE
+tile_id=60UUD # 32MQE
 year=2024
 run_id=cg11fpjr
 echo run prediction for model $run_id for tile $tile_id in year $year;
@@ -328,7 +424,7 @@ python run.py predict -c config/predict.yaml --model config/model/xception_mix_o
 51) 
 # NOTE: takes about 1h5min on LUMI for val_filtered_v1
 # NOTE: takes about 35min on A100 for val_filtered_v1
-val_data_name=val_filtered_v1
+val_data_name=cal_filtered_v1
 sync_data_to_scratch
 correct_bias=True
 echo get sparse prediction for model $run_id on $val_data_name;

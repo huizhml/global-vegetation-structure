@@ -86,7 +86,7 @@ def get_dense_latlon(central_coords, epsg, resolution=10, grid_size=15):
     # Extract central latitudes and longitudes
     transformer = Transformer.from_crs("EPSG:4326", f"EPSG:{epsg}", always_xy=True)
     # Transform central coordinates to the local CRS
-    x_center, y_center = transformer.transform(central_coords[1], central_coords[0]) #lon, lat
+    x_center, y_center = transformer.transform(central_coords[0], central_coords[1]) #lon, lat
     # Calculate neighboring coordinates in the local CRS
     lon_vector, lat_vector = transformer.transform(x_center + offsets, y_center - offsets, direction="INVERSE")
     # lon_grid, lat_grid = np.meshgrid(lon_vector, lat_vector, indexing="xy")

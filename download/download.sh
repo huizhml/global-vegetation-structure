@@ -1,6 +1,6 @@
 #!/bin/bash
 ##SBATCH --account=project_465000894
-##SBATCH --partition=standard
+#SBATCH --partition=ml4good
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=128G
 #SBATCH --exclude hendrixgpu06fl
@@ -128,7 +128,7 @@ case $1 in
     # echo "Sync complete!"
         ;;
     7)
-    echo download S2 images for downstream task
+    echo download S2 images for downstream task, conda env is py3
     python -m download._6_download_downstream_task_data job_id=$ID
     ;;
     8)

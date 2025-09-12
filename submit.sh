@@ -18,7 +18,7 @@ echo "Number of tasks: $SLURM_NTASKS"
 echo "Time requested: $SLURM_TIMELIMIT"
 scontrol show job $SLURM_JOB_ID | grep "TRES="
 
-data_dir=${HOME}/data/GEDI
+data_dir=${HOME}/data/GVS
 
 id=$1
 echo running job $id;
@@ -60,18 +60,19 @@ input_dir=$data_dir
 hostname=$(hostname)
 number=$(echo "$hostname" | grep -o '[0-9]\+')
 echo "Number is $number"
-if hostname | grep -q "hendrix"; then
-        host_list=("01" "02" "07" "16" "22" "23" "24" "25" "26")
-        if [[ " ${host_list[@]} " =~ " $number " ]]; then
-                echo "node $number has scratch folder"
-                input_dir=/scratch
-                rsync -av --progress ${HOME}/data/GVS/cal.h5 $input_dir/cal.h5
+# if hostname | grep -q "hendrix"; then
+#         host_list=("01" "02" "07" "16" "22" "23" "24" "25" "26")
+#         if [[ " ${host_list[@]} " =~ " $number " ]]; then
+#                 echo "node $number has scratch folder"
+#                 input_dir=/scratch
+#                 rsync -av --progress ${HOME}/data/GVS/cal.h5 $input_dir/cal.h5
                 
-        else
-                echo "node $number does not have scratch folder"
-                input_dir=${HOME}/data/GVS
-        fi
-        fi
+#         else
+#                 echo "node $number does not have scratch folder"
+#                 input_dir=${HOME}/data/GVS
+#         fi
+#         fi
+input_dir=${HOME}/data/GVS
 
 # python -m datasets._4_convert_to_beton nsplit=$nsplit split_idx=$idx \
 #         h5_file=$input_dir/train.h5 out_idx_dir=$data_dir/index_table_train_subsets \
@@ -79,8 +80,8 @@ if hostname | grep -q "hendrix"; then
 #         shuffle_indices=True +debug=$debug version=$3
 
 python -m datasets._4_convert_to_beton \
-        h5_file=$input_dir/cal.h5 \
-        index_table=$data_dir/split_test0.1_cal0.1_val0.1_seed42_v1/index_table_cal \
+        h5_file=$input_dir/test.h5 \
+        index_table=$data_dir/split_test0.1_cal0.1_val0.1_seed42_v1/index_table_test \
         shuffle_indices=False +debug=$debug version=1 +create_subset=False
 ;;
 
@@ -114,11 +115,13 @@ echo aggregate the GEDI data;
 python -m datasets._6_visual_check task=aggregate_gedi_by_biome beton_fps=${data_dir}/train_subsets/test*_v3.beton
 ;;
 10)
-echo download inference data by api query;
-python -m download._5_download_inference task=download_by_api_query year=2024 specified_tiles_file=~/data/GVS/Deploy/tiles_without_images_and_metadata_2024.txt;;
+year=2020
+echo download inference data for $year by api query;
+python -m download._5_download_inference task=download_by_api_query year=$year specified_tiles_file=~/data/GVS/Deploy/tiles_without_images_$year.txt;;
 11)
-echo download inference data by metadata;
-python -m download._5_download_inference task=download year=2024 job_id=0;;
+year=2020
+echo download inference data for $year by metadata;
+python -m download._5_download_inference task=download year=$year job_id=0 specified_tiles_file=~/data/GVS/Deploy/tiles_without_images_$year.txt;;
 *)
 echo runnning nothing ;;
 esac

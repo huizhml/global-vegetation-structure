@@ -139,7 +139,7 @@ class XceptionS2(BaseModel):
         if restrict_rf:
             mid_block = get_class(mid_block)
             self.mid_block = mid_block(self.activation_layer, in_channels=self.num_sepconv_filters, out_channels=self.num_sepconv_filters, norm_layer=self.norm_layer)
-            self.nonlin_blocks = self._make_sepconv_blocks(block=nonlin_block, kernerl_sizes=(1, 1), num_blocks=num_nonlin_blocks)
+            self.nonlin_blocks = nn.Identity()#self._make_sepconv_blocks(block=nonlin_block, kernerl_sizes=(1, 1), num_blocks=num_nonlin_blocks)
         else:
             self.mid_block = nn.Identity()
             self.nonlin_blocks = nn.Identity()
@@ -469,10 +469,12 @@ def xceptionS2_08blocks_256(in_channels=15, out_channels=1, model_weights=None,
                       model_weights_path=model_weights)
 
 
-class XceptionDownstream(XceptionS2MixOrder):
+class XceptionDownstream(XceptionS2):
     def __init__(self, in_channels=12, out_channels=1, 
+                 input_rhs:bool=True,
                  **kwargs):
         super(XceptionDownstream, self).__init__(in_channels=in_channels, out_channels=out_channels, **kwargs)
+        self.input_rhs = in_channels > 12
         self.val_metrics_veg = None
         self.val_metrics_lcc = None
         
@@ -498,8 +500,15 @@ class XceptionDownstream(XceptionS2MixOrder):
         self.val_metrics.reset()
     
     def training_step(self, batch, batch_idx):
-        x, y = batch
-        x = self.transform(x)
+        rhs, s2, y = batch
+        if self.transform.mean.shape[0] == 12:
+            x = self.transform(s2)
+        elif self.transform.mean.shape[0] == 13:
+            x = self.transform(torch.cat([s2, rhs], dim=1))
+        elif self.transform.mean.shape[0] == 101:
+            x = self.transform(rhs)
+        elif self.transform.mean.shape[0] == 113:
+            x = self.transform(torch.cat([rhs, s2], dim=1))
         y_hat = self(x.float())
         loss = self.loss_fc(y_hat[:, :, 7,7], y)
         self.log('train.loss', loss)
@@ -507,8 +516,15 @@ class XceptionDownstream(XceptionS2MixOrder):
         return loss
     
     def validation_step(self, batch, batch_idx):
-        x, y = batch
-        x = self.transform(x)
+        rhs, s2, y = batch
+        if self.transform.mean.shape[0] == 12:
+            x = self.transform(s2)
+        elif self.transform.mean.shape[0] == 13:
+            x = self.transform(torch.cat([s2, rhs], dim=1))
+        elif self.transform.mean.shape[0] == 101:
+            x = self.transform(rhs)
+        elif self.transform.mean.shape[0] == 113:
+            x = self.transform(torch.cat([rhs, s2], dim=1))
         y_hat = self(x.float())
         loss = self.loss_fc(y_hat[:, :, 7,7], y)
         self.log('val.loss', loss)

@@ -12,7 +12,7 @@ import torch
 import argparse
 import atexit
 from tqdm import tqdm
-from osgeo import gdal
+# from osgeo import gdal
 from lightning import LightningModule, LightningDataModule
 from lightning.pytorch.cli import LightningCLI, SaveConfigCallback, ReduceLROnPlateau, LRSchedulerTypeUnion
 from lightning.pytorch.trainer import Trainer

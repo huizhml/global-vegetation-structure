@@ -30,6 +30,8 @@ def check_prediction_status(s2_grid_file: str, flag_dir: str, prediction_dir: st
     df = gpd.read_parquet(s2_grid_file, columns=['Name', 'geometry', 'growing_months'])
     tiles = df['Name'].unique()
     for year in  [2020, 2024]:
+        print('-'*100)
+        print(f'Checking prediction status for {year}')
         flag_dir_ = Path(f'{flag_dir}_{year}').expanduser()
         input_s2_dir = Path(f'~/data/GVS/Deploy/inference_{year}.zarr').expanduser()
         config_files = deploy_dir.glob(f'slurm_job_files_{year}/*_items_{year}_part*.txt')
@@ -42,14 +44,18 @@ def check_prediction_status(s2_grid_file: str, flag_dir: str, prediction_dir: st
         for tile in tiles:
             flag_file_old = flag_dir_ / f'{tile}_done'
             flag_file_new = flag_dir_ / f'{tile}_best_images_done'
-            # cog_files = list((prediction_dir / f'{tile}_cog').glob('*.cog.tif'))
-            if (flag_file_old.exists() or flag_file_new.exists()): #and len(cog_files) == 303:
+            predicted = (flag_file_old.exists() or flag_file_new.exists())
+            if year == 2020:
+                cog_files = list((prediction_dir.with_name(f'predictions_{year}') / f'{tile}_cog').glob('*.cog.tif'))
+                predicted = predicted and len(cog_files) == 303
+            if predicted:
                 df.loc[df['Name'] == tile, f'predicted_{year}'] = True
             else:
+                print(f'{tile} not predicted')
                 df.loc[df['Name'] == tile, f'predicted_{year}'] = False
                 # check input images availability
                 if (input_s2_dir / tile).exists():
-                    with xr.open_zarr(input_s2_dir, group=tile) as ds:
+                    with xr.open_zarr(input_s2_dir, group=tile, consolidated=False, chunks='auto') as ds:
                         if hasattr(ds, 's2'):
                             if ds.s2.shape[0] > 0:
                                 df.loc[df['Name'] == tile, f'has_s2_images_{year}'] = True

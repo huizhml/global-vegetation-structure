@@ -182,13 +182,15 @@ def write_beton(out_file, dataset, shuffle_indices=False):
     print("Writing dataset to", out_file)
     writer = MyDatasetWriter(out_file, {
         # Tune options to optimize dataset size, throughput at train-time
-        'image': NDArrayField(dtype=np.dtype("int16"), shape=(12, 15, 15)),
+        'image': NDArrayField(dtype=np.dtype("uint16"), shape=(12, 15, 15)),
         'rhs': NDArrayField(dtype=np.dtype("float32"), shape=(101,)),
-        'wc': NDArrayField(dtype=np.dtype("int16"), shape=(15, 15)), #IntField(),
+        'wc': NDArrayField(dtype=np.dtype("uint16"), shape=(15, 15)), #IntField(),
         'slope':  NDArrayField(dtype=np.dtype("float32"), shape=(15, 15)),
-        'latlon': NDArrayField(dtype=np.dtype("float64"), shape=(2,)),
-        'sensitivity': FloatField(),
-        'shot_number': IntField()
+        'lat': NDArrayField(dtype=np.dtype("float64"), shape=(15,)),
+        'lon': NDArrayField(dtype=np.dtype("float64"), shape=(15,)),
+        # 'latlon': NDArrayField(dtype=np.dtype("float64"), shape=(2,)),
+        # 'sensitivity': FloatField(),
+        # 'shot_number': IntField()
     })
 
     # Write dataset

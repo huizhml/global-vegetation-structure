@@ -24,11 +24,11 @@ check_unfinished_tiles() {
   echo "$result"
 }
 
-job_array_id=$(sbatch --array=2-148%25 run_deploy.sh 2020 | awk '{print $4}')
-sbatch --array=2-148 --dependency=aftercorr:${job_array_id} --cpus-per-task=8 run_cpu.sh 2020
+job_array_id=$(sbatch --array=2-13 run_deploy.sh 2020 | awk '{print $4}')
+sbatch --array=2-13 --dependency=aftercorr:${job_array_id} --cpus-per-task=8 run_cpu.sh 2020
 
-job_array_id=$(sbatch --array=2-872%25 run_deploy.sh 2024 | awk '{print $4}')
-sbatch --array=2-872 --dependency=aftercorr:${job_array_id} --cpus-per-task=8 run_cpu.sh 2024
+job_array_id=$(sbatch --array=2-25 run_deploy.sh 2024 | awk '{print $4}')
+sbatch --array=2-25 --dependency=aftercorr:${job_array_id} --cpus-per-task=8 run_cpu.sh 2024
 
 
 # # launch jobs for hendrixgpu01fl

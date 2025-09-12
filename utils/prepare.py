@@ -134,6 +134,7 @@ def prepare_items(
     for item_i, item in enumerate(items):
         # ********* Changed here *********
         # proj:code is the new way to get the epsg code
+        # item_epsg = item["properties"].get("proj:epsg")
         if item['stac_version'] == '1.0.0':
             item_epsg = item["properties"].get("proj:epsg")
         else:

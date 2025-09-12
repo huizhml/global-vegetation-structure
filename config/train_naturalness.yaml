@@ -3,12 +3,12 @@ optimizer:
   class_path: torch.optim.Adam
   init_args:
     lr: 0.0001
-    weight_decay: 0.0001 # 0.0001
+    weight_decay: 0.01 # 0.0001
 lr_scheduler:
   class_path:  models._scheduler.ChainedScheduler # torch.optim.lr_scheduler.StepLR
   init_args:
-    warmup_steps: 905 # 5 epochs 20 subsets
-    T_0: 18100 # for 400 epochs 1 cycle
+    warmup_steps: 460 # 10 epochs, 1800
+    T_0: 9200 # 36000
     eta_min: 1e-6
     max_lr: 0.0001
     gamma: 0.2
@@ -28,17 +28,18 @@ model:
   init_args:
     in_channels: 101
     out_channels: 7
-    entry_block_filters: [128, 256]
+    entry_block_filters: [128, 128]
     long_skip: True
     activation_layer: torch.nn.ReLU
     norm_layer: torch.nn.BatchNorm2d
     sepconv_block: models.modules.xception_blocks.DoubleSepConvBlock
     num_sepconv_blocks: 3
-    num_sepconv_filters: 256
+    num_sepconv_filters: 128
     mid_block: models.modules.xception_blocks.SepConvBlockSkip
     nonlin_block: models.modules.xception_blocks.DoubleConvBlock
-    num_nonlin_blocks: 4
-    nonlinear_order: inbetween
+    # num_nonlin_blocks: 1
+    restrict_rf: False
+    # nonlinear_order: inbetween
     # used in the base model (_base_pl_model.py)
     loss_fc: torch.nn.CrossEntropyLoss
     transform: 
@@ -49,7 +50,7 @@ model:
 
 trainer:
   accelerator: gpu
-  strategy: ddp
+  strategy: auto
   devices: auto
   default_root_dir: logs/wandb
   # val_check_interval: 100000

@@ -129,17 +129,17 @@ class WorldS2(DaskDownloader):
         if specified_tiles_df is not None:
             specified_tiles = specified_tiles_df['Name'].unique()
             s2_tiles_df = s2_tiles_df.loc[specified_tiles]
-        wc_df = self.retrive_wc_items()
-        wc_df = wc_df.sjoin(s2_tiles_df, how='inner')
+        # wc_df = self.retrive_wc_items()
+        # wc_df = wc_df.sjoin(s2_tiles_df, how='inner')
         
         # for tile, row in s2_tiles_df.iterrows():
             # self.query_and_download_tile(tile, row, wc_df,collection_id).compute()
-        s2_tiles_df = s2_tiles_df.loc[['01UCT']]
-        tasks = [self.query_and_download_tile(tile, row, wc_df,collection_id) for tile, row in s2_tiles_df.iterrows()]
+        # s2_tiles_df = s2_tiles_df.loc[['01UCT']]
+        tasks = [self.query_and_download_tile(tile, row, collection_id) for tile, row in s2_tiles_df.iterrows()]
         dask.compute(*tasks)
             
-    # @delayed
-    def query_and_download_tile(self, tile, row,wc_df,collection_id='sentinel-2-l2a'):
+    @delayed
+    def query_and_download_tile(self, tile, row, collection_id='sentinel-2-l2a'):
         '''
         For downloading Sentinel-2 images from 2017, no metadata saved for this year. 
         And the bulk downloading was not working becuase Microsoft may move the metadata parquet files to somewhere else.
@@ -200,6 +200,7 @@ class WorldS2(DaskDownloader):
         epsg = int(items[0].properties['proj:code'][5:])
         items = [item for item in items.items if item.id in df['id'].values]
         images = stack(items, self.bands, dtype='uint16', fill_value=np.uint16(0), epsg=epsg, resolution=10, rescale=False)
+        assert images.shape[2] == images.shape[3] == 10980, f'{tile} has incorrect shape {images.shape}'
         images.name = 's2'
         # wc_df = wc_df[wc_df.Name == tile]
         # wc_df['datetime'] = wc_df['start_datetime'].dt.strftime('%Y-%m-%d %H:%M:%S.%f')
@@ -215,13 +216,13 @@ class WorldS2(DaskDownloader):
         # else:
         del images.attrs['spec']
         del images.attrs['crs']
+        images = images.reset_coords(['proj:bbox'], drop=True)
         ds = xr.Dataset({'s2': images}, coords=images.coords, attrs=images.attrs)
         comp = {'s2': self.comp['s2']}
-            
         print(ds)
         if file.exists():
             try:
-                print('saveing to ', file)
+                print('saveing to ', f'{file}/{tile}')
                 store = ds.to_zarr(file, mode='a', group=f'{tile}', encoding=comp)
                 print(store)
                 flag.touch()
@@ -269,10 +270,12 @@ class WorldS2(DaskDownloader):
         wc_df['datetime'] = wc_df['start_datetime'].dt.strftime('%Y-%m-%d %H:%M:%S.%f')
         self.wc_df = wc_df[wc_df.geometry.intersects(box(*s2_df.total_bounds))]
         tasks = [self.download_tile(df) for tile, df in s2_df.groupby('s2:mgrs_tile')]
+        if len(tasks) < self.n_parallel:
+            self.n_parallel = len(tasks)
         if self.debug:            
             dask.compute(*tasks)
         else:
-            nfailed = self.schedule_tasks(delayed_tasks=tasks)
+            nfailed, results = self.schedule_tasks(delayed_tasks=tasks)
 
             if nfailed <= 0:
                 flag = self.save_dir / f'{self.year}_job_{job_id}_done'

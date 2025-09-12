@@ -78,7 +78,6 @@ class BaseDeployDataset(Dataset):
         self.debug = debug
         self.predict_full_profile = predict_full_profile
         self.year = year
-        
         # ********** Set up RH & image indices **********
         if predict_full_profile:
             self.rh_idx = slice(0, 303)
@@ -88,7 +87,7 @@ class BaseDeployDataset(Dataset):
             self.rh_dim = 2
         self.tile_id = tile_id
         self.bands = bands or slice(12)
-        self.metadata_file = Path(metadata_file).expanduser()
+        
         if img_idx is None:
             self.img_idx = slice(None)
         else:
@@ -102,11 +101,14 @@ class BaseDeployDataset(Dataset):
             print(f'Error opening zarr store: {e}, conda activate py3!')
         if zarr_store_path.name.endswith('.zarr'):
             self.key = f'{self.tile_id}/'
-            self.transform = self.store[f'{self.tile_id}'].attrs['transform']
+            try:
+                self.transform = self.store[f'{self.tile_id}'].attrs['transform']
+            except Exception as e:
+                print('No ESA WC, attrs in s2')
+                self.transform = self.store[f'{self.tile_id}/s2'].attrs['transform']
         else:
             self.key = '' # open a group as a store
             self.transform = self.store.attrs['transform']
-
         self.img_width, self.img_height = self.store[f'{self.key}s2'].shape[2:]  # Get shape without loading array
         self.crs = f'EPSG:{self.store[f"{self.key}epsg"][()].item()}'
         transformer = Transformer.from_crs(self.crs, "EPSG:4326", always_xy=True)
@@ -115,17 +117,20 @@ class BaseDeployDataset(Dataset):
         if n_images <= 10: # Less than 10 images available, no need to cache predictions
             self.img_slices = [slice(None)]
         else:
-            
-            df = pd.read_parquet(self.metadata_file, columns=['id', 'eo:cloud_cover', 's2:mgrs_tile', 's2:nodata_pixel_percentage', 'orbit'])
-            df = df[df['s2:mgrs_tile'] == self.tile_id]
-            ids_from_zarr = self.store[f'{self.key}id'][:]
-            df = df[df['id'].isin(ids_from_zarr)]
-            df = df.reset_index(drop=True)
-            df['s2:nodata_pixel_percentage'] = df['s2:nodata_pixel_percentage'].round()
-            df = df.sort_values(['s2:nodata_pixel_percentage', 'eo:cloud_cover']).iloc[:20]
-            ids = df['id']
-            idx = [np.where(ids_from_zarr == i)[0][0] for i in ids]
-            self.img_slices = [idx[:10], idx[10:]]
+            if metadata_file != 'none':
+                self.metadata_file = Path(metadata_file).expanduser()
+                df = pd.read_parquet(self.metadata_file, columns=['id', 'eo:cloud_cover', 's2:mgrs_tile', 's2:nodata_pixel_percentage', 'orbit'])
+                df = df[df['s2:mgrs_tile'] == self.tile_id]
+                ids_from_zarr = self.store[f'{self.key}id'][:]
+                df = df[df['id'].isin(ids_from_zarr)]
+                df = df.reset_index(drop=True)
+                df['s2:nodata_pixel_percentage'] = df['s2:nodata_pixel_percentage'].round()
+                df = df.sort_values(['s2:nodata_pixel_percentage', 'eo:cloud_cover']).iloc[:20]
+                ids = df['id']
+                idx = [np.where(ids_from_zarr == i)[0][0] for i in ids]
+                self.img_slices = [idx[:10], idx[10:]]
+            else:
+                self.img_slices = [slice(0, 10), slice(10, 20)]
             
         
         if self.input_lat_lon:
@@ -253,7 +258,8 @@ class BaseDeployDataset(Dataset):
             # mask snow and cloud (medium and high density). In some cases the probability cloud mask might miss some clouds
             scl_mask = torch.isin(scl, self.scl_exclude_labels)
             
-        # masks applied to all input images
+        # 1. do majority vote for scl water, esa built-up, esa water, and apply these masks to the final aggregated prediction
+        # 2. apply image specific masks from scl about cloud and snow, and esa wc snow mask
         nodata_mask = scl == 0
         scl = scl.to(torch.float32)
         scl[nodata_mask] = float('nan')
@@ -511,6 +517,7 @@ class S2DatasetStream(BaseDeployDataset):
                  output_format: str = 'cog',
                  output_dtype: str = 'int16',
                  impute_cloud_with_mean: bool = False,
+                 download_data: bool = False,
                  **kwargs):
         self.metadata_file = Path(metadata_file).expanduser()
         self.h5_file = Path(h5_dir).expanduser() / f'{tile_id}.h5'
@@ -530,9 +537,9 @@ class S2DatasetStream(BaseDeployDataset):
         self.year = year
         self.chunk_size = chunk_size
         self.impute_cloud_with_mean = impute_cloud_with_mean
-        # if not self.h5_file.exists():
-        #     print(f'{self.h5_file} does not exist, downloading...')
-        #     self.download_tile()
+        if download_data and not self.h5_file.exists():
+            print(f'{self.h5_file} does not exist, downloading...')
+            self.download_tile()
         self.store = h5py.File(self.h5_file, 'r')
         if not hasattr(self, 'mean') and self.impute_cloud_with_mean:
             print('Calculating mean and std of the training data')
@@ -608,7 +615,7 @@ class S2DatasetStream(BaseDeployDataset):
         self.esa_built_up = 5
         self.esa_water = 8
         # self.scl_zero_canopy_height = torch.tensor([5, 6], dtype=torch.uint16, device=device)  # "not vegetated", "water"
-        self.prediction_cache = {}
+        self.prediction_cache = defaultdict(list)
         
         if not prediction_dir:
             self.prediction_dir = self.h5_file.parent.parent / f'predictions_{self.year}' / self.tile_id
@@ -630,13 +637,18 @@ class S2DatasetStream(BaseDeployDataset):
             'B09', 'B11', 'B12', 'SCL'
         ]
         s2_df = gpd.read_parquet(self.metadata_file)
-        tile_df = s2_df[s2_df['s2:mgrs_tile'] == self.tile_id].set_index('id')
+        tile_df = s2_df[s2_df['s2:mgrs_tile'] == self.tile_id]
+        tile_df = tile_df.drop_duplicates(subset='id', keep='first')
+        tile_df = tile_df.set_index('id')
         if len(tile_df)>self.n_iamges_per_tile:
+            tile_df['s2:nodata_pixel_percentage'] = tile_df['s2:nodata_pixel_percentage'].round()
+            tile_df = tile_df.sort_values(['s2:nodata_pixel_percentage', 'eo:cloud_cover'])
             if (tile_df['s2:nodata_pixel_percentage']==0).sum() > 0:
                 tile_df = tile_df.sort_values(['s2:nodata_pixel_percentage', 'eo:cloud_cover']).head(self.n_iamges_per_tile)
             else:
+                # NOTE: I didn't select n_images_per_orbit = n_iamges_per_tile//n_orbits, because there might be too few images for some orbits
                 idx = tile_df.groupby('orbit')['eo:cloud_cover'].nsmallest(self.n_iamges_per_tile//2).index.get_level_values(1)
-                tile_df = tile_df.loc[idx]
+                tile_df = tile_df.loc[idx].head(self.n_iamges_per_tile)
         tile_df['datetime'] = tile_df['datetime'].dt.strftime('%Y-%m-%d %H:%M:%S.%f')
         # bbox = box(*tile_df.total_bounds) # For esa world cover
         # epsg = items[0].properties['proj:epsg']
@@ -791,31 +803,33 @@ class DeployDataModel(L.LightningDataModule):
 
 # Example usage
 if __name__ == '__main__':
-    # dataset = ChunkedWriteDataset(
-    #     zarr_store_path='~/data/GVS/Deploy/inference_2020.zarr',
-    #     tile_id='32MQE',
-    #     prediction_dir='~/data/GVS/Deploy/predictions_2020',
-    #     patch_size=544,
-    #     border=16,
-    #     comp_level=7,
-    #     debug=False,
-    # )
-    dataset = S2DatasetStream(
-        metadata_file='~/data/GVS/Deploy/deploy_s2_items_2024_part7.parquet',
-        h5_dir='~/flash/data/GVS/Deploy/inference_2024',
-        tile_id='32MRE',
-        prediction_dir='~/data/GVS/Deploy/predictions_2024/11UMP_GTiff',
-        
+    dataset = ChunkedWriteDataset(
+        zarr_store_path='~/data/GVS/Deploy/inference_2024.zarr',
+        tile_id='32PNB',
+        prediction_dir='~/data/GVS/Deploy/predictions_GTiff_2024/32PNB_GTiff',
         patch_size=544,
         border=16,
+        debug=False,
+        input_lat_lon=True,
+        metadata_file='none' #'~/data/GVS/Deploy/slurm_job_files_2024/deploy_s2_items_2024_part51.parquet'
     )
+    # dataset = S2DatasetStream(
+    #     metadata_file='~/data/GVS/Deploy/deploy_s2_items_2024_part7.parquet',
+    #     h5_dir='~/flash/data/GVS/Deploy/inference_2024',
+    #     tile_id='32MRE',
+    #     prediction_dir='~/data/GVS/Deploy/predictions_2024/11UMP_GTiff',
+        
+    #     patch_size=544,
+    #     border=16,
+    # )
     # dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, num_workers=4, collate_fn=collate_batch)
-    # for data in dataloader:
-    #     print(data[0].shape)
-    image, scl, latlon = dataset[0]
-    scl_cloud_mask = torch.isin(scl, [8,9])
-    masked_mean_input = dataset.mean[:10, :, None, None] * scl_cloud_mask
-    image_imputed = torch.where(scl_cloud_mask, 0, image)
-    image_imputed = image + masked_mean_input
+
+    for data in dataset:
+        print(data[0].shape)
+    # image, scl, latlon = dataset[0]
+    # scl_cloud_mask = torch.isin(scl, [8,9])
+    # masked_mean_input = dataset.mean[:10, :, None, None] * scl_cloud_mask
+    # image_imputed = torch.where(scl_cloud_mask, 0, image)
+    # image_imputed = image + masked_mean_input
 
 

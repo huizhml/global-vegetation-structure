@@ -99,11 +99,11 @@ class S2Downloader(DaskDownloader):
             'B09', 'B11', 'B12', 'SCL'
         ]
         
-        dem_df = self.get_aux_df('cop-dem-glo-30', time_col='datetime')
-        self.dem_df = dem_df[dem_df.geometry.intersects(box(*self.gdf.total_bounds))]
-        self.dem_df['datetime'] = self.dem_df['datetime'].dt.strftime('%Y-%m-%d %H:%M:%S.%f')
-        chunk_size = patch_size
-        compressor = zarr.codecs.BloscCodec(cname=comp_name, clevel=comp_level)
+        # dem_df = self.get_aux_df('cop-dem-glo-30', time_col='datetime')
+        # self.dem_df = dem_df[dem_df.geometry.intersects(box(*self.gdf.total_bounds))]
+        # self.dem_df['datetime'] = self.dem_df['datetime'].dt.strftime('%Y-%m-%d %H:%M:%S.%f')
+        # chunk_size = patch_size
+        # compressor = zarr.codecs.BloscCodec(cname=comp_name, clevel=comp_level)
         # self.comp = { # for zarr
         #     's2': {
         #         "compressors": compressor,
@@ -119,15 +119,15 @@ class S2Downloader(DaskDownloader):
         comp_level = 7
         self.comp = {
                 's2': {
-                    "zlib": True,
-                    "complevel": comp_level,
-                    "fletcher32": True,
+                    "zlib": False,
+                    # "complevel": comp_level,
+                    # "fletcher32": True,
                     "chunksizes": (1, 13, 15, 15)
                 },
                 'slope': {
-                    "zlib": True,
-                    "complevel": comp_level,
-                    "fletcher32": True,
+                    "zlib": False,
+                    # "complevel": comp_level,
+                    # "fletcher32": True,
                     "chunksizes": (1, 15, 15)
                 }
             }
@@ -189,7 +189,11 @@ class S2Downloader(DaskDownloader):
             df = self.gdf.iloc[job_id*n_per_job:]
         else:
             df = self.gdf.iloc[job_id*n_per_job:(job_id+1)*n_per_job]
+        if df.empty:
+            logger.info(f'No data to download for job {job_id}')
+            return
         tasks = [self.get_best_s2_for_point(row) for i, row in df.iterrows()]
+        self.n_parallel = min(self.n_parallel, len(tasks))
         nfaild, results = self.schedule_tasks(delayed_tasks=tasks)
         if nfaild > 0:
             print(f'{nfaild} tasks failed')
@@ -208,6 +212,7 @@ class S2Downloader(DaskDownloader):
         else:
             out_h5 = Path(out_h5).expanduser()
         h5_files = h5_files.parent.glob(h5_files.name)
+        print('merging h5s, ', h5_files)
         data = []
         for file in h5_files:
             ds = xr.open_dataset(file, engine='h5netcdf')  
@@ -219,6 +224,7 @@ class S2Downloader(DaskDownloader):
         
     
     def merge_zarr_stores(self, zarr_paths: list, output_path: str):
+        # NOTE: not used, zarr datasets for training too slow
         zarr_paths = Path(zarr_paths).expanduser().glob('*.zarr')
         output_path = Path(output_path).expanduser()
         datasets = [xr.open_zarr(path) for path in zarr_paths]
@@ -247,7 +253,8 @@ class S2Downloader(DaskDownloader):
         growing_months = point['growing_months']
         items = self.query_s2_for_point(growing_months, point['geometry'])
         if len(items) == 0:
-            return pd.Series([pd.NA, pd.NA], index=['id', 'defective_cover'])
+            return
+            # return pd.Series([pd.NA, pd.NA], index=['id', 'defective_cover'])
         
         epsg = get_most_common_epsg(items, key='proj:code')
         epsg = int(epsg[5:])
@@ -256,13 +263,15 @@ class S2Downloader(DaskDownloader):
         patch = get_patch(items, ['SCL'], resolution=self.out_res, bounds=bounds, epsg=epsg, dtype='uint8', snap_bounds=True, fill_value=np.uint8(0))
         
         if patch.shape[0] == 0 or patch.shape[-2:] != (self.patch_size, self.patch_size): # why there're cases that the output shape is (14,15)? fill_value doesn't work?
-            return pd.Series([pd.NA, pd.NA], index=['id', 'defective_cover'])
+            return
+            # return pd.Series([pd.NA, pd.NA], index=['id', 'defective_cover'])
 
         patch = patch.compute() # simplify compute graph, not sure if this is helpful
         scl = patch.data
         defective_cover = np.any([(scl == k) for k in defective_SCL], 0).sum((-2,-1)) / np.prod(scl.shape[-2:])
         if np.isnan(defective_cover).all() or defective_cover.min() > 0.6:
-            return pd.Series([pd.NA, pd.NA], index=['id', 'defective_cover'])
+            return
+            # return pd.Series([pd.NA, pd.NA], index=['id', 'defective_cover'])
 
         patch_df = pd.DataFrame({
             'id': patch.id.values,
@@ -277,16 +286,18 @@ class S2Downloader(DaskDownloader):
         bbox = box(*point.geometry.bounds)  
         dem_bounds = buffer_and_snap_bounds(geom, self.dem_buffer_size, self.dem_res)
         total_bounds_dem = get_total_bounds(dem_bounds)
-        dem_df = self.dem_df[self.dem_df.geometry.intersects(point.geometry)]
-        if dem_df.empty:
+        # dem_df = self.dem_df[self.dem_df.geometry.intersects(point.geometry)]
+        dem_items = api.search(collections=['cop-dem-glo-30'], intersects=bbox).item_collection()
+        asset_name = 'data'
+        if len(dem_items) == 0:
             dem_items = api.search(collections=['nasadem'], intersects=bbox).item_collection()
-            dem_items.asset_name = 'elevation'
-        else:
-            dem_items = row_to_stac_item(dem_df, ['datetime'])
-            dem_items = pystac.item_collection.ItemCollection(dem_items)
-            dem_items.asset_name = 'data'
+            asset_name = 'elevation'
+        # else:
+        #     dem_items = row_to_stac_item(dem_df, ['datetime'])
+        #     dem_items = pystac.item_collection.ItemCollection(dem_items)
+        #     dem_items.asset_name = 'data'
 
-        dem_image = get_patch(dem_items.items, [dem_items.asset_name], resolution=self.dem_res, bounds=total_bounds_dem, epsg=epsg, dtype='float32', snap_bounds=True, fill_value=np.float32(np.nan))
+        dem_image = get_patch(dem_items.items, [asset_name], resolution=self.dem_res, bounds=total_bounds_dem, epsg=epsg, dtype='float32', snap_bounds=True, fill_value=np.float32(np.nan))
         
         dem_image = dem_image.max(dim='time', skipna=True)
         s2_image = harmonize_to_old(s2_image)
@@ -298,19 +309,22 @@ class S2Downloader(DaskDownloader):
         # set xy coords to the center of the pixel (to match s2 xrr coords)
         slope_da = slope_da.assign_coords(x=range(1, 3*w, 3), y=range(1, 3*h, 3))
         slope_da = slope_da.interp(x=range(3*w), y=range(3*h))
-        slope_da = slope_da.isel(x=slice(6, -6), y=slice(6, -6))  # remove nan
+        w, h = slope_da.shape[-2:]
+        border = int((slope_da.shape[-2] - self.patch_size) // 2)
+        slope_da = slope_da.isel(x=slice(border, -border), y=slice(border, -border))  # remove nan
         slope_da = slope_da.assign_coords(x=s2_image.x, y=s2_image.y)  # set xy coords back to 0-14
         slope_da = slope_da.squeeze()
         
         ds = xr.merge([s2_image, slope_da], join='inner', combine_attrs='drop')
         ds = ds.drop_vars(['x', 'y'])
         ds = ds.assign_coords(
-            centroid=(['time', 'coord'], [[point.geometry.centroid.x, point.geometry.centroid.y]]),
+            centroid=(['time', 'coord'], [[point.geometry.centroid.x, point.geometry.centroid.y]]), # lon, lat
             defective_cover=('time', [patch_df.iloc[0].defective_cover]),
             epsg=('time', [epsg]),
-            rowid=('time', [point.name])
+            rowid=('time', [point.rowid])
         )
         ds['epsg'] = ds['epsg'].astype('uint16')
+        ds = ds.compute()
         return ds  
         
     def query_s2_for_point(self, growing_months: list, geom: gpd.GeoSeries):
@@ -349,14 +363,14 @@ class S2Downloader(DaskDownloader):
 @dataclass
 class Config:
     task_name: str = ""  # The name of the task for which the data is being downloaded.
-    crowd_source_data_file: str = "~/data/GVS/downstream_task_data/naturalness/reference_data_set_updated_train.csv"  # Path to the CSV file containing crowd-sourced data.
+    crowd_source_data_file: str = "~/data/GVS/downstream_task_data/naturalness/reference_data_set_updated.csv"  # Path to the CSV file containing crowd-sourced data.
     output_dir: str = "~/data/GVS/downstream_task_data"  # Directory where the downloaded data will be saved.
     s2_parquet: str = '~/data/GVS/S2_tiles_with_growing_months.parquet'  # Path to the Parquet file containing S2 tiles with growing months information.
     wc_dem_meta_dir: str = '~/data/GEDI'
     n_parallel: int = 100
     maxCloudCover: int = 50
     year: int = 2017
-    patch_size: int = 15
+    patch_size: int = 31
     out_res: int = 10
     job_id: int = 0
 
@@ -368,29 +382,8 @@ def main(cfg: DictConfig) -> None:
     downloader = S2Downloader(**cfg)
     # downloader.download(job_id=cfg.job_id)
     # downloader.merge_zarr_stores(zarr_paths=cfg.output_dir, output_path=f'{cfg.output_dir}/s2_{cfg.year}.zarr')
-    downloader.merge_h5s('~/data/GVS/downstream_task_data/*.h5')
-    # ds = xr.open_zarr(f'{cfg.output_dir}/s2_{cfg.year}_part{cfg.job_id}.zarr')
-    # comp_level = 7
-    # comp = {
-    #         's2': {
-    #             "zlib": True,
-    #             "complevel": comp_level,
-    #             "fletcher32": True,
-    #             "chunksizes": (1, 13, 15, 15)
-    #         },
-    #         'slope': {
-    #             "zlib": True,
-    #             "complevel": comp_level,
-    #             "fletcher32": True,
-    #             "chunksizes": (1, 15, 15)
-    #         }
-    #     }
-    # print(ds)
-    # ds = ds.compute()
-    # print(ds)
-    # print('saving as h5')
-    # ds.to_netcdf(f'{cfg.output_dir}/s2_{cfg.year}_part{cfg.job_id}.h5', format='NETCDF4', engine='h5netcdf', encoding=comp,mode='w')
-    
+    downloader.merge_h5s('~/data/GVS/downstream_task_data/s2_2017_part*.h5', '~/data/GVS/downstream_task_data/s2_2017_ps31.h5')
+
     
 if __name__ == "__main__":
     from dask.distributed import Client, LocalCluster, performance_report

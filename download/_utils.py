@@ -174,6 +174,7 @@ def get_patch(items,
               dtype: str = 'uint16',
               xy_coords: bool = 'topleft',
               snap_bounds=False,
+              rescale=False,
               **kwargs):
     default_args = dict(assets=assets,
                         resolution=resolution,
@@ -182,7 +183,8 @@ def get_patch(items,
                         properties=properties,
                         dtype=dtype,
                         xy_coords=xy_coords,
-                        snap_bounds=snap_bounds)
+                        snap_bounds=snap_bounds,
+                        rescale=rescale)
     #TODO: how to check if the error is caused by the expired token?
     patch = stack(items, **default_args, **kwargs)
     return patch

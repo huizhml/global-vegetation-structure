@@ -182,17 +182,27 @@ def get_canopy_height_per_zone(partition, h5_dir, save_dir):
     res.to_parquet(save_dir / f'{zone}.parquet')
 
 
-def add_biome(val_df_fp, sota_chm_df_dir):
+def add_biome(val_df_fp, sota_chm_df_dir=None, cal_pred_fp=None):
     val_df_fp = Path(val_df_fp).expanduser()
-    sota_chm_df_dir = Path(sota_chm_df_dir).expanduser()
-    val_df = pd.read_parquet(val_df_fp, columns=['rh100', 'lat', 'lon', 'BIOME']) 
-    ddf = dd.read_parquet(f'{sota_chm_df_dir}/*.parquet', index=False) #TODO: add latlon to check alignment
-    ddf = ddf.compute() 
-    ddf = ddf.drop(columns=['index']).reset_index(drop=True) # NOTE: currently relying on the fixed order to match val_df, (ddf['RH100_GEDI'] == val_df['rh100']).all() is true
-    ddf[['BIOME']] = val_df[['BIOME']]
-    ddf.to_parquet(sota_chm_df_dir.parent / f'sota_chm_val_with_gedi_biome.parquet')
-    print(f'{sota_chm_df_dir.parent / f"sota_chm_val_with_gedi_biome.parquet"} saved')
-    return val_df
+    data_name = val_df_fp.stem.split('_')[0]
+    
+    val_df = pd.read_parquet(val_df_fp, columns=['rh100', 'wc', 'slope', 'lon', 'lat','BIOME']) 
+    val_df = val_df[~val_df.index.duplicated(keep='first')]
+    if sota_chm_df_dir is not None:
+        sota_chm_df_dir = Path(sota_chm_df_dir).expanduser()
+        ddf = dd.read_parquet(f'{sota_chm_df_dir}/*.parquet', index=False) #TODO: add latlon to check alignment
+        ddf = ddf.compute() 
+        ddf = ddf.drop(columns=['index']).reset_index(drop=True) # NOTE: currently relying on the fixed order to match val_df, (ddf['RH100_GEDI'] == val_df['rh100']).all() is true
+        ddf[['BIOME']] = val_df[['BIOME']]
+        ddf.to_parquet(sota_chm_df_dir.parent / f'sota_chm_val_with_gedi_biome.parquet')
+        print(f'{sota_chm_df_dir.parent / f"sota_chm_val_with_gedi_biome.parquet"} saved')
+    if cal_pred_fp is not None:
+        cal_pred_fp = Path(cal_pred_fp).expanduser()
+        cal_pred = pd.read_parquet(cal_pred_fp)
+        assert (cal_pred['RH100_GEDI'].values == val_df['rh100'].values).all()
+        cal_pred[[ 'wc', 'slope', 'lon', 'lat','BIOME']] = val_df[[ 'wc', 'slope', 'lon', 'lat','BIOME']]
+        cal_pred.to_parquet(cal_pred_fp.parent / f'rh_predictions_{data_name}.parquet')
+        print(f'{cal_pred_fp.parent / f"canopy_height_predictions_with_biome.parquet"} saved')
 
 
 def compare_result_precision(run_id, corrected=False):
@@ -262,6 +272,7 @@ def compare_with_sota_maps(sota_chm_df_fp, run_id, corrected=False):
 class MyConfig:
     sota_chm_df_fp: str = '~/data/GVS/evaluation/sota_chm_val_with_gedi_biome.parquet'
     run_id: str = ''
+    data_name: str = 'test'
     output_dir: str = 'output'
     task: str = 'aggregate_gedi_by_biome'
     corrected: bool = False
@@ -272,8 +283,12 @@ cs.store(name="my_config", node=MyConfig)
 
 @hydra.main(config_name="my_config", version_base="1.2")
 def main(cfg):
-    compare_result_precision(cfg.run_id, cfg.corrected)
+    # compare_result_precision(cfg.run_id, cfg.corrected)
+    # add biome for sota maps
     # add_biome(val_df_fp='~/data/GVS/train_subsets/val_filtered_v1.parquet', sota_chm_df_dir='~/data/GVS/evaluation/existing_canopy_height_pred_val_with_gedi')
+    # add biome for cal/test predictions
+    cal_pred_fp = f'~/data/GVS/uncertainty/canopy_height_predictions_{cfg.run_id}_corrected.parquet'
+    add_biome(val_df_fp=f'~/data/GVS/train_subsets/{cfg.data_name}_filtered_v1.parquet', cal_pred_fp=cal_pred_fp)
 
 if __name__ == '__main__':
     from dask.distributed import Client, LocalCluster

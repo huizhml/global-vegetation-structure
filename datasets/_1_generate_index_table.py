@@ -23,7 +23,7 @@ class IndexTableGenerater:
     Using dask to process zones in parallel. Thus using h5_dir/{zone}.h5 as input.
     """
 
-    def __init__(self, h5_dir:str='~/data/GEDI', out_idx_dir:str='~/data/index_table', debug: bool=False, **kwargs) -> None:
+    def __init__(self, h5_dir:str='~/data/GEDI', out_idx_dir:str='~/data/index_table') -> None:
         """
         * h5_dir: folder where {zone}.h5 is
         * out_idx_dir: folder where {zone}.parquet is saved to
