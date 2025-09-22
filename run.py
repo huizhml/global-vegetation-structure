@@ -131,7 +131,7 @@ class MyLightningCLI(LightningCLI):
                 test_fp = copy.copy(config.data.init_args.test_fp)
             # # NOTE: resume run if training or validating or testing
             if not config.trainer.logger.init_args.resume:
-                # Create a new run
+                # Create a new run,
                 config.trainer.logger.init_args.id = None
                 # evaluation, use logged config to initialize the model to be able to load the model correctly
                 try:
@@ -140,7 +140,7 @@ class MyLightningCLI(LightningCLI):
                     logged_config = {}
                     logged_config['model'] = run_.config
                     logged_config['model']['class_path'] = run_.config['_class_path']
-                update_namespace_from_nested_dict(config, logged_config, partial_update='model')
+                # update_namespace_from_nested_dict(config, logged_config, partial_update='model')
                 # config['model']['init_args']['evaluate_high_slope'] = True # not needed for the grouped boxplot
             else:
                 # Resume the run, dont change the run name
@@ -202,6 +202,7 @@ class MyLightningCLI(LightningCLI):
                     self.delta_bias = None
             else:    
                 self.delta_bias = None
+            
 
     def before_instantiate_classes(self):
         # create  shared memory array for caching predictions

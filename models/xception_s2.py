@@ -9,7 +9,6 @@ from torch.ao.quantization import QuantStub, DeQuantStub
 import torchmetrics
 import wandb
 from wandb.plot.custom_chart import plot_table
-from ._base_pl_model import BaseModel
 from models.modules.xception_blocks import PointwiseBlock, DoubleSepConvBlock, conv1x1
 from utils import get_class
 
@@ -70,7 +69,7 @@ def clamp_exp(x, min_x=-100, max_x=10):
     return torch.exp(x)
 
 
-class XceptionS2(BaseModel):
+class XceptionS2(nn.Module):
     """ A custom fully convolutional neural network designed for pixel-wise analysis of Sentinel-2 satellite images.
 
     "XceptionS2" builds on the separable convolution described by Chollet (2017) who proposed the Xception network.
@@ -87,33 +86,30 @@ class XceptionS2(BaseModel):
     arXiv preprint arXiv:2204.08322.
 
     Args:
+        activation_layer (nn.Module): Activation layer
+        norm_layer (str): Normalization layer
+        mid_block (str): Middle block
+        sepconv_block (str): Separable convolution block
+        nonlin_block (str): Non-linear block
         in_channels (int): Number of input channels
-        out_channels (int): Number of output channels (Set >1 for multi-task learning)
+        out_channels (int): Number of output channels
+        entry_block_filters (List[int]): Number of filters for the entry block
+        num_nonlin_blocks (int): Number of non-linear blocks
         num_sepconv_blocks (int): Number of blocks
         num_sepconv_filters (int): Number of filters
-        returns (string): Key specifying the return. Choices: ['targets', 'variances_exp', 'variances']
-        var_activation (string): Set which activation is applied on output variance. Choices ['relu', 'elu', 'exp']
-        min_var (float): Shift the output variance by adding min_var.
-        detach_var_input (bool): Detach graph before computing the variance. (obsolete)
         long_skip (bool): Add a long skip (residual) connection from the entry block features to the last features.
+        restrict_rf (bool): Option to restrict the receptive field to the patch size.
         manual_init (bool): Option to use a custom initialization setting.
-        freeze_features (bool): Option to freeze feature extractor.
-        freeze_last_mean (bool): Option to freeze last linear layer that outputs the mean
-        freeze_last_var (bool):  Option to freeze last linear layer that outputs the variance
-        geo_shift (bool): Option to shift the prediction by a learned shifting prior given latitude longitude
-        geo_scale (bool): Option to scale the prediction by a learned scaling prior given latitude longitude
-        separate_lat_lon (bool): Option to learn an image encoder (without latitude longitude) and a separate lat lon encoder.
-        model_weights_path (string): Path to load pretrained model weights used to initialize
+        mlp_skip (bool): Option to add a MLP skip connection.
     """
 
     def __init__(self, 
-                 
-                 activation_layer: nn.Module,
-                 norm_layer: str,
-                 mid_block: str,
-                 sepconv_block: str,
-                 nonlin_block: str,
-                 in_channels:int, 
+                 activation_layer: nn.Module=None,
+                 norm_layer: str=None,
+                 mid_block: str=None,
+                 sepconv_block: str=None,
+                 nonlin_block: str=None,
+                 in_channels:int=None, 
                  entry_block_filters:List[int]=[64, 128],
                  out_channels:int=1, 
                  num_nonlin_blocks:int=2,
@@ -121,8 +117,7 @@ class XceptionS2(BaseModel):
                  num_sepconv_filters:int=728, 
                  long_skip:bool=False, manual_init:bool=False, restrict_rf:bool=True, mlp_skip:bool=False,**kwargs):
 
-        yhat_transform = lambda x: x
-        super(XceptionS2, self).__init__(**kwargs, yhat_transform=yhat_transform)
+        super(XceptionS2, self).__init__()
 
         self.activation_layer = activation_layer
         self.norm_layer = norm_layer
@@ -139,7 +134,7 @@ class XceptionS2(BaseModel):
         if restrict_rf:
             mid_block = get_class(mid_block)
             self.mid_block = mid_block(self.activation_layer, in_channels=self.num_sepconv_filters, out_channels=self.num_sepconv_filters, norm_layer=self.norm_layer)
-            self.nonlin_blocks = nn.Identity()#self._make_sepconv_blocks(block=nonlin_block, kernerl_sizes=(1, 1), num_blocks=num_nonlin_blocks)
+            self.nonlin_blocks = self._make_sepconv_blocks(block=nonlin_block, kernerl_sizes=(1, 1), num_blocks=num_nonlin_blocks)
         else:
             self.mid_block = nn.Identity()
             self.nonlin_blocks = nn.Identity()
@@ -180,6 +175,8 @@ class XceptionS2(BaseModel):
     
 
     def _make_sepconv_blocks(self,kernerl_sizes=(3, 3), block:str='DoubleSepConvBlock', num_blocks:int=None):
+        if num_blocks is None or num_blocks == 0:
+            return nn.Identity()
         block = get_class(block)
         blocks = []
         for i in range(num_blocks):
@@ -202,7 +199,7 @@ class XceptionS2(BaseModel):
                 nn.init.constant_(m.bias, 0)  # beta
     
 
-class XceptionS2MixOrder(BaseModel):
+class XceptionS2MixOrder(nn.Module):
     """ A custom fully convolutional neural network designed for pixel-wise analysis of Sentinel-2 satellite images.
 
     "XceptionS2" builds on the separable convolution described by Chollet (2017) who proposed the Xception network.
@@ -220,22 +217,14 @@ class XceptionS2MixOrder(BaseModel):
 
     Args:
         in_channels (int): Number of input channels
-        out_channels (int): Number of output channels (Set >1 for multi-task learning)
+        out_channels (int): Number of output channels
         num_sepconv_blocks (int): Number of blocks
         num_sepconv_filters (int): Number of filters
-        returns (string): Key specifying the return. Choices: ['targets', 'variances_exp', 'variances']
-        var_activation (string): Set which activation is applied on output variance. Choices ['relu', 'elu', 'exp']
-        min_var (float): Shift the output variance by adding min_var.
-        detach_var_input (bool): Detach graph before computing the variance. (obsolete)
         long_skip (bool): Add a long skip (residual) connection from the entry block features to the last features.
         manual_init (bool): Option to use a custom initialization setting.
-        freeze_features (bool): Option to freeze feature extractor.
-        freeze_last_mean (bool): Option to freeze last linear layer that outputs the mean
-        freeze_last_var (bool):  Option to freeze last linear layer that outputs the variance
-        geo_shift (bool): Option to shift the prediction by a learned shifting prior given latitude longitude
-        geo_scale (bool): Option to scale the prediction by a learned scaling prior given latitude longitude
-        separate_lat_lon (bool): Option to learn an image encoder (without latitude longitude) and a separate lat lon encoder.
-        model_weights_path (string): Path to load pretrained model weights used to initialize
+        nonlinear_order (str): Order of the nonlinear blocks. Choices: ['last', 'first', 'inbetween', 'mixed']
+        entry_block_filters (List[int]): Number of filters for the entry block
+        num_nonlin_blocks (int): Number of non-linear blocks
     """
 
     def __init__(self, 
@@ -252,8 +241,7 @@ class XceptionS2MixOrder(BaseModel):
                  num_sepconv_filters:int=728, 
                  long_skip:bool=False, manual_init:bool=False, nonlinear_order:str='last',**kwargs):
 
-        yhat_transform = lambda x: x
-        super(XceptionS2MixOrder, self).__init__(**kwargs, yhat_transform=yhat_transform)
+        super(XceptionS2MixOrder, self).__init__()
 
         self.activation_layer = activation_layer
         self.norm_layer = norm_layer
@@ -322,7 +310,6 @@ class XceptionS2MixOrder(BaseModel):
     def fuse_model(self):
         for name, module in self.named_modules():
             if 'ConvNormActivation' in name.split('.')[-1]:
-                import ipdb; ipdb.set_trace()
                 torch.ao.quantization.fuse_modules_qat(module, ['0', '1', '2'], inplace=True)
             elif 'ConvNorm' in name.split('.')[-1]:
                 torch.ao.quantization.fuse_modules_qat(module, ['0', '1'], inplace=True)
@@ -387,196 +374,6 @@ class XceptionS2MixOrder(BaseModel):
         self.load_state_dict(model_weights)
 
 
-def xceptionS2_18blocks(in_channels=12, out_channels=1):
-    """
-    The model described in:
-    'Country-wide high-resolution vegetation height mapping with Sentinel-2' <https://arxiv.org/abs/1904.13270>
-
-    Args:
-        in_channels (int): Number of channels/bands of the multi-spectral input image.
-        out_channels (int): Dimension of the pixel-wise output.
-    """
-    return XceptionS2(in_channels=in_channels, out_channels=out_channels, num_sepconv_blocks=18,
-                      num_sepconv_filters=728)
-
-
-def xceptionS2_08blocks(in_channels=12, out_channels=1):
-    """
-    A smaller version (with only 8 sepconv blocks) of the model described in:
-    'Country-wide high-resolution vegetation height mapping with Sentinel-2' <https://arxiv.org/abs/1904.13270>
-
-    Args:
-        in_channels (int): Number of channels/bands of the multi-spectral input image.
-        out_channels (int): Dimension of the pixel-wise output.
-    """
-    return XceptionS2(in_channels=in_channels, out_channels=out_channels, num_sepconv_blocks=8,
-                      num_sepconv_filters=728)
-
-
-def xceptionS2_08blocks_256(in_channels=15, out_channels=1, model_weights=None,
-                            returns="variances_exp",
-                            download_dir="./trained_models",
-                            url_trained_models="https://github.com/langnico/global-canopy-height-model/releases/download/v1.0-trained-model-weights/trained_models_GLOBAL_GEDI_2019_2020.zip"):
-    """
-    The model used in 'A high-resolution canopy height model of the Earth.'
-    It is a smaller version (with only 8 sepconv blocks and 256 sepconv filters) of the model described in:
-    'Country-wide high-resolution vegetation height mapping with Sentinel-2' <https://arxiv.org/abs/1904.13270>
-
-    Args:
-        in_channels (int): Number of channels of the input. (12 sentinel-2 bands + 3 lat-lon-encoding) = 15 channels)
-        out_channels (int): Dimension of the pixel-wise output.
-        returns (string): Key specifying the return. Choices: ['targets', 'variances_exp', 'variances']
-        model_weights (string): This can either be set to the checkpoint path ".pt" or to one of the options below.
-
-    Model weights choices:
-        None: Randomly initialize the model weights.
-        Path: Path to a pretrained checkpoint file. (E.g. './trained_models/GLOBAL_GEDI_2019_2020/model_0/FT_Lm_SRCB/checkpoint.pt')
-        'GLOBAL_GEDI_MODEL_0': This will download the pretrained models and load the fine-tuned model with id 0
-        'GLOBAL_GEDI_MODEL_1': This will download the pretrained models and load the fine-tuned model with id 1.
-        'GLOBAL_GEDI_MODEL_2': This will download the pretrained models and load the fine-tuned model with id 2.
-        'GLOBAL_GEDI_MODEL_3': This will download the pretrained models and load the fine-tuned model with id 3.
-        'GLOBAL_GEDI_MODEL_4': This will download the pretrained models and load the fine-tuned model with id 4.
-
-    """
-
-    # download model weights if folder does not exist
-    if model_weights is None:
-        pass
-    elif "GLOBAL_GEDI_MODEL_" in model_weights:
-        print("model_weights set to: ", model_weights)
-
-        zip_path = os.path.join(download_dir, "trained_models_GLOBAL_GEDI_2019_2020.zip")
-        model_parent_path = os.path.join(download_dir, "GLOBAL_GEDI_2019_2020")
-        # get model id and set pretrained model weights path
-        model_id = model_weights.split("_")[-1]
-        assert model_id in [str(i) for i in range(5)]
-        model_weights = os.path.join(
-            download_dir, "GLOBAL_GEDI_2019_2020/model_{}/FT_Lm_SRCB/checkpoint.pt".format(model_id))
-
-        if not os.path.exists(model_parent_path):
-            print("downloading pretrained models...")
-            os.system("mkdir -p {}".format(download_dir))
-            download_url_to_file(url=url_trained_models, dst=zip_path, hash_prefix=None, progress=True)
-            print("unzipping...")
-            os.system("unzip {} -d {}".format(zip_path, download_dir))
-            os.system("rm {}".format(zip_path))
-        else:
-            print("Skipping download. The directory exists already: ", model_parent_path)
-
-    return XceptionS2(in_channels=in_channels, out_channels=out_channels, num_sepconv_blocks=8,
-                      num_sepconv_filters=256, returns=returns,
-                      long_skip=True,
-                      model_weights_path=model_weights)
-
-
-class XceptionDownstream(XceptionS2):
-    def __init__(self, in_channels=12, out_channels=1, 
-                 input_rhs:bool=True,
-                 **kwargs):
-        super(XceptionDownstream, self).__init__(in_channels=in_channels, out_channels=out_channels, **kwargs)
-        self.input_rhs = in_channels > 12
-        self.val_metrics_veg = None
-        self.val_metrics_lcc = None
-        
-        # Overall metrics
-        self.train_metrics = torchmetrics.MetricCollection({
-            'acc': torchmetrics.Accuracy('multiclass', num_classes=7, average='micro'),
-            'acc_per_class': torchmetrics.Accuracy('multiclass', num_classes=7, average='none'),
-            'precision': torchmetrics.Precision('multiclass', num_classes=7, average='micro'),
-            'precision_per_class': torchmetrics.Precision('multiclass', num_classes=7, average='none'),
-            'recall': torchmetrics.Recall('multiclass', num_classes=7, average='micro'),
-            'recall_per_class': torchmetrics.Recall('multiclass', num_classes=7, average='none'),
-            'confusion_matrix': torchmetrics.ConfusionMatrix('multiclass', num_classes=7)
-        }, compute_groups=False, postfix='-train')
-        
-        self.val_metrics = self.train_metrics.clone(postfix='-val')
-
-        # Define the class labels
-        self.class_labels = ['No forest', 'Natural forest (primary)', 'Natural forest (secondary)', 
-                             'Planted forest', 'Short rotation plantation', 'Oil palm plantation', 'Agroforestry']
-
-    def on_train_epoch_start(self):
-        self.train_metrics.reset()
-        self.val_metrics.reset()
-    
-    def training_step(self, batch, batch_idx):
-        rhs, s2, y = batch
-        if self.transform.mean.shape[0] == 12:
-            x = self.transform(s2)
-        elif self.transform.mean.shape[0] == 13:
-            x = self.transform(torch.cat([s2, rhs], dim=1))
-        elif self.transform.mean.shape[0] == 101:
-            x = self.transform(rhs)
-        elif self.transform.mean.shape[0] == 113:
-            x = self.transform(torch.cat([rhs, s2], dim=1))
-        y_hat = self(x.float())
-        loss = self.loss_fc(y_hat[:, :, 7,7], y)
-        self.log('train.loss', loss)
-        self.train_metrics(y_hat[:, :, 7,7], y)
-        return loss
-    
-    def validation_step(self, batch, batch_idx):
-        rhs, s2, y = batch
-        if self.transform.mean.shape[0] == 12:
-            x = self.transform(s2)
-        elif self.transform.mean.shape[0] == 13:
-            x = self.transform(torch.cat([s2, rhs], dim=1))
-        elif self.transform.mean.shape[0] == 101:
-            x = self.transform(rhs)
-        elif self.transform.mean.shape[0] == 113:
-            x = self.transform(torch.cat([rhs, s2], dim=1))
-        y_hat = self(x.float())
-        loss = self.loss_fc(y_hat[:, :, 7,7], y)
-        self.log('val.loss', loss)
-        self.val_metrics(y_hat[:, :, 7,7], y)
-        return loss
-    
-    def on_validation_epoch_end(self):
-        val_metrics = self.val_metrics.compute()
-        train_metrics = self.train_metrics.compute()
-
-        # Log overall metrics
-        self.log_dict({k.replace('-', '/'): v for k, v in val_metrics.items() if 'per_class' not in k and k != 'confusion_matrix-val'}, 
-                      on_epoch=True, on_step=False, sync_dist=True)
-        self.log_dict({k.replace('-', '/'): v for k, v in train_metrics.items() if 'per_class' not in k and k != 'confusion_matrix-train'}, 
-                      on_epoch=True, on_step=False, sync_dist=True)
-
-        # Log per-class metrics with actual labels
-        for metric in ['acc', 'precision', 'recall']:
-            for i, label in enumerate(self.class_labels):
-                self.log(f'{metric}/per_class/{label}.val', val_metrics[f'{metric}_per_class-val'][i], 
-                         on_epoch=True, on_step=False, sync_dist=True)
-                self.log(f'{metric}/per_class/{label}.train', train_metrics[f'{metric}_per_class-train'][i], 
-                         on_epoch=True, on_step=False, sync_dist=True)
-        
-        # Log confusion matrices
-        # Convert confusion matrix to list of [actual, predicted, count]
-        for split, metrics in [('val', val_metrics), ('train', train_metrics)]:
-            confusion_data = []
-            conf_matrix = metrics[f'confusion_matrix-{split}']
-            for i in range(len(self.class_labels)):
-                for j in range(len(self.class_labels)):
-                    confusion_data.append([
-                        self.class_labels[i],  # Actual class
-                        self.class_labels[j],  # Predicted class 
-                        conf_matrix[i,j].item() # Number of samples
-                    ])
-                    
-            table = plot_table(
-                data_table=wandb.Table(
-                    columns=["Actual", "Predicted", "nPredictions"],
-                    data=confusion_data
-                ),
-                vega_spec_name="wandb/confusion_matrix/v1", 
-                fields={
-                    "Actual": "Actual",
-                    "Predicted": "Predicted", 
-                    "nPredictions": "nPredictions"
-                },
-                string_fields={"title": f'confusion_matrix/{split}'},
-                split_table=False
-            )
-            self.logger.experiment.log({f'confusion_matrix/{split}': table})
 
 if __name__ == "__main__":
 

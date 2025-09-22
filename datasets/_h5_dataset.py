@@ -220,6 +220,7 @@ class NaturalnessDataset(Dataset):
             self.data.close()
             
 
+# Not used, integrated into the model, 2025-09-15
 class Normalize(nn.Module):
     def __init__(self, rhs_only:bool=False, input_rhs:bool=False, input_top_height:bool=False, mean_std_fp:str=None):
         super().__init__()
@@ -249,7 +250,7 @@ class Normalize(nn.Module):
         return normalize(x.float(), self.mean, self.std)
 
 class NaturalnessDataModule(LightningDataModule):
-    def __init__(self, h5_file: str = None, naturalness_fp: str = None, mean_std_fp: str = None, use_full_profile: bool = False, 
+    def __init__(self, h5_file: str = None, naturalness_fp: str = None, use_full_profile: bool = False, 
                  batch_size: int = 1, num_workers: int = 4, train_val_split: float = 0.8, 
                  class_balance: bool = False,
                  **kwargs):

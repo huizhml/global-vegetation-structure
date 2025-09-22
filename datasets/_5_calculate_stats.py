@@ -109,6 +109,7 @@ def calculate_s2_mean_std(beton_fp:str):
     """
     batch_size = 100 if 'debug' in beton_fp else 4096
     beton_fp = Path(beton_fp).expanduser()
+    split_name = beton_fp.name
     beton_fp = glob(str(beton_fp))
     
     avg_img = AverageMeter(is_img=True)

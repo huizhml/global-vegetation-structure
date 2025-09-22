@@ -32,6 +32,7 @@ from dask.distributed import get_client
 import h5py
 import xarray as xr
 from collections import defaultdict
+from download._4_download import harmonize_to_old
 
 MASKED_VALUE = {
     'int16': 32767,
@@ -274,7 +275,10 @@ class BaseDeployDataset(Dataset):
         esa_wc_mask = esa_wc == self.esa_snow
         prediction_no_border = torch.where(scl_mask | esa_wc_mask, torch.nan, prediction_no_border)
         
-        prediction_no_border, _ = torch.nanmedian(prediction_no_border, dim=0)
+        if self.save_intermediate_tif:
+            prediction_no_border = prediction_no_border[:, 295, :, :]
+        else:
+            prediction_no_border, _ = torch.nanmedian(prediction_no_border, dim=0)
         prediction_no_border = torch.where(water_mask_scl | water_mask_esa | built_up_mask, torch.nan, prediction_no_border)
         prediction_no_border.mul_(10).round_()  # In-place operations
         prediction_no_border = torch.nan_to_num(prediction_no_border, nan=self.nodata_value)            
@@ -383,10 +387,11 @@ class ChunkedWriteDataset(BaseDeployDataset):
         BaseDeployDataset (_type_): _description_
     """
     
-    def __init__(self, **kwargs):
+    def __init__(self, save_intermediate_tif: bool = False, **kwargs):
         super().__init__(**kwargs)
         self.prediction_fp = self.prediction_dir / f'{self.tile_id}'
         self.transform = Affine(*self.transform).to_gdal()
+        self.save_intermediate_tif = save_intermediate_tif # for debugging purposes
         
     def initialize_output(self):
         self.options = [
@@ -402,12 +407,25 @@ class ChunkedWriteDataset(BaseDeployDataset):
             output_files = [self.prediction_fp.with_stem(f'RH{i}_Q{j}_uncompressed') for i in range(self.rh_dim//3) for j in range(3)]
         else:
             output_files = [self.prediction_fp.with_stem(f'RH{i//3}_Q1_uncompressed') for i in self.rh_idx]
+        if self.save_intermediate_tif:
+            from cftime import num2date
+            tvar = self.store[f'{self.tile_id}/time']
+            time_raw = tvar[:]  # integers/floats
+            units = tvar.attrs["units"]                  # e.g. "seconds since 2020-01-01 00:00:00"
+            calendar = tvar.attrs.get("calendar", "standard")
+
+            # Decode to datetimes (cftime objects or datetimes)
+            decoded = num2date(time_raw, units, calendar=calendar)
+
+            # Format to YYYY-MM-DD strings
+            dates = np.array([d.strftime("%Y-%m-%d") for d in decoded])
+            output_files = [self.prediction_fp.with_stem(f'{self.tile_id}_{date}_uncompressed') for date in dates]
         
         self.tiff_writers = [self.init_gtiff(output_file) for output_file in output_files]
         dtype = np.dtype(
             [("raster_writer", gdal.Dataset), ("array", 'float16', (self.patch_size_no_border, self.patch_size_no_border))]
         )
-        self.pred_table = np.full((self.rh_dim), None, dtype=dtype)
+        self.pred_table = np.full((len(output_files)), None, dtype=dtype)
         
     def write_patch_predictions(self, prediction,scl, idx):
         y_topleft, x_topleft = self.patch_coords_dict[idx][1:]
@@ -416,7 +434,7 @@ class ChunkedWriteDataset(BaseDeployDataset):
         prediction_no_border = self._apply_masks(prediction, scl, x_topleft, y_topleft)
         if prediction_no_border is None:
             return
-        for i in range(self.rh_dim):
+        for i in range(len(self.tiff_writers)):
             self.pred_table[i] = (self.tiff_writers[i], prediction_no_border[i])
         darr = da.from_array(self.pred_table, chunks=(1,))
         darr = darr.map_blocks(write_patch_predictions, x_topleft, y_topleft, self.nodata_value, meta=np.array((1,2), dtype=darr.dtype))
@@ -450,9 +468,13 @@ def write_patch_predictions(entry, x_topleft, y_topleft, nodata_value):
                     yoff=y_topleft)
     filename = raster_writer.GetDescription()
     filename = Path(filename)
-    rh_idx = int(filename.stem.split('_')[0].split('RH')[1])
-    q_idx = int(filename.stem.split('_')[1].split('Q')[1])
-    band.SetDescription(f"RH{rh_idx}_Q{q_idx}")
+    if 'uncompressed' in filename.stem:
+        date = filename.stem.split('_')[1]
+        band.SetDescription(f"{date}")
+    else:
+        rh_idx = int(filename.stem.split('_')[0].split('RH')[1])
+        q_idx = int(filename.stem.split('_')[1].split('Q')[1])
+        band.SetDescription(f"RH{rh_idx}_Q{q_idx}")
     band.SetNoDataValue(nodata_value)
     raster_writer.FlushCache()
 
@@ -518,6 +540,7 @@ class S2DatasetStream(BaseDeployDataset):
                  output_dtype: str = 'int16',
                  impute_cloud_with_mean: bool = False,
                  download_data: bool = False,
+                 save_intermediate_tif: bool = False,
                  **kwargs):
         self.metadata_file = Path(metadata_file).expanduser()
         self.h5_file = Path(h5_dir).expanduser() / f'{tile_id}.h5'
@@ -537,6 +560,7 @@ class S2DatasetStream(BaseDeployDataset):
         self.year = year
         self.chunk_size = chunk_size
         self.impute_cloud_with_mean = impute_cloud_with_mean
+        self.save_intermediate_tif = save_intermediate_tif
         if download_data and not self.h5_file.exists():
             print(f'{self.h5_file} does not exist, downloading...')
             self.download_tile()
@@ -654,6 +678,7 @@ class S2DatasetStream(BaseDeployDataset):
         # epsg = items[0].properties['proj:epsg']
         items = row_to_stac_item(tile_df, S2_ITEM_PROPS)  
         image = get_patch(items, bands, dtype='uint16', fill_value=np.uint16(0))
+        image = harmonize_to_old(image)
         image.name = 's2'
         del image.attrs['spec']
         del image.attrs['crs']
