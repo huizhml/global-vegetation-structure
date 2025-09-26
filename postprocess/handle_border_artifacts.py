@@ -11,6 +11,8 @@ import rasterio
 from rasterio.warp import transform
 import time
 import matplotlib.pyplot as plt
+import dask
+from dask.diagnostics import ProgressBar
 
 
 def get_gedi_from_h5(h5_fp: str, mgrs_tiles:str, s2_fp: str, s2_tiles:str):
@@ -40,6 +42,108 @@ def get_gedi_from_h5(h5_fp: str, mgrs_tiles:str, s2_fp: str, s2_tiles:str):
     df = df[df['Name'].isin(s2_tiles)]
     return df
 
+
+def check_correction_performance(ref_data_dir: str, year: int):
+    '''
+    Check the correction performance (RMSE, MAE and ME)
+    Split the correction data into 2 parts:
+    - Part 1: used for correction
+    - Part 2: used for evaluation
+    '''
+    ref_data_dir = Path(ref_data_dir).expanduser()
+    ref_data_dir = ref_data_dir.with_stem(ref_data_dir.stem + f'_{year}')
+    all_tiles = [tile.stem for tile in ref_data_dir.glob('*.parquet')]
+    # check prediction completeness
+    for tile_id in all_tiles:
+        pred_fp = Path(f'~/data/GVS/Deploy/predictions_{year}/{tile_id}_cog').expanduser()
+        n_files = len(list(pred_fp.glob('*Q1.cog.tif')))
+        if n_files != 101:
+            print(f'{pred_fp} not complete')
+            all_tiles.remove(tile_id)
+    print(f'{len(all_tiles)} tiles have predictions')
+    rh_size = 101
+    
+    @dask.delayed
+    def test_correction_for_one_tile(tile_id: str):
+        gedi_ref = gpd.read_parquet(ref_data_dir / f'{tile_id}.parquet')
+        lon = gedi_ref.geometry.x.values
+        lat = gedi_ref.geometry.y.values
+        preds = []
+        for rh_idx in range(rh_size):
+            pred_fp = Path(f'~/data/GVS/Deploy/predictions_{year}/{tile_id}_cog/RH{rh_idx}_Q1.cog.tif').expanduser()
+            with rasterio.open(pred_fp) as src:
+                xs, ys = transform('EPSG:4326', src.crs, lon, lat)
+                coords = list(zip(xs, ys))
+                rh = list(rasterio.sample.sample_gen(src, coords))
+                pred = np.concatenate(rh, axis=0).reshape(-1, 1)
+                preds.append(pred) # (n_points, 1)
+                nodata = src.nodata
+        
+        preds = np.concatenate(preds, axis=1) # (n_points, rh_size)
+        # mask nodata for pred and ref
+        mask = (preds == nodata).any(axis=1)
+        preds = preds[~mask]
+        preds = preds.astype(np.float32)
+        if preds.shape[0] == 0:
+            print(f'No valid data for {tile_id}')
+            return None, None, None
+        rh_cols = [f'rh{i}' for i in range(rh_size)]
+        gedi_ref = gedi_ref[rh_cols].values
+        gedi_ref = gedi_ref[~mask]
+        
+        # split data into correct and eval
+        n = gedi_ref.shape[0]
+        idx = np.random.permutation(gedi_ref.shape[0])
+        correct_idx = idx[:int(n*0.5)]
+        eval_idx = idx[int(n*0.5):]
+        correct_y = gedi_ref[correct_idx]
+        eval_y = gedi_ref[eval_idx]
+        correct_x = preds[correct_idx]
+        eval_x = preds[eval_idx]
+        # apply linear fit for all rhs
+        a, b = get_scale_and_shift(correct_x, correct_y*10)
+        eval_y_linear_corrected = a * eval_x + b
+        residuals_linear_corrected = eval_y_linear_corrected/10 - eval_y # (n_points, rh_size)
+        
+        # apply bias correction for all rhs
+        bias = (correct_y*10 - correct_x).mean(axis=0) # >0 means under-estimation, <0 means over-estimation
+        eval_y_bias_corrected = eval_y + bias
+        residuals_bias_corrected = eval_y_bias_corrected/10 - eval_y # (n_points, rh_size)
+        
+        # raw residuals
+        residuals = eval_y/10 - eval_y # (n_points, rh_size)
+        return residuals, residuals_linear_corrected, residuals_bias_corrected
+    
+    tasks = []
+    for tile_id in all_tiles:
+        tasks.append(test_correction_for_one_tile(tile_id))
+    res = dask.compute(*tasks)
+    residuals = []
+    residuals_linear_corrected = []
+    residuals_bias_corrected = []
+    for r in res:
+        if r[0] is None:
+            continue
+        residuals.append(r[0])
+        residuals_linear_corrected.append(r[1])
+        residuals_bias_corrected.append(r[2])
+
+    rmse = (np.concatenate(residuals)**2).mean(axis=0)**0.5
+    mae = np.abs(np.concatenate(residuals)).mean(axis=0)
+    me = np.concatenate(residuals).mean(axis=0)
+    rmse_linear_corrected = (np.concatenate(residuals_linear_corrected)**2).mean(axis=0)**0.5
+    mae_linear_corrected = np.abs(np.concatenate(residuals_linear_corrected)).mean(axis=0)
+    me_linear_corrected = np.concatenate(residuals_linear_corrected).mean(axis=0)
+    rmse_bias_corrected = (np.concatenate(residuals_bias_corrected)**2).mean(axis=0)**0.5
+    mae_bias_corrected = np.abs(np.concatenate(residuals_bias_corrected)).mean(axis=0)
+    me_bias_corrected = np.concatenate(residuals_bias_corrected).mean(axis=0)
+    data = [rmse, rmse_linear_corrected, rmse_bias_corrected, mae, mae_linear_corrected, mae_bias_corrected, me, me_linear_corrected, me_bias_corrected]
+    cols = [f'rh{i}' for i in range(rh_size)]
+    df = pd.DataFrame(data, index=['RMSE_raw', 'RMSE_linear_corrected', 'RMSE_bias_corrected', 'MAE_raw', 'MAE_linear_corrected', 'MAE_bias_corrected', 'ME_raw', 'ME_linear_corrected', 'ME_bias_corrected'], columns=cols)
+    df['avg'] = df.mean(axis=1)
+    df.to_csv(f'~/data/GVS/Deploy/correction_performance_{year}.csv')
+    print(df)
+
     
 def correct_s2_tile_prediction(ref_data_dir: str, tile_id: str, save_dir: str, year: int):
     '''
@@ -53,12 +157,19 @@ def correct_s2_tile_prediction(ref_data_dir: str, tile_id: str, save_dir: str, y
     save_dir = save_dir / f'{tile_id}_cog'
     save_dir.mkdir(parents=True, exist_ok=True)
     
-    pred_dir = Path(f'~/data/GVS/Deploy/predictions_{year}/{tile_id}_cog').expanduser()
+    # pred_dir = Path(f'~/data/GVS/Deploy/predictions_{year}/{tile_id}_cog').expanduser()
+    rh_idx = 98
+    share_id ='cTWnFfMN97' # evze6lxv0t (2020)
+    q_idx = 1 # median prediction
+    erda_link=f'https://sid.erda.dk/cgi-sid/ls.py?share_id={share_id}&current_dir={tile_id}&flags=f'
+    file_url = f'https://sid.erda.dk/share_redirect/{share_id}/{tile_id}_cog/'
+    pred_dir = Path(file_url)
     gedi_ref = gpd.read_parquet(ref_data_dir / f'{tile_id}.parquet') # to check: no duplicates?
 
     lon = gedi_ref.geometry.x.values
     lat = gedi_ref.geometry.y.values
     
+    @dask.delayed
     def correct_one_rh(median_pred_fp: Path):
         rh_idx = median_pred_fp.stem.split('_')[0][2:]
         with rasterio.open(median_pred_fp) as src:
@@ -72,11 +183,14 @@ def correct_s2_tile_prediction(ref_data_dir: str, tile_id: str, save_dir: str, y
         mask = pred != 32767
         pred = pred[mask]
         rhs = rhs[mask]
-        # pred += np.random.uniform(-0.5, 0.5, pred.shape)
-        # a, b = get_scale_and_shift(pred, rhs*10) # in decimeters
-        bias = (rhs*10 - pred).mean()
-        a = 1
-        b = bias
+        # pred += np.random.uniform(-1, 1, pred.shape)
+        if pred.shape[0] == 0:
+            print(f'No valid data for {median_pred_fp}')
+            return
+        a, b = get_scale_and_shift(pred, rhs*10) # in decimeters
+        # bias = (rhs*10 - pred).mean()
+        # a = 1
+        # b = bias
         plt.scatter(pred, rhs*10)
         xvalues = np.linspace(0, 500)
         yvalues = xvalues*a + b
@@ -84,22 +198,28 @@ def correct_s2_tile_prediction(ref_data_dir: str, tile_id: str, save_dir: str, y
         file = Path(f'~/data/GVS/Deploy/plots_bias_correction/{median_pred_fp.stem}_linear_fit.png').expanduser()
         plt.savefig(file)
         print(f'scale: {a}, shift: {b}')
-        for q_idx in range(3):
-            correct_fp = save_dir / f'RH{rh_idx}_Q{q_idx}.cog.tif'
-            old_fp = pred_dir / f'RH{rh_idx}_Q{q_idx}.cog.tif'
-            # profile.update(dtype=np.float32)
-            with rasterio.open(correct_fp, 'w', **profile) as dst:
-                with rasterio.open(old_fp) as src:
-                    raw_pred = src.read(1)
-                raw_pred = np.where(raw_pred == src.nodata, np.nan, raw_pred)
-                correct_pred_float = a * raw_pred + b
-                correct_pred = correct_pred_float.round()
-                correct_pred = np.nan_to_num(correct_pred, nan=src.nodata)
-                correct_pred = correct_pred.astype(np.int16)
-                dst.write(correct_pred, indexes=1)
-            print(f'saved to {correct_fp}')
+        # for q_idx in range(3):
+        q_idx = 1
+        correct_fp = save_dir / f'RH{rh_idx}_Q{q_idx}.cog.tif'
+        old_fp = pred_dir / f'RH{rh_idx}_Q{q_idx}.cog.tif'
+        # profile.update(dtype=np.float32)
+        with rasterio.open(correct_fp, 'w', **profile) as dst:
+            with rasterio.open(old_fp) as src:
+                raw_pred = src.read(1)
+            raw_pred = np.where(raw_pred == src.nodata, np.nan, raw_pred)
+            correct_pred_float = a * raw_pred + b
+            correct_pred = correct_pred_float.round()
+            correct_pred = np.nan_to_num(correct_pred, nan=src.nodata)
+            correct_pred = correct_pred.astype(np.int16)
+            dst.write(correct_pred, indexes=1)
+        print(f'saved to {correct_fp}')
     
-    correct_one_rh(pred_dir / f'RH98_Q1.cog.tif')
+    tasks = []
+    for rh_idx in range(98,99):
+        tasks.append(correct_one_rh(pred_dir / f'RH{rh_idx}_Q1.cog.tif'))
+    with ProgressBar():
+        dask.compute(*tasks)
+    # correct_one_rh(pred_dir / f'RH98_Q1.cog.tif')
 
 
 
@@ -107,8 +227,14 @@ def get_scale_and_shift(pred: np.ndarray, rhs: np.ndarray):
     '''
     Get scale and shift from S2 tile prediction and GEDI point
     '''
-    A = np.vstack([pred, np.ones_like(pred)]).T
-    a, b = np.linalg.lstsq(A, rhs, rcond=None)[0]
+    x_mean = pred.mean()
+    y_mean = rhs.mean()
+    cov = ((pred - x_mean) * (rhs - y_mean)).mean(axis=0)
+    var = ((pred - x_mean)**2).mean(axis=0)
+    a = cov / var
+    b = y_mean - a * x_mean
+    # A = np.vstack([pred, np.ones_like(pred)]).T
+    # a, b = np.linalg.lstsq(A, rhs, rcond=None)[0]
     return a, b
 
 def agg_gedi_to_s2(gedi_fps: str, s2_fp: str, output_dir: str):
@@ -158,9 +284,15 @@ cs.store(name='agg_gedi_to_s2', node=AggGediToS2)
 def main(cfg):
     # agg_gedi_to_s2(cfg.gedi_fps, cfg.s2_fp, cfg.output_dir)
     time_start = time.time()
-    correct_s2_tile_prediction(cfg.ref_data_dir, cfg.tile_id, cfg.save_dir, cfg.year)
+    # correct_s2_tile_prediction(cfg.ref_data_dir, cfg.tile_id, cfg.save_dir, cfg.year)
+    check_correction_performance(cfg.ref_data_dir, cfg.year)
     time_end = time.time()
     print(f'Time taken: {time_end - time_start} seconds')
 
 if __name__ == '__main__':
+    # from dask.distributed import Client, LocalCluster
+    # from dask import config
+    # cluster = LocalCluster(processes=False)
+    # client = Client(cluster)  # timeout
+    # print(client)
     main()
