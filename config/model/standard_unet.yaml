@@ -25,9 +25,6 @@ init_args:
   blur: False
   final_skip: False
   self_attention: False
-  # used in the base model (_base_pl_model.py)
-  mask_fc: datasets.transforms.SlopeWCMask
-  loss_fc: models.losses.base.Loss #torch.nn.BCELoss # 
 
 
   

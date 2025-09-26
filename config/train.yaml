@@ -17,8 +17,8 @@ lr_scheduler:
 data:
   class_path: datasets.ffcv_datamodule.FFCVDataModel
   init_args: 
-    train_fp: ~/data/GVS/train_subsets/debug0_filtered_v0.beton
-    val_fp: ~/data/GVS/train_subsets/debug1_filtered_v0.beton
+    train_fp: ~/data/GVS/train_subsets/debug0_filtered_v1.beton
+    val_fp: ~/data/GVS/train_subsets/debug1_filtered_v1.beton
     pred_fp:
     test_fp:
     num_workers: 1
@@ -27,39 +27,23 @@ data:
     order: QUASI_RANDOM
     os_cache: False
     distributed: True
+    input_lat_lon: True
 
 model:
-  class_path: models.unet.UNet
+  class_path: models.vs_regression.VSRegression
   init_args:
-    out_channels: 101
-    patch_size: 15
-    norm_layer_up: torch.nn.BatchNorm2d
-    up_block: models.modules.standard.DoubleConvSkip
-    last_opt: torch.nn.Identity
-    encoder:
-      class_path: models.modules.standard.StandardNet
-      init_args:
-        in_channels: 12
-        depths: [64, 128, 256, 512]
-        kernal_sizes: [3, 3]
-        initial_stride: 1
-        norm_layer: torch.nn.BatchNorm2d
-        activation_layer: 
-          class_path: torch.nn.ELU
-          init_args:
-            inplace: True
-            alpha: 0.54
-        block: models.modules.standard.DoubleConvSkip
-        
-    upsampling: nearest
-    blur_final: False
-    blur: False
-    final_skip: False
-    self_attention: False
-    # used in the base model (_base_pl_model.py)
+    feed_slope: False
+    zero_slope: True
+    slope_th: 20
+    zero_out_nonveg: False
+    filter_out_nonveg: True
+    feed_latlon: ${data.init_args.input_lat_lon}
+    evaluate_high_slope: False
+    loss_fc: models.losses.quantile_ce_loss.QuantileCELoss
     transform: datasets.transforms.Normalize
-    loss_fc: 
-      class_path: models.losses.base.MaskedL1Loss #torch.nn.BCELoss # 
+    yhat_transform: torch.nn.Identity
+    backbone: # --model.backbone config/model/xception_mix_order.yaml
+        
 
 trainer:
   accelerator: gpu

@@ -1,3 +1,4 @@
+# --model.backbone config/model/xception_mix_order.yaml
 class_path: models.xception_s2.XceptionS2MixOrder
 init_args:
   in_channels: 15
@@ -18,5 +19,3 @@ init_args:
   nonlin_block: models.modules.xception_blocks.DoubleConvBlock
   num_nonlin_blocks: 4
   nonlinear_order: inbetween
-  # used in the base model (_base_pl_model.py)
-  loss_fc: models.losses.quantile_loss.QuantileLoss

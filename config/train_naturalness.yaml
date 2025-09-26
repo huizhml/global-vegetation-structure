@@ -21,31 +21,14 @@ data:
     naturalness_fp: ~/data/GVS/downstream_task_data/naturalness/reference_data_set_updated.csv
     use_full_profile: True
     num_workers: 4
-    batch_size: 4096 # per device
+    batch_size: 1024 # per device
 
 model:
-  class_path: models.xception_s2.XceptionDownstream
+  class_path: models.naturalness_mapping.NaturalnessMapping
   init_args:
-    in_channels: 101
-    out_channels: 7
-    entry_block_filters: [128, 128]
-    long_skip: True
-    activation_layer: torch.nn.ReLU
-    norm_layer: torch.nn.BatchNorm2d
-    sepconv_block: models.modules.xception_blocks.DoubleSepConvBlock
-    num_sepconv_blocks: 3
-    num_sepconv_filters: 128
-    mid_block: models.modules.xception_blocks.SepConvBlockSkip
-    nonlin_block: models.modules.xception_blocks.DoubleConvBlock
-    # num_nonlin_blocks: 1
-    restrict_rf: False
-    # nonlinear_order: inbetween
-    # used in the base model (_base_pl_model.py)
+    mean_std_fp: ~/data/GVS/downstream_task_data/naturalness/mean_std.npz
     loss_fc: torch.nn.CrossEntropyLoss
-    transform: 
-      class_path: datasets._h5_dataset.Normalize
-      init_args:
-        mean_std_fp: ~/data/GVS/downstream_task_data/naturalness/mean_std.npz
+    backbone: # --model.backbone config/model/xception_s2.yaml
 
 
 trainer:

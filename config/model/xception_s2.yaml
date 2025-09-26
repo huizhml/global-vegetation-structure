@@ -1,21 +1,13 @@
 class_path: models.xception_s2.XceptionS2
 init_args:
-  in_channels: 12
-  out_channels: 303
-  entry_block_filters: [128, 256]
+  entry_block_filters: [128, 128]
   long_skip: True
   activation_layer: torch.nn.ReLU
-  # activation_layer: 
-  #   class_path: torch.nn.ELU
-  #   init_args:
-  #     inplace: True
-  #     alpha: 0.54
   norm_layer: torch.nn.BatchNorm2d
   sepconv_block: models.modules.xception_blocks.DoubleSepConvBlock
   num_sepconv_blocks: 3
-  num_sepconv_filters: 512
+  num_sepconv_filters: 128
   mid_block: models.modules.xception_blocks.SepConvBlockSkip
   nonlin_block: models.modules.xception_blocks.DoubleConvBlock
-  num_nonlin_blocks: 4
-  # used in the base model (_base_pl_model.py)
-  loss_fc: models.losses.quantile_loss.QuantileLoss
+  num_nonlin_blocks: 0
+  restrict_rf: True
