@@ -33,9 +33,9 @@ check_unfinished_tiles() {
   local tile_list=("$@")
   local result=""
   for tile in "${tile_list[@]}"; do
-    sync_flag="${HOME}/data/GVS/Deploy/sync_flags_${year}/${tile}_best_images_done"
-    translate_flag="${HOME}/data/GVS/Deploy/translate_flags_${year}/${tile}_best_images_done"
-    processed_flag="${HOME}/data/GVS/Deploy/sync_flags_${year}/${tile}_done"
+    sync_flag="${HOME}/data/GVS/Deploy/flags_sync_${year}/${tile}_best_images_done"
+    translate_flag="${HOME}/data/GVS/Deploy/flags_translate_${year}/${tile}_best_images_done"
+    processed_flag="${HOME}/data/GVS/Deploy/flags_sync_${year}/${tile}_done"
     if [ ! -f "$sync_flag" ] && [ ! -f "$translate_flag" ] && [ ! -f "$processed_flag" ]; then
       result+="$tile "
     fi

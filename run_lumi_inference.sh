@@ -71,7 +71,7 @@ echo "Processing tile ID: $tile_id, line $line_num from $tile_id_file"
 # wait for input data being streamed for the first tile
 # Check if the h5 file is being used by another process
 h5_file="${input_dir}/${tile_id}.h5"
-stream_flag="${HOME}/data/GVS/Deploy/stream_flags_${year}/${tile_id}_best_images_done"
+stream_flag="${HOME}/data/GVS/Deploy/flags_stream_${year}/${tile_id}_best_images_done"
 if [ ! -f "$stream_flag" ] && [ "$use_flash" == "False" ]; then
     echo "Failed: tile $tile_id doesn't exist" >&2
     exit 1
@@ -107,7 +107,7 @@ if [ $exit_status -ne 0 ]; then
     fi
 else
     echo "Prediction command completed successfully"
-    touch ${HOME}/data/GVS/Deploy/inference_flags_${year}/${tile_id}_best_images_done
+    touch ${HOME}/data/GVS/Deploy/flags_inference_${year}/${tile_id}_best_images_done
     echo "Delete input h5 file..."
     rm -f ${h5_file}
 fi

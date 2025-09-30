@@ -50,13 +50,13 @@ echo "Processing tile ID: $tile_id, line $line_num from $tile_id_file"
 
 
 
-if [ -f "${HOME}/data/GVS/Deploy/translate_flags_${year}/${tile_id}_done" ]; then
+if [ -f "${HOME}/data/GVS/Deploy/flags_translate_${year}/${tile_id}_done" ]; then
     echo "Tile $tile_id already translated, skip"
     exit 0
 fi
 
-inference_flag_new="${HOME}/data/GVS/Deploy/inference_flags_${year}/${tile_id}_best_images_done"
-translate_flag_new="${HOME}/data/GVS/Deploy/translate_flags_${year}/${tile_id}_best_images_done"
+inference_flag_new="${HOME}/data/GVS/Deploy/flags_inference_${year}/${tile_id}_best_images_done"
+translate_flag_new="${HOME}/data/GVS/Deploy/flags_translate_${year}/${tile_id}_best_images_done"
 if [ -f "$translate_flag_new" ]; then
     file_count=$(ls ${output_dir}/${tile_id}_cog/*.cog.tif | wc -l)
     if [ $file_count -lt 303 ]; then
