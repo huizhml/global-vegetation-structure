@@ -68,8 +68,8 @@ fi
 echo "Processing tile ID: $tile_id, line $line_num from $tile_id_file"
 echo "meta_file: $meta_file"
 
-translate_flag="${HOME}/data/GVS/Deploy/translate_flags_${year}/${tile_id}_done"
-translate_flag_new="${HOME}/data/GVS/Deploy/inference_flags_${year}/${tile_id}_best_images_done"
+translate_flag="${HOME}/data/GVS/Deploy/flags_translate_update_${year}/${tile_id}_done"
+translate_flag_new="${HOME}/data/GVS/Deploy/flags_inference_update_${year}/${tile_id}_best_images_done"
 if [ -f "$translate_flag" ] || [ -f "$translate_flag_new" ]; then
     echo "Translate flag file $translate_flag or $translate_flag_new exists. Skipping tile $tile_id"
     continue
