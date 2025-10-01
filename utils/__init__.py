@@ -7,6 +7,10 @@ import torch
 import numpy as np
 from multiprocessing import shared_memory
 from typing import Union
+from pathlib import Path
+import geopandas as gpd
+from dotenv import load_dotenv
+load_dotenv()
 
 def setup_default_logging(log_path, string = 'Train', default_level=logging.INFO,
                           format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s"):
@@ -151,3 +155,20 @@ def get_wandb_ckpt_path(run= None, run_id: str=None, wandb_project: str=None, mo
         artifact = artifacts[model_alias]
     ckpt_path = artifact.file()
     return ckpt_path
+
+def get_geom_for_countries(countries_file: str, world_countries_shp: str=None):
+    '''
+    Get the geometry for the countries in the countries_file
+    Args:
+        countries_file: str, path to the file containing the name of countries, one country per line
+        world_countries_shp: str, path to the world countries shapefile, default to the one in the environment variable WORLD_COUNTRIES_SHP
+    Returns:
+        geopandas.GeoDataFrame, the geometry for the countries in the countries_file
+    '''
+    if world_countries_shp is None:
+        world_countries_shp = os.getenv('WORLD_COUNTRIES_SHP')
+    world_countries_df = gpd.read_file(world_countries_shp)
+    with open(Path(countries_file).expanduser(), 'r') as file:
+        countries = [line.strip() for line in file]
+    countries_df = world_countries_df[world_countries_df['ADMIN'].isin(countries)]
+    return countries_df
