@@ -64,8 +64,11 @@ def check_correction_performance(ref_data_dir: str, year: int):
     rh_size = 101
     
     @dask.delayed
-    def test_correction_for_one_tile(tile_id: str):
+    def test_correction_for_one_tile(tile_id: str, min_n_points: int=200):
         gedi_ref = gpd.read_parquet(ref_data_dir / f'{tile_id}.parquet')
+        if len(gedi_ref) <= min_n_points:
+            print(f'{tile_id} has less than {min_n_points} points')
+            return None, None, None
         lon = gedi_ref.geometry.x.values
         lat = gedi_ref.geometry.y.values
         preds = []
@@ -90,7 +93,9 @@ def check_correction_performance(ref_data_dir: str, year: int):
         rh_cols = [f'rh{i}' for i in range(rh_size)]
         gedi_ref = gedi_ref[rh_cols].values
         gedi_ref = gedi_ref[~mask]
-        
+        if len(gedi_ref) <= min_n_points:
+            print(f'{tile_id} has less than {min_n_points} valid (not nodata) points')
+            return None, None, None
         # split data into correct and eval
         n = gedi_ref.shape[0]
         idx = np.random.permutation(gedi_ref.shape[0])
