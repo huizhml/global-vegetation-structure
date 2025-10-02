@@ -122,6 +122,17 @@ python -m download._5_download_inference task=download_by_api_query year=$year s
 year=2020
 echo download inference data for $year by metadata;
 python -m download._5_download_inference task=download year=$year job_id=0 specified_tiles_file=~/data/GVS/Deploy/tiles_without_images_$year.txt;;
+12)
+year=${2:-2020}
+echo schedule slurm jobs, i.e, split tiles, for $year;
+python -m deploy.schedule_tasks year=$year parquet_dir=~/data/GVS/Deploy/slurm_job_files_${year} save_dir=~/data/GVS/Deploy/slurm_job_files_${year}
+;;
+13)
+year=${2:-2020}
+echo compare the performance of linear and bias correction;
+python -m postprocess.handle_border_artifacts year=$year
+
+;;
 *)
 echo runnning nothing ;;
 esac
