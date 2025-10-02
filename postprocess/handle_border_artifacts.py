@@ -112,6 +112,22 @@ def check_correction_performance(ref_data_dir: str, year: int):
         
         # raw residuals
         residuals = eval_y/10 - eval_y # (n_points, rh_size)
+        stats = {
+            'scale': a,
+            'shift': b,
+            'bias': bias,
+            'rmse': np.sqrt(np.mean(residuals**2, axis=0)),
+            'mae': np.mean(np.abs(residuals), axis=0),
+            'me': np.mean(residuals, axis=0),
+            'rmse_linear_corrected': np.sqrt(np.mean(residuals_linear_corrected**2, axis=0)),
+            'mae_linear_corrected': np.mean(np.abs(residuals_linear_corrected), axis=0),
+            'me_linear_corrected': np.mean(residuals_linear_corrected, axis=0),
+            'rmse_bias_corrected': np.sqrt(np.mean(residuals_bias_corrected**2, axis=0)),
+            'mae_bias_corrected': np.mean(np.abs(residuals_bias_corrected), axis=0),
+            'me_bias_corrected': np.mean(residuals_bias_corrected, axis=0),
+        }
+        np.savez(f'{save_dir}/correction_stats_{year}_{tile_id}.npz', **stats)
+        
         return residuals, residuals_linear_corrected, residuals_bias_corrected
     
     tasks = []
