@@ -101,23 +101,25 @@ def check_correction_performance(ref_data_dir: str, year: int):
         idx = np.random.permutation(gedi_ref.shape[0])
         correct_idx = idx[:int(n*0.5)]
         eval_idx = idx[int(n*0.5):]
-        correct_y = gedi_ref[correct_idx]
-        eval_y = gedi_ref[eval_idx]
-        correct_x = preds[correct_idx]
-        eval_x = preds[eval_idx]
+        
+        correct_true = gedi_ref[correct_idx]
+        correct_pred = preds[correct_idx]
+        eval_true = gedi_ref[eval_idx]
+        eval_pred = preds[eval_idx]
         # apply linear fit for all rhs
-        a, b = get_scale_and_shift(correct_x, correct_y*10)
-        eval_y_linear_corrected = a * eval_x + b
-        residuals_linear_corrected = eval_y_linear_corrected/10 - eval_y # (n_points, rh_size)
+        a, b = get_scale_and_shift(correct_pred, correct_true*10)
+        eval_pred_linear_corrected = a * eval_pred + b
+        residuals_linear_corrected = eval_pred_linear_corrected/10 - eval_true # (n_points, rh_size)
         
         # apply bias correction for all rhs
-        bias = (correct_y*10 - correct_x).mean(axis=0) # >0 means under-estimation, <0 means over-estimation
-        eval_y_bias_corrected = eval_y + bias
-        residuals_bias_corrected = eval_y_bias_corrected/10 - eval_y # (n_points, rh_size)
+        bias = (correct_true*10 - correct_pred).mean(axis=0) # >0 means under-estimation, <0 means over-estimation
+        eval_pred_bias_corrected = eval_pred + bias
+        residuals_bias_corrected = eval_pred_bias_corrected/10 - eval_true # (n_points, rh_size)
         
         # raw residuals
-        residuals = eval_y/10 - eval_y # (n_points, rh_size)
+        residuals = eval_pred/10 - eval_true # (n_points, rh_size)
         stats = {
+            'n': len(eval_pred),
             'scale': a,
             'shift': b,
             'bias': bias,
@@ -132,7 +134,8 @@ def check_correction_performance(ref_data_dir: str, year: int):
             'me_bias_corrected': np.mean(residuals_bias_corrected, axis=0),
         }
         np.savez(f'{save_dir}/correction_stats_{year}_{tile_id}.npz', **stats)
-        
+        if np.isnan(residuals_linear_corrected).any() or np.isnan(residuals_bias_corrected).any() or np.isnan(residuals).any():
+            print(f'{tile_id} has nan in residuals')
         return residuals, residuals_linear_corrected, residuals_bias_corrected
     
     tasks = []
