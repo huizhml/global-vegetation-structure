@@ -50,11 +50,15 @@ def check_correction_performance(ref_data_dir: str, year: int):
     - Part 1: used for correction
     - Part 2: used for evaluation
     '''
-    save_dir = Path(f'{save_dir}_{year}').expanduser()
-    save_dir.mkdir(parents=True, exist_ok=True)
-    ref_data_dir = Path(f'{ref_data_dir}_{year}').expanduser()
-    prediction_dir = Path(f'{prediction_dir}_{year}').expanduser()
-    all_tiles = [tile.stem for tile in ref_data_dir.glob('*.parquet')]
+    correction_result_dir = Path(f'{correction_result_dir}/tile_stats').expanduser()
+    correction_result_dir.mkdir(parents=True, exist_ok=True)
+    ref_data_dir = Path(f'{ref_data_dir}').expanduser()
+    prediction_dir = Path(f'{prediction_dir}').expanduser()
+    if tiles_list_file != '':
+        with open(tiles_list_file, 'r') as f:
+            all_tiles = f.read().splitlines()
+    else:
+        all_tiles = [tile.stem for tile in ref_data_dir.glob('*.parquet')]
     # check prediction completeness
     for tile_id in all_tiles:
         pred_fp = Path(f'{prediction_dir}/{tile_id}_cog').expanduser()
@@ -170,6 +174,55 @@ def check_correction_performance(ref_data_dir: str, year: int):
     df.to_csv(f'{save_dir}/correction_performance_{year}_all_tiles.csv')
     print(df)
 
+
+def correction_performance_distribution(correction_result_dir: str, year: int):
+    '''
+    Having correction performance for each tile, aggregate them into a single dataframe
+    Aggregate correction performance
+    '''
+    correction_result_dir = Path(f'{correction_result_dir}_{year}').expanduser()
+    stats_file = correction_result_dir / f'correction_performance_{year}_per_tile_distribution.csv'
+    if not stats_file.exists():
+        rows = []
+        for file in correction_result_dir.glob('*.npz'):
+            tile_id = file.stem.split('_')[-1]
+            data = np.load(file)
+            for postfix in ['', '_linear_corrected', '_bias_corrected']:
+                group = 'raw' if postfix == '' else 'linear_corrected' if postfix == '_linear_corrected' else 'bias_corrected'
+                rows.append({'tile_id': tile_id, 'group': group, 
+                            'RMSE_RH98': data[f'rmse{postfix}'][98], 
+                            'RMSE_all': data[f'rmse{postfix}'].mean(), 
+                            'MAE_RH98': data[f'mae{postfix}'][98], 
+                            'MAE_all': data[f'mae{postfix}'].mean(), 
+                            'ME_RH98': data[f'me{postfix}'][98], 
+                            'ME_all': data[f'me{postfix}'].mean()})
+        df = pd.DataFrame(rows)
+        df.to_csv(stats_file)
+    else:
+        df = pd.read_csv(stats_file)
+    groups = df.groupby('group', sort=False)
+    for metric in ['MAE', 'RMSE', 'ME']:
+        for rh_idx in ['RH98', 'all']:
+            plt.figure(figsize=(8, 6))
+            y_positions = {'raw': 100, 'linear_corrected': 100, 'bias_corrected': 500}  # Different y positions for each group
+            colors = {'raw': 'blue', 'linear_corrected': 'orange', 'bias_corrected': 'green'}  # Define colors for each group
+            for name, group in groups:
+                color = colors.get(name, 'black')  # Default to black if group name not in colors
+                group[f'{metric}_{rh_idx}'].hist(bins=100, alpha=0.7, label=f'Group: {name}', color=color)
+                max_value = group[f'{metric}_{rh_idx}'].max()
+                y_position = y_positions.get(name, 5)  # Default to 5 if group name not in y_positions
+                plt.annotate(f'Max: {max_value:.2f}', 
+                            xy=(max_value, 0), 
+                            xytext=(max_value, y_position),  # Offset x position for better readability
+                            arrowprops=dict(facecolor=color, shrink=0.1),  # Use the same color as the histogram
+                            fontsize=10, color='black')
+            plt.title(f'Distribution of tile-level {metric} ({rh_idx}) for raw, linear_corrected, and bias_corrected predictions')
+            plt.xlabel(f'{metric} ({rh_idx})')
+            plt.ylabel('Frequency')
+            plt.grid(True)
+            plt.legend()
+            plt.savefig(f'{correction_result_dir}/tile_level_performance_distribution_{metric}_{rh_idx}.png')
+    
     
 def correct_s2_tile_prediction(ref_data_dir: str, tile_id: str, save_dir: str, year: int):
     '''
