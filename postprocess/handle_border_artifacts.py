@@ -50,13 +50,15 @@ def check_correction_performance(ref_data_dir: str, year: int):
     - Part 1: used for correction
     - Part 2: used for evaluation
     '''
-    ref_data_dir = Path(ref_data_dir).expanduser()
-    ref_data_dir = ref_data_dir.with_stem(ref_data_dir.stem + f'_{year}')
+    save_dir = Path(f'{save_dir}_{year}').expanduser()
+    save_dir.mkdir(parents=True, exist_ok=True)
+    ref_data_dir = Path(f'{ref_data_dir}_{year}').expanduser()
+    prediction_dir = Path(f'{prediction_dir}_{year}').expanduser()
     all_tiles = [tile.stem for tile in ref_data_dir.glob('*.parquet')]
     # check prediction completeness
     for tile_id in all_tiles:
-        pred_fp = Path(f'~/data/GVS/Deploy/predictions_{year}/{tile_id}_cog').expanduser()
-        n_files = len(list(pred_fp.glob('*Q1.cog.tif')))
+        pred_fp = Path(f'{prediction_dir}/{tile_id}_cog').expanduser()
+        n_files = len(list(pred_fp.glob('*Q1*.tif')))
         if n_files != 101:
             print(f'{pred_fp} not complete')
             all_tiles.remove(tile_id)
@@ -73,7 +75,7 @@ def check_correction_performance(ref_data_dir: str, year: int):
         lat = gedi_ref.geometry.y.values
         preds = []
         for rh_idx in range(rh_size):
-            pred_fp = Path(f'~/data/GVS/Deploy/predictions_{year}/{tile_id}_cog/RH{rh_idx}_Q1.cog.tif').expanduser()
+            pred_fp = Path(f'{prediction_dir}/{tile_id}_cog/RH{rh_idx}_Q1.cog.tif').expanduser()
             with rasterio.open(pred_fp) as src:
                 xs, ys = transform('EPSG:4326', src.crs, lon, lat)
                 coords = list(zip(xs, ys))
@@ -165,7 +167,7 @@ def check_correction_performance(ref_data_dir: str, year: int):
     cols = [f'rh{i}' for i in range(rh_size)]
     df = pd.DataFrame(data, index=['RMSE_raw', 'RMSE_linear_corrected', 'RMSE_bias_corrected', 'MAE_raw', 'MAE_linear_corrected', 'MAE_bias_corrected', 'ME_raw', 'ME_linear_corrected', 'ME_bias_corrected'], columns=cols)
     df['avg'] = df.mean(axis=1)
-    df.to_csv(f'~/data/GVS/Deploy/correction_performance_{year}.csv')
+    df.to_csv(f'{save_dir}/correction_performance_{year}_all_tiles.csv')
     print(df)
 
     
