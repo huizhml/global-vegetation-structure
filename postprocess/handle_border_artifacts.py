@@ -133,10 +133,10 @@ def check_correction_performance(ref_data_dir: str, year: int):
         # apply bias correction for all rhs
         bias = (correct_true*10 - correct_pred).mean(axis=0) # >0 means under-estimation, <0 means over-estimation
         eval_pred_bias_corrected = eval_pred + bias
-        residuals_bias_corrected = eval_pred_bias_corrected/10 - eval_true # (n_points, rh_size)
+        residuals_bias_corrected = eval_pred_bias_corrected.round()/10 - eval_true # (n_points, rh_size)
         
         # raw residuals
-        residuals = eval_pred/10 - eval_true # (n_points, rh_size)
+        residuals = eval_pred/10 - eval_true # (n_points, rh_size) # In meters
         stats = {
             'n': len(eval_pred),
             'scale': a,
@@ -152,7 +152,7 @@ def check_correction_performance(ref_data_dir: str, year: int):
             'mae_bias_corrected': np.mean(np.abs(residuals_bias_corrected), axis=0),
             'me_bias_corrected': np.mean(residuals_bias_corrected, axis=0),
         }
-        np.savez(f'{save_dir}/correction_stats_{year}_{tile_id}.npz', **stats)
+        np.savez(f'{correction_result_dir}/correction_stats_{year}_{tile_id}.npz', **stats)
         if np.isnan(residuals_linear_corrected).any() or np.isnan(residuals_bias_corrected).any() or np.isnan(residuals).any():
             print(f'{tile_id} has nan in residuals')
         return residuals, residuals_linear_corrected, residuals_bias_corrected
@@ -160,33 +160,89 @@ def check_correction_performance(ref_data_dir: str, year: int):
     tasks = []
     for tile_id in all_tiles:
         tasks.append(test_correction_for_one_tile(tile_id))
-    res = dask.compute(*tasks)
-    residuals = []
-    residuals_linear_corrected = []
-    residuals_bias_corrected = []
-    for r in res:
-        if r[0] is None:
-            continue
-        residuals.append(r[0])
-        residuals_linear_corrected.append(r[1])
-        residuals_bias_corrected.append(r[2])
+    with ProgressBar():
+        res = dask.compute(*tasks)
+    if tiles_list_file is None:
+        # no part files, all tiles are processed, aggregate the results
+        residuals = []
+        residuals_linear_corrected = []
+        residuals_bias_corrected = []
+        for r in res:
+            if r[0] is None:
+                continue
+            residuals.append(r[0])
+            residuals_linear_corrected.append(r[1])
+            residuals_bias_corrected.append(r[2])
 
-    rmse = (np.concatenate(residuals)**2).mean(axis=0)**0.5
-    mae = np.abs(np.concatenate(residuals)).mean(axis=0)
-    me = np.concatenate(residuals).mean(axis=0)
-    rmse_linear_corrected = (np.concatenate(residuals_linear_corrected)**2).mean(axis=0)**0.5
-    mae_linear_corrected = np.abs(np.concatenate(residuals_linear_corrected)).mean(axis=0)
-    me_linear_corrected = np.concatenate(residuals_linear_corrected).mean(axis=0)
-    rmse_bias_corrected = (np.concatenate(residuals_bias_corrected)**2).mean(axis=0)**0.5
-    mae_bias_corrected = np.abs(np.concatenate(residuals_bias_corrected)).mean(axis=0)
-    me_bias_corrected = np.concatenate(residuals_bias_corrected).mean(axis=0)
-    data = [rmse, rmse_linear_corrected, rmse_bias_corrected, mae, mae_linear_corrected, mae_bias_corrected, me, me_linear_corrected, me_bias_corrected]
-    cols = [f'rh{i}' for i in range(rh_size)]
-    df = pd.DataFrame(data, index=['RMSE_raw', 'RMSE_linear_corrected', 'RMSE_bias_corrected', 'MAE_raw', 'MAE_linear_corrected', 'MAE_bias_corrected', 'ME_raw', 'ME_linear_corrected', 'ME_bias_corrected'], columns=cols)
+        rmse = (np.concatenate(residuals)**2).mean(axis=0)**0.5
+        mae = np.abs(np.concatenate(residuals)).mean(axis=0)
+        me = np.concatenate(residuals).mean(axis=0)
+        rmse_linear_corrected = (np.concatenate(residuals_linear_corrected)**2).mean(axis=0)**0.5
+        mae_linear_corrected = np.abs(np.concatenate(residuals_linear_corrected)).mean(axis=0)
+        me_linear_corrected = np.concatenate(residuals_linear_corrected).mean(axis=0)
+        rmse_bias_corrected = (np.concatenate(residuals_bias_corrected)**2).mean(axis=0)**0.5
+        mae_bias_corrected = np.abs(np.concatenate(residuals_bias_corrected)).mean(axis=0)
+        me_bias_corrected = np.concatenate(residuals_bias_corrected).mean(axis=0)
+        data = [rmse, rmse_linear_corrected, rmse_bias_corrected, mae, mae_linear_corrected, mae_bias_corrected, me, me_linear_corrected, me_bias_corrected]
+        cols = [f'rh{i}' for i in range(rh_size)]
+        
+        df = pd.DataFrame(data, index=['RMSE_raw', 'RMSE_linear_corrected', 'RMSE_bias_corrected', 'MAE_raw', 'MAE_linear_corrected', 'MAE_bias_corrected', 'ME_raw', 'ME_linear_corrected', 'ME_bias_corrected'], columns=cols)
+        df['avg'] = df.mean(axis=1)
+        df.to_csv(f'{correction_result_dir}/correction_performance_{year}_all_tiles.csv')
+        print(df)
+
+
+# 
+def aggregate_correction_performance(correction_result_dir: str, year: int):
+    '''
+    Aggregate correction performance
+    '''
+    correction_result_dir = Path(f'{correction_result_dir}').expanduser()
+    n = 0
+    sum_me = {
+        'raw': np.zeros(101),
+        'linear_corrected': np.zeros(101),
+        'bias_corrected': np.zeros(101)
+    }
+    sum_mae = {
+        'raw': np.zeros(101),
+        'linear_corrected': np.zeros(101),
+        'bias_corrected': np.zeros(101)
+    }
+    sum_mse = {
+        'raw': np.zeros(101),
+        'linear_corrected': np.zeros(101),
+        'bias_corrected': np.zeros(101)
+    }
+    for file in correction_result_dir.glob('*.npz'):
+        data = np.load(file)
+        n += data[f'n']
+        for postfix in ['', '_linear_corrected', '_bias_corrected']:
+            group = 'raw' if postfix == '' else 'linear_corrected' if postfix == '_linear_corrected' else 'bias_corrected'
+            sum_me[group] += data[f'me{postfix}'] * data[f'n']
+            sum_mae[group] += data[f'mae{postfix}'] * data[f'n']
+            sum_mse[group] += data[f'rmse{postfix}']**2 * data[f'n']
+    me = {group: sum_me[group] / n for group in sum_me} #{'raw': (101,), 'linear_corrected': (101,), 'bias_corrected': (101,)}
+    mae = {group: sum_mae[group] / n for group in sum_mae}
+    rmse = {group: (sum_mse[group] / n)**0.5 for group in sum_mse}
+    data = {}
+    for matric_name, matric in zip(['ME', 'MAE', 'RMSE'], [me, mae, rmse]):
+        for group in matric.keys():
+            data[f'{matric_name}_{group}'] = matric[group]
+    df = pd.DataFrame(data)
+    df = df.T
     df['avg'] = df.mean(axis=1)
-    df.to_csv(f'{save_dir}/correction_performance_{year}_all_tiles.csv')
-    print(df)
-
+    df = df.rename(columns={i: f'rh{i}' for i in range(101)})
+    df.to_csv(correction_result_dir / f'correction_performance_{year}_all_tiles_aggregated.csv')
+    # verify
+    # df_old = pd.read_csv(correction_result_dir / f'correction_performance_{year}_all_tiles.csv')
+    # df_old = df_old.set_index('Unnamed: 0')
+    # df_old = df_old.sort_index()
+    # df = df.sort_index()
+    # df.index.name = 'Unnamed: 0'
+    # pd.testing.assert_frame_equal(df, df_old) # NOTE: verified, no assertion
+        
+            
 
 def correction_performance_distribution(correction_result_dir: str, year: int):
     '''
@@ -359,13 +415,17 @@ class AggGediToS2:
     gedi_fps: str = '~/data/GVS/train_subsets/train*_filtered_v1.parquet'
     s2_fp: str = '~/data/GVS/S2_tiles_with_growing_months.parquet'
     output_dir: str = '~/data/GVS/train_gedi_agg_by_s2/'
-    ref_data_dir: str = '~/data/GVS/GEDI/GVS_correction_set'
+    ref_data_dir: str = '~/data/GVS/GEDI/GVS_correction_set_2020'
     tile_id: str = '20MRS'
-    save_dir: str = '~/data/GVS/Deploy/predictions_corrected'
+    prediction_dir: str = '~/data/GVS/Deploy/predictions_2020'
+    correction_result_dir: str = '~/data/GVS/Deploy/correction_2020'
+    corrected_pred_dir: str = '~/data/GVS/Deploy/predictions_corrected_2020'
+    tiles_list_file: str = ''
     year: int = 2020
     # test config
     mgrs_tiles: str = '20M,21M,20L,21L'
     s2_tiles: str = '20MRS,21MTM,20LRR,21LTL'
+    task: str = 'check_correction_performance'
     
 
 cs = ConfigStore.instance()
@@ -376,8 +436,15 @@ cs.store(name='agg_gedi_to_s2', node=AggGediToS2)
 def main(cfg):
     # agg_gedi_to_s2(cfg.gedi_fps, cfg.s2_fp, cfg.output_dir)
     time_start = time.time()
-    # correct_s2_tile_prediction(cfg.ref_data_dir, cfg.tile_id, cfg.save_dir, cfg.year)
-    check_correction_performance(cfg.ref_data_dir, cfg.year)
+    # correct_s2_tile_prediction(cfg.ref_data_dir, cfg.tile_id, cfg.corrected_pred_dir, cfg.year)
+    # agg_correction_performance('~/data/GVS/Deploy/correction', cfg.year)
+    if cfg.task == 'check_correction_performance':
+        check_correction_performance(**cfg)
+    elif cfg.task == 'correction_performance_distribution':
+        correction_performance_distribution(**cfg)
+    elif cfg.task == 'aggregate_correction_performance':
+        aggregate_correction_performance(cfg.correction_result_dir, cfg.year)
+    # correction_performance_distribution(cfg.correction_result_dir, cfg.year)
     time_end = time.time()
     print(f'Time taken: {time_end - time_start} seconds')
 
