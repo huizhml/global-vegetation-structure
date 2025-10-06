@@ -113,9 +113,22 @@ def check_correction_performance(ref_data_dir: str, year: int):
         eval_true = gedi_ref[eval_idx]
         eval_pred = preds[eval_idx]
         # apply linear fit for all rhs
-        a, b = get_scale_and_shift(correct_pred, correct_true*10)
-        eval_pred_linear_corrected = a * eval_pred + b
-        residuals_linear_corrected = eval_pred_linear_corrected/10 - eval_true # (n_points, rh_size)
+        a, b = get_scale_and_shift(correct_pred, correct_true*10) # in decimeters
+        # print(f'scale: {a}, shift: {b}')
+        # coef_list = []
+        # intercept_list = []
+        # for rh_idx in range(rh_size):
+        #     reg = LinearRegression().fit(correct_pred[:, rh_idx:rh_idx+1], correct_true[:, rh_idx:rh_idx+1]*10)
+        #     coef_list.append(reg.coef_[0,0])
+        #     intercept_list.append(reg.intercept_[0,0])
+        # coef_list = np.array(coef_list)
+        # intercept_list = np.array(intercept_list)
+        # print(f'scale: {coef_list}, shift: {intercept_list}')
+        # np.isclose(a, coef_list) # True every where
+        # np.isclose(b, intercept_list) # True every where
+        
+        eval_pred_linear_corrected = a * eval_pred + b # in decimeters
+        residuals_linear_corrected = eval_pred_linear_corrected.round()/10 - eval_true # (n_points, rh_size) # In meters
         
         # apply bias correction for all rhs
         bias = (correct_true*10 - correct_pred).mean(axis=0) # >0 means under-estimation, <0 means over-estimation
@@ -306,8 +319,8 @@ def get_scale_and_shift(pred: np.ndarray, rhs: np.ndarray):
     '''
     Get scale and shift from S2 tile prediction and GEDI point
     '''
-    x_mean = pred.mean()
-    y_mean = rhs.mean()
+    x_mean = pred.mean(axis=0)
+    y_mean = rhs.mean(axis=0)
     cov = ((pred - x_mean) * (rhs - y_mean)).mean(axis=0)
     var = ((pred - x_mean)**2).mean(axis=0)
     a = cov / var
