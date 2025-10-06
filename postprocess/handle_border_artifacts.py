@@ -250,6 +250,21 @@ def correction_performance_distribution(correction_result_dir: str, year: int):
     Aggregate correction performance
     '''
     correction_result_dir = Path(f'{correction_result_dir}_{year}').expanduser()
+    table = pd.read_csv(correction_result_dir / f'correction_performance_{year}_all_tiles.csv')
+    table = table.set_index('Unnamed: 0')
+    fig, axs = plt.subplots(3, 1, figsize=(8, 6))
+    cols = [f'rh{i}' for i in range(101)]
+    for i, metric in enumerate(['RMSE', 'MAE', 'ME']):
+        for postfix in ['raw', 'linear_corrected', 'bias_corrected']:
+            axs[i].plot(table.loc[f'{metric}_{postfix}', cols], label=f'{postfix}')
+        axs[i].set_xticks(np.arange(0, 101, 10))
+        axs[i].legend()
+        axs[i].set_ylabel(f'{metric}')
+    plt.xlabel('Relative Height (0-100)')
+    # plt.title(f'Correction performance for {year}')
+    plt.savefig(correction_result_dir / f'correction_performance_{year}_all_tiles.png')
+    plt.close()
+    
     stats_file = correction_result_dir / f'correction_performance_{year}_per_tile_distribution.csv'
     if not stats_file.exists():
         rows = []
