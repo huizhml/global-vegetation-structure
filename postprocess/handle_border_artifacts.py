@@ -394,7 +394,7 @@ def get_scale_and_shift(pred: np.ndarray, rhs: np.ndarray):
     y_mean = rhs.mean(axis=0)
     cov = ((pred - x_mean) * (rhs - y_mean)).mean(axis=0)
     var = ((pred - x_mean)**2).mean(axis=0)
-    a = cov / var
+    a = cov / (var + eps)
     b = y_mean - a * x_mean
     # A = np.vstack([pred, np.ones_like(pred)]).T
     # a, b = np.linalg.lstsq(A, rhs, rcond=None)[0]
