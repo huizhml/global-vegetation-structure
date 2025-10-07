@@ -386,7 +386,7 @@ def correct_s2_tile_prediction(ref_data_dir: str, tile_id: str, save_dir: str, y
 
 
 
-def get_scale_and_shift(pred: np.ndarray, rhs: np.ndarray):
+def get_scale_and_shift(pred: np.ndarray, rhs: np.ndarray, eps: float=1e-6):
     '''
     Get scale and shift from S2 tile prediction and GEDI point
     '''
