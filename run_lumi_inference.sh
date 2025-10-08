@@ -54,7 +54,17 @@ fi
 config_dir=${HOME}/data/GVS/Deploy/slurm_job_files_${year}
 # tile_id_file=${config_dir}/deploy_s2_items_${year}_part${part}.txt
 ## Check if processed before submitting job
-tile_id=$(sed -n "${line_num}p" "$tile_id_file")
+# tile_id=$(sed -n "${line_num}p" "$tile_id_file")
+line=$(sed -n "${line_num}p" $tile_id_file)
+IFS=',' read -r tile_id idx <<< "$line"
+echo "Line $line_num: Tile=$tile_id, idx=$idx"
+if [ -z "$idx" ]; then
+    echo "idx is null, no meta file"
+    meta_file='none'
+else
+    idx=$(printf "%d" $idx)
+    meta_file=${config_dir}/deploy_s2_items_${year}_part${idx}.parquet
+fi
 echo "Processing tile ID: $tile_id, line $line_num from $tile_id_file"
 
 
@@ -77,12 +87,48 @@ if [ ! -f "$stream_flag" ] && [ "$use_flash" == "False" ]; then
     exit 1
 fi
 
+sync_to_lumi() {
+    echo "***************************** SYNC DATA TO LUMI-O *****************************"
+    ## since we'll apply correction and blending to the data, we don't translate the data to cog 
+    module load lumio
+
+    lumi_project=465001846
+    remote=lumi-${lumi_project}-private:
+
+    # Get bucket name and check if it exists
+    zone=$(echo ${tile_id:0:3} | tr '[:upper:]' '[:lower:]')
+    bucket_name=${zone}-${year}
+    echo "bucket_name: ${bucket_name}"
+
+    if rclone lsd ${remote} | grep "^.*${bucket_name}.*"; then
+        echo "Bucket ${bucket_name} exists"
+    else
+        echo "Bucket ${bucket_name} does not exist, creating..."
+        rclone mkdir ${remote}${bucket_name}
+    fi
+
+    SRC=${save_dir}/${tile_id}_GTiff
+    DST=${remote}${bucket_name}/predictions_GTiff_${year}/${tile_id}
+    # e.g. remote="lumi-${lumi_project}-private:"  ← note the trailing colon
+    rclone sync "$SRC" "$DST" --checksum  # --local-no-check-updated
+    # rclone sync ${HOME}/data/GVS/Deploy/predictions_${year}/${tile_id}_cog ${remote}${bucket_name}/predictions_${year}/${tile_id}_cog --local-no-check-updated
+    count=$(rclone ls "${DST}" | wc -l)
+    echo "Number of files in ${DST}: $count"
+    if [ $count -lt 303 ]; then
+        echo "Number of files in ${DST} is less than 303, deleting..."
+        echo "Error: Number of files in ${DST} is less than 303" >&2
+        exit 1
+    fi
+        rm -rf ${save_dir}/${tile_id}_GTiff
+        echo "***************************** END SYNC DATA TO LUMI-O *****************************"
+}
+
 echo "***************************** START INFERENCE *****************************"
 run_id=cg11fpjr
 echo run prediction for model $run_id for tile $tile_id;
-python run.py predict -c config/predict.yaml --model config/model/xception_mix_order.yaml \
+python run.py predict -c config/predict.yaml --model.backbone config/model/xception_mix_order.yaml \
         --data.init_args.tile_id $tile_id \
-        --data.init_args.metadata_file ${config_dir}/deploy_s2_items_${year}_part${tile_id_file_num}.parquet \
+        --data.init_args.metadata_file $meta_file \
         --data.init_args.pred_fp ${input_dir} \
         --data.init_args.prediction_dir ${save_dir}/${tile_id}_GTiff \
         --data.init_args.year $year \
@@ -110,6 +156,7 @@ else
     touch ${HOME}/data/GVS/Deploy/flags_inference_${year}/${tile_id}_best_images_done
     echo "Delete input h5 file..."
     rm -f ${h5_file}
+    sync_to_lumi
 fi
 echo "***************************** END INFERENCE *****************************"
 

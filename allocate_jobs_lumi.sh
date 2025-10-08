@@ -117,7 +117,7 @@ for file_num in "${FILE_LIST[@]}"; do
   echo "Need to submit $num_tiles tasks for file $file_num"
 
   # Submit in chunks while keeping ~TARGET_ACTIVE active tasks
-  start_index=1
+  start_index=2 # start from line 2 because line 1 is the header
   end_index=0
   while [ $end_index -lt $num_tiles ]; do
     # Wait until we have room to submit more
@@ -151,10 +151,10 @@ for file_num in "${FILE_LIST[@]}"; do
     # JOBID_A=$(sbatch --account project_465001846 -p small --array=${start_index}-${end_index} --job-name=inference --wrap='echo "hello from $SLURM_ARRAY_TASK_ID"; sleep ${infer_time}' | awk '{print $4}')
     JOBID_A=$(sbatch --parsable --array=${start_index}-${end_index} run_lumi_inference.sh "$tile_list_file" "$file_num" "$year" "$use_flash" | awk '{print $1}')
     echo "Submitted inference job range ${start_index}-${end_index} as job $JOBID_A"
-    # sbatch --account project_465001846 -p small --array=${start_index}-${end_index} --dependency=aftercorr:${JOBID_A} --job-name=trs --wrap='echo "hello from $SLURM_ARRAY_TASK_ID"; sleep 10'
-    JOBID_B=$(sbatch --array=${start_index}-${end_index} --dependency=aftercorr:${JOBID_A} run_lumi_translate.sh "$tile_list_file" "$year" "$use_flash" | awk '{print $4}')
-    echo "Submitted translate job range ${start_index}-${end_index} after $JOBID_A as job $JOBID_B"
-    echo '--------------------------------------------------------------------'
+    # # sbatch --account project_465001846 -p small --array=${start_index}-${end_index} --dependency=aftercorr:${JOBID_A} --job-name=trs --wrap='echo "hello from $SLURM_ARRAY_TASK_ID"; sleep 10'
+    # JOBID_B=$(sbatch --array=${start_index}-${end_index} --dependency=aftercorr:${JOBID_A} run_lumi_translate.sh "$tile_list_file" "$year" "$use_flash" | awk '{print $4}')
+    # echo "Submitted translate job range ${start_index}-${end_index} after $JOBID_A as job $JOBID_B"
+    # echo '--------------------------------------------------------------------'
     # Small delay to avoid overwhelming scheduler
     sleep 1s
   done
