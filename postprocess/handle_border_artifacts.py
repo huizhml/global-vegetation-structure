@@ -43,7 +43,7 @@ def get_gedi_from_h5(h5_fp: str, mgrs_tiles:str, s2_fp: str, s2_tiles:str):
     return df
 
 
-def check_correction_performance(ref_data_dir: str, year: int):
+def check_correction_performance(ref_data_dir: str=None, year: int=None, prediction_dir: str=None, tiles_list_file: str=None, correction_result_dir: str=None, **kwargs):
     '''
     Check the correction performance (RMSE, MAE and ME)
     Split the correction data into 2 parts:
@@ -66,6 +66,7 @@ def check_correction_performance(ref_data_dir: str, year: int):
         if n_files != 101:
             print(f'{pred_fp} not complete')
             all_tiles.remove(tile_id)
+    # all_tiles = ['32SNA']
     print(f'{len(all_tiles)} tiles have predictions')
     rh_size = 101
     
@@ -89,7 +90,7 @@ def check_correction_performance(ref_data_dir: str, year: int):
                 nodata = src.nodata
         
         preds = np.concatenate(preds, axis=1) # (n_points, rh_size)
-        # mask nodata for pred and ref
+        # mask nodata (non-vegetation) for pred and ref
         mask = (preds == nodata).any(axis=1)
         preds = preds[~mask]
         preds = preds.astype(np.float32)
@@ -196,6 +197,9 @@ def check_correction_performance(ref_data_dir: str, year: int):
 def aggregate_correction_performance(correction_result_dir: str, year: int):
     '''
     Aggregate correction performance
+    Args:
+        correction_result_dir: str, the directory of tile-level correction statistics
+        year: int
     '''
     correction_result_dir = Path(f'{correction_result_dir}').expanduser()
     n = 0
@@ -233,7 +237,7 @@ def aggregate_correction_performance(correction_result_dir: str, year: int):
     df = df.T
     df['avg'] = df.mean(axis=1)
     df = df.rename(columns={i: f'rh{i}' for i in range(101)})
-    df.to_csv(correction_result_dir / f'correction_performance_{year}_all_tiles_aggregated.csv')
+    df.to_csv(correction_result_dir.parent / f'correction_performance_{year}_all_tiles_aggregated.csv')
     # verify
     # df_old = pd.read_csv(correction_result_dir / f'correction_performance_{year}_all_tiles.csv')
     # df_old = df_old.set_index('Unnamed: 0')
@@ -246,11 +250,13 @@ def aggregate_correction_performance(correction_result_dir: str, year: int):
 
 def correction_performance_distribution(correction_result_dir: str, year: int):
     '''
-    Having correction performance for each tile, aggregate them into a single dataframe
-    Aggregate correction performance
+    Plot the distribution of correction performance for each tile
+    Args:
+        correction_result_dir: str, the root directory of correction results of the year
+        year: int
     '''
-    correction_result_dir = Path(f'{correction_result_dir}_{year}').expanduser()
-    table = pd.read_csv(correction_result_dir / f'correction_performance_{year}_all_tiles.csv')
+    correction_result_dir = Path(f'{correction_result_dir}').expanduser()
+    table = pd.read_csv(correction_result_dir / f'correction_performance_{year}_all_tiles_aggregated.csv')
     table = table.set_index('Unnamed: 0')
     fig, axs = plt.subplots(3, 1, figsize=(8, 6))
     cols = [f'rh{i}' for i in range(101)]
@@ -268,7 +274,7 @@ def correction_performance_distribution(correction_result_dir: str, year: int):
     stats_file = correction_result_dir / f'correction_performance_{year}_per_tile_distribution.csv'
     if not stats_file.exists():
         rows = []
-        for file in correction_result_dir.glob('*.npz'):
+        for file in correction_result_dir.glob('tile_stats/*.npz'):
             tile_id = file.stem.split('_')[-1]
             data = np.load(file)
             for postfix in ['', '_linear_corrected', '_bias_corrected']:
@@ -320,13 +326,13 @@ def correct_s2_tile_prediction(ref_data_dir: str, tile_id: str, save_dir: str, y
     save_dir = save_dir / f'{tile_id}_cog'
     save_dir.mkdir(parents=True, exist_ok=True)
     
-    # pred_dir = Path(f'~/data/GVS/Deploy/predictions_{year}/{tile_id}_cog').expanduser()
-    rh_idx = 98
-    share_id ='cTWnFfMN97' # evze6lxv0t (2020)
-    q_idx = 1 # median prediction
-    erda_link=f'https://sid.erda.dk/cgi-sid/ls.py?share_id={share_id}&current_dir={tile_id}&flags=f'
-    file_url = f'https://sid.erda.dk/share_redirect/{share_id}/{tile_id}_cog/'
-    pred_dir = Path(file_url)
+    pred_dir = Path(f'~/data/GVS/Deploy/predictions_{year}/{tile_id}_cog').expanduser()
+    # rh_idx = 98
+    # share_id ='cTWnFfMN97' # evze6lxv0t (2020)
+    # q_idx = 1 # median prediction
+    # erda_link=f'https://sid.erda.dk/cgi-sid/ls.py?share_id={share_id}&current_dir={tile_id}&flags=f'
+    # file_url = f'https://sid.erda.dk/share_redirect/{share_id}/{tile_id}_cog/'
+    # pred_dir = Path(file_url)
     gedi_ref = gpd.read_parquet(ref_data_dir / f'{tile_id}.parquet') # to check: no duplicates?
 
     lon = gedi_ref.geometry.x.values
@@ -453,13 +459,13 @@ def main(cfg):
     time_start = time.time()
     # correct_s2_tile_prediction(cfg.ref_data_dir, cfg.tile_id, cfg.corrected_pred_dir, cfg.year)
     # agg_correction_performance('~/data/GVS/Deploy/correction', cfg.year)
+    # check_nan_tiles(cfg.correction_result_dir, cfg.year)
     if cfg.task == 'check_correction_performance':
         check_correction_performance(**cfg)
     elif cfg.task == 'correction_performance_distribution':
-        correction_performance_distribution(**cfg)
+        correction_performance_distribution(cfg.correction_result_dir, cfg.year)
     elif cfg.task == 'aggregate_correction_performance':
         aggregate_correction_performance(cfg.correction_result_dir, cfg.year)
-    # correction_performance_distribution(cfg.correction_result_dir, cfg.year)
     time_end = time.time()
     print(f'Time taken: {time_end - time_start} seconds')
 
