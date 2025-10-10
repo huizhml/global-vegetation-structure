@@ -29,13 +29,13 @@ year=${1:-2020}
 
 # hostname=$(hostname)
 # if [ "$hostname" == "hendrixgpu26fl.unicph.domain" ] || [ "$hostname" == "hendrixgpu01fl.unicph.domain" ]; then
-#     input_dir=~/data/GVS/Deploy/predictions_GTiff_${year}
+#     input_dir=~/data/gvs/deploy/predictions_GTiff_${year}
 #     echo "Host is $hostname (disk dead). Translate from $input_dir"
 # else
 #     input_dir=/scratch/predictions_${year}
 #     echo "Host is $hostname. Translate from $input_dir"
 # fi
-input_dir=~/data/GVS/Deploy/predictions_GTiff_${year}
+input_dir=~/data/gvs/deploy/predictions_GTiff_${year}
 
 # **************************************************************
 #              Predict one tile in one job
@@ -43,15 +43,15 @@ input_dir=~/data/GVS/Deploy/predictions_GTiff_${year}
 if [ $line_num -eq 0 ]; then
     tile_id=$1
 else
-    tile_id_file=${HOME}/data/GVS/Deploy/unfinished_tiles_${year}.txt
+    tile_id_file=${HOME}/data/gvs/deploy/unfinished_tiles_${year}.txt
     line=$(sed -n "${line_num}p" $tile_id_file)
     IFS=',' read -r tile_id idx <<< "$line"
 fi
 echo "Processing tile ID: $tile_id, line $line_num from $tile_id_file"
 
 
-translate_flag_old="${HOME}/data/GVS/Deploy/translate_flags_${year}/${tile_id}_done"
-translate_flag_new="${HOME}/data/GVS/Deploy/translate_flags_${year}/${tile_id}_best_images_done"
+translate_flag_old="${HOME}/data/gvs/deploy/translate_flags_${year}/${tile_id}_done"
+translate_flag_new="${HOME}/data/gvs/deploy/translate_flags_${year}/${tile_id}_best_images_done"
 
 if [ -f "$translate_flag_old" ] || [ -f "$translate_flag_new" ]; then
     file_count=$(ls ${output_dir}/${tile_id}_cog/*.cog.tif | wc -l)
@@ -65,12 +65,12 @@ if [ -f "$translate_flag_old" ] || [ -f "$translate_flag_new" ]; then
     fi
 fi
 
-inference_flag_new="${HOME}/data/GVS/Deploy/inference_flags_${year}/${tile_id}_best_images_done"
+inference_flag_new="${HOME}/data/gvs/deploy/inference_flags_${year}/${tile_id}_best_images_done"
 if [ -f "$inference_flag_new" ] && [ ! -f "$translate_flag_new" ]; then
     echo "***************************** START INFERENCE *****************************"
     echo Translate predictions for tile $tile_id in year $year;
     python -m postprocess.translate \
-        src_dir=$input_dir/${tile_id}_GTiff dst_dir=${HOME}/data/GVS/Deploy/predictions_${year}/${tile_id}_cog \
+        src_dir=$input_dir/${tile_id}_GTiff dst_dir=${HOME}/data/gvs/deploy/predictions_${year}/${tile_id}_cog \
         hydra/job_logging=disabled hydra/hydra_logging=disabled \
         hydra.run.dir=.  hydra.output_subdir=null  hydra.job.chdir=false
     exit_status=$?
@@ -90,18 +90,18 @@ fi
 # #              Predict multiple tiles in one job
 # # **************************************************************
 # # input_dir=/scratch/predictions_${year}
-# # tile_id_file=${HOME}/data/GVS/Deploy/s2_deploy_items_${year}_part${part}_unique_images.txt # for 2020
-# tile_id_file=${HOME}/data/GVS/Deploy/slurm_job_files_${year}/deploy_s2_items_${year}_part${part}.txt # for 2024
+# # tile_id_file=${HOME}/data/gvs/deploy/s2_deploy_items_${year}_part${part}_unique_images.txt # for 2020
+# tile_id_file=${HOME}/data/gvs/deploy/slurm_job_files_${year}/deploy_s2_items_${year}_part${part}.txt # for 2024
 # echo "Translate tiles from $tile_id_file"
 # # Get tile ID from line number specified by SLURM array task ID
 # while true; do
 #     while IFS= read -r tile_id; do
-#         inference_flag="${HOME}/data/GVS/Deploy/inference_flags_${year}/${tile_id}_best_images_done"
-#         translate_flag="${HOME}/data/GVS/Deploy/translate_flags_${year}/${tile_id}_best_images_done"
+#         inference_flag="${HOME}/data/gvs/deploy/inference_flags_${year}/${tile_id}_best_images_done"
+#         translate_flag="${HOME}/data/gvs/deploy/translate_flags_${year}/${tile_id}_best_images_done"
 #         if [ -f "$inference_flag" ] && [ ! -f "$translate_flag" ]; then
 #             echo "***************************** START INFERENCE *****************************"
 #             echo Translate predictions for tile $tile_id in year $year;
-#             python -m postprocess.translate src_dir=$input_dir/${tile_id}_GTiff dst_dir=${HOME}/data/GVS/Deploy/predictions_${year}/${tile_id}_cog
+#             python -m postprocess.translate src_dir=$input_dir/${tile_id}_GTiff dst_dir=${HOME}/data/gvs/deploy/predictions_${year}/${tile_id}_cog
 #             exit_status=$?
 #             if [ $exit_status -ne 0 ]; then
 #                 echo "Prediction command failed with exit status $exit_status"

@@ -73,8 +73,8 @@ class GrowingSeason:
             df = df.drop(columns=['geometry_x'])
             df = df.apply(self.get_growing_months, axis=1)
             df = gpd.GeoDataFrame(df, geometry='geometry', crs='EPSG:4326')
-            df.to_parquet(self.save_dir / 'S2_tiles_with_growing_months.parquet')
-            print(f'Saved to {self.save_dir / "S2_tiles_with_growing_months.parquet"}')
+            df.to_parquet(self.save_dir / 's2_tiles_with_growing_months.parquet')
+            print(f'Saved to {self.save_dir / "s2_tiles_with_growing_months.parquet"}')
 
     def get_growing_months(self, row):
         if np.isnan(row['mask']):
@@ -180,14 +180,14 @@ class GrowingSeason:
         # df = pd.DataFrame(results)
         # df = gpd.GeoDataFrame(df, geometry='geometry')
         # df['growth_period_len'] = (df['end'] - df['onset']).days
-        # df.to_parquet('~/data/GVS/S2_tiles_with_growing_season.parquet')
+        # df.to_parquet('~/data/gvs/S2_tiles_with_growing_season.parquet')
 
         tasks = [ self.cal_cycle2_occurence_per_tile(tile, viirs) for idx, tile in tile_grid.iterrows()]
         results = dask.compute(*tasks)
         df = pd.DataFrame(results)
         df = gpd.GeoDataFrame(df, geometry='geometry')
         df['cycle2_ratio'] = df['count_cycle2'] / (df['count_cycle1'] + df['count_cycle2'])
-        df.to_parquet('~/data/GVS/S2_tiles_with_growing_season.parquet')
+        df.to_parquet('~/data/gvs/S2_tiles_with_growing_season.parquet')
 
     @dask.delayed
     def cal_cycle2_occurence_per_tile(tile, data):
@@ -210,7 +210,7 @@ class GrowingSeason:
 class MyConfig:
     asset_id: str = 'projects/gisproject-1/assets/sentinel_2_shapefile_with_growing_month_counts'
     year: int = 2019
-    save_dir: str = '~/data/GVS/'
+    save_dir: str = '~/data/gvs/'
     version: str = 'v1'
 
 cs = ConfigStore.instance()

@@ -382,9 +382,9 @@ if __name__ == '__main__':
     import pandas as pd
     import dask.dataframe as dd
     run_id = '0crmfaia'
-    naturalness_fp = f'~/data/GVS/downstream_task_data/naturalness/reference_data_set_updated.csv'
-    h5_file = f'~/data/GVS/downstream_task_data/rhs_predictions_2017_{run_id}_ps31.h5'
-    mean_std_fp = f'~/data/GVS/downstream_task_data/naturalness/mean_std_{run_id}.npz'
+    naturalness_fp = f'~/data/gvs/downstream_task_data/naturalness/reference_data_set_updated.csv'
+    h5_file = f'~/data/gvs/downstream_task_data/rhs_predictions_2017_{run_id}_ps31.h5'
+    mean_std_fp = f'~/data/gvs/downstream_task_data/naturalness/mean_std_{run_id}.npz'
     calculate_mean_std(h5_file, mean_std_fp)
     # get_reference_data_with_images(h5_file, naturalness_fp)
     # print(files)

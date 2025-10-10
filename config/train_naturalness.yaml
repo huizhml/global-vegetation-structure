@@ -17,8 +17,8 @@ lr_scheduler:
 data:
   class_path: datasets._h5_dataset.NaturalnessDataModule
   init_args: 
-    h5_file: ~/data/GVS/downstream_task_data/rhs_predictions_2017_izraz2av.h5
-    naturalness_fp: ~/data/GVS/downstream_task_data/naturalness/reference_data_set_updated.csv
+    h5_file: ~/data/gvs/downstream_task_data/rhs_predictions_2017_izraz2av.h5
+    naturalness_fp: ~/data/gvs/downstream_task_data/naturalness/reference_data_set_updated.csv
     use_full_profile: True
     num_workers: 4
     batch_size: 1024 # per device
@@ -26,7 +26,7 @@ data:
 model:
   class_path: models.naturalness_mapping.NaturalnessMapping
   init_args:
-    mean_std_fp: ~/data/GVS/downstream_task_data/naturalness/mean_std.npz
+    mean_std_fp: ~/data/gvs/downstream_task_data/naturalness/mean_std.npz
     loss_fc: torch.nn.CrossEntropyLoss
     backbone: # --model.backbone config/model/xception_s2.yaml
 

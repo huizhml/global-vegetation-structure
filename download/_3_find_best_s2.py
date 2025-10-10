@@ -257,9 +257,9 @@ class MyConfig:
     n_parallel: int = 32
     patch_size: int = 15
     rewrite: bool = False
-    gedi_dir: str = '~/data/GVS/GEDI_extra_with_s2_candidates' # GEDI data dir
-    save_dir: str = '~/data/GVS/GEDI_extra_with_s2_candidates_and_best'
-    flag_dir: str = '~/data/GVS/flags_find_best/'
+    gedi_dir: str = '~/data/gvs/GEDI_extra_with_s2_candidates' # GEDI data dir
+    save_dir: str = '~/data/gvs/GEDI_extra_with_s2_candidates_and_best'
+    flag_dir: str = '~/data/gvs/flags_find_best/'
     S2_meta_dir: str = '~/data/GEDI/S2_geoparquet_items'
     debug: bool = False
     merge_zones: str = ''

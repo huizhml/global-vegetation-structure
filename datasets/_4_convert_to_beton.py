@@ -239,8 +239,8 @@ def check_s2_value(train_fp: Path):
 @dataclass
 class MyConfig:
     index_table: str = '~/data/GEDI/split_test0.1_cal0.1_val0.1_seed42_v1/index_table_train'
-    h5_file: str = '~/data/GEDI/train.h5'
-    out_idx_dir: str = '~/data/GEDI/index_table_train_subsets'
+    h5_file: str = '~/data/gvs/data_train.h5'
+    out_idx_dir: str = '~/data/gvs/index_table_train_subsets'
     nsplit: int= 5
     split_idx: int = 0
     seed: int = 42

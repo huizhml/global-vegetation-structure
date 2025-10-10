@@ -29,6 +29,7 @@ from utils._stackstac import stack
 from download._utils import utm_to_wgs84, build_parquet_file_table, filter_parquet_files, row_to_stac_item, get_patch
 from download._const import S2_ITEM_PROPS, STAC_ITEM_KEYS
 from download._dask_downloader import DaskDownloader
+from download._4_download import harmonize_to_old
 
 
 logger = logging.getLogger(__name__)
@@ -305,6 +306,7 @@ class WorldS2(DaskDownloader):
         items = row_to_stac_item(df, S2_ITEM_PROPS)  
         epsg = items[0].properties['proj:epsg']
         images = stack(items, self.bands, dtype='uint16', fill_value=np.uint16(0), rescale=False)
+        images = harmonize_to_old(images)
         images.name = 's2'
         wc_df = wc_df.set_index('id')
         if not wc_df.empty:
@@ -342,7 +344,7 @@ class WorldS2(DaskDownloader):
 
     def check_images_per_tile(self):
         import matplotlib.pyplot as plt
-        s2_tile = gpd.read_parquet(self.save_dir.parent / f'S2_tiles_with_growing_months.parquet')
+        s2_tile = gpd.read_parquet(self.save_dir.parent / f's2_tiles_with_growing_months.parquet')
         s2_tile = s2_tile.set_index('Name')
         df = []
         for part in range(21):
@@ -471,8 +473,10 @@ class WorldS2(DaskDownloader):
          
         unique_orbits = rest['orbit'].unique()
         if len(unique_orbits) >= 2:
+            # select the best 2 orbits with the least nodata percentage
             top_orbits = rest.groupby('orbit').min('s2:nodata_pixel_percentage').sort_values('s2:nodata_pixel_percentage').head(2)
             rest = rest[rest['orbit'].isin(top_orbits.index)]
+            # select the best 10 images from each orbit
             idx = rest.groupby('orbit')['eo:cloud_cover'].nsmallest(10).index.get_level_values(1)
             rest = rest.loc[idx]
             best = best.sort_values('eo:cloud_cover').head(10)
@@ -487,10 +491,10 @@ class WorldS2(DaskDownloader):
 @dataclass
 class MyConfig:
     year: int = 2020
-    s2_parquet: str = '~/data/GVS/S2_tiles_with_growing_months.parquet'
-    save_dir: str = '~/data/GVS/Deploy'
+    s2_parquet: str = '~/data/gvs/s2_tiles_with_growing_months.parquet'
+    save_dir: str = '~/data/gvs/deploy'
     store_name: str = 'inference'
-    wc_parq_file:str = '~/data/GVS/Deploy/esa_wc.parquet'
+    wc_parq_file:str = '~/data/gvs/deploy/esa_wc.parquet'
     comp_name: str = 'lz4'
     comp_level: int = 7
     max_cloud_cover: int = 90

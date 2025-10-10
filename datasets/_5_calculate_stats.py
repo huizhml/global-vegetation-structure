@@ -207,15 +207,15 @@ def get_rhs_bin_counts(parquet_fp: str, rh_quantiles_fp: str, lower_q: str='1e-0
 
 @dataclass
 class Config:
-    beton_fp: str = '~/data/GVS/train_subsets/train*_filtered_v1.beton'
+    beton_fp: str = '~/data/gvs/train_subsets/train*_filtered_v1.beton'
 
 cs = ConfigStore.instance()
 cs.store(name='config', node=Config)
 
 @hydra.main(config_name='config', version_base='1.2')
 def main(cfg: DictConfig):
-    # calculate_s2_mean_std(cfg.beton_fp)
-    get_rhs_bin_counts('~/data/GVS/train_subsets/train*_filtered_v1.parquet', 'output/data_stats/quantile_distribution.csv')
+    calculate_s2_mean_std(cfg.beton_fp)
+    # get_rhs_bin_counts('~/data/gvs/train_subsets/train*_filtered_v1.parquet', 'output/data_stats/quantile_distribution.csv')
 
 if __name__ == '__main__':
     main()

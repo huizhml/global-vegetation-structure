@@ -1,5 +1,6 @@
 import os
 import json
+from pathlib import Path
 import ee
 import pystac
 import planetary_computer
@@ -15,9 +16,15 @@ from pyproj import Transformer
 import pystac_client
 import adlfs
 import pandas as pd
+import requests
+from io import StringIO
+from shapely.geometry import shape
+import json
+from dask.utils import natural_sort_key
 
 from ._const import STAC_ITEM_KEYS
 from utils._stackstac import stack
+
 
 stac_endpoint = 'https://planetarycomputer.microsoft.com/api/stac/v1'
 
@@ -30,7 +37,7 @@ def authenticate():
 
     """
     key_file = os.environ.get('KEY_FILE')
-    key_file = key_file or 'keys/private-key.json'
+    key_file = key_file or 'keys/nrt-key.json'
     print('Authenticating from', key_file)
     key = json.load(open(key_file))
     credentials = ee.ServiceAccountCredentials(key['client_email'], key_file)
@@ -274,3 +281,58 @@ def filter_parquet_files(fs_df, start, end):
     """
     filtered = fs_df[(fs_df['start'] < end) & (fs_df['end'] > start)]
     return filtered['fname'].to_list()
+
+def shapely_to_geojson(geom: gpd.GeoSeries):
+    """
+    Convert a shapely geometry to a GeoJSON geometry in dict format
+    so that it can be used for ee.FeatureCollection.filterBounds(geom)
+    """
+    geom = ee.Geometry.BBox(*geom.bounds).toGeoJSON()
+    last_coords = geom['coordinates'][0][0].copy()
+    geom['coordinates'][0].append(last_coords)
+    return geom
+
+
+def ee_fc_to_gpd(fc: ee.FeatureCollection):
+    """
+    Convert an Earth Engine feature collection to a GeoPandas GeoDataFrame.
+    """
+    download_id = ee.data.getTableDownloadId({'table': fc, 'fileFormat': 'csv'})
+    res = requests.get(ee.data.makeTableDownloadUrl(download_id))
+    if res.status_code == 200:
+        data = StringIO(res.content.decode('utf-8'))
+        if data.getvalue().strip() == '':
+            return None
+        df = pd.read_csv(data)
+        df['.geo'] = df['.geo'].apply(lambda x: shape(json.loads(x)))
+        df = df.rename(columns={'.geo': 'geometry'})
+        df = gpd.GeoDataFrame(df, geometry='geometry')
+        df = df.set_crs(epsg=4326)
+        return df
+    else:
+        raise requests.HTTPError(f'Failed to download {fc.getInfo()}')
+    
+def gdf_to_gpkg(gdf: gpd.GeoDataFrame, file: str):
+    """
+    Convert a GeoPandas GeoDataFrame to a GeoPackage file.
+    """
+    gdf.to_file(file, driver='GPKG')
+    print(f'Saved {file}')
+    
+    
+def check_unfinished_files(input_files: Path, output_dir: Path, check_exists=True, sort=True, output_format=None):
+    """
+    Check if the input files have been processed according to the output files.
+    """
+    input_files = list(input_files)
+    output_format = output_format or input_files[0].name.split('.')[-1]
+    if sort:
+        input_files = [str(f) for f in input_files]
+        input_files = sorted(input_files, key=natural_sort_key)
+        input_files = [Path(f) for f in input_files]
+        
+    for file in input_files:
+        output_file = output_dir / f'{file.name}.{output_format}'
+        if check_exists and output_file.exists():
+            input_files.remove(file)
+    return input_files

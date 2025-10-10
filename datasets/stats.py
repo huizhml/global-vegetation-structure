@@ -304,7 +304,7 @@ def main(cfg: DictConfig) -> None:
     # stats.check_s2_values(cfg.h5_dir)
     # if hasattr(stats, cfg.task):
     #     getattr(stats, cfg.task)(rh_idx = 98)
-    split_dir = '~/data/GVS/split_test0.1_cal0.1_val0.1_seed42_v1'
+    split_dir = '~/data/gvs/split_test0.1_cal0.1_val0.1_seed42_v1'
     stats.plot_split_distribution(splits=['train', 'cal', 'val', 'test'], split_dir=split_dir)
 
 

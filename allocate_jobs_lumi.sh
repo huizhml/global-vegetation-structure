@@ -13,17 +13,18 @@
 #    JOB ARRAY FOR LINES, CONTROL THE MAX NUMBER OF 
 # =======================================
 year=2024
-config_dir="${HOME}/data/GVS/Deploy/slurm_job_files_${year}"
+config_dir="${HOME}/data/GVS/deploy/slurm_job_files_${year}"
 # FILE_START=0
 # FILE_END=46
+FILE_LIST=(0 1)
 # FILE_LIST=(59 60 61 65 69 70 85 87)
-FILE_LIST_1=($(seq 21 46))
-FILE_LIST_2=(59 60 61 65 69 70 85 87)
-FILE_LIST=("${FILE_LIST_1[@]}" "${FILE_LIST_2[@]}")
+# FILE_LIST_1=($(seq 21 46))
+# FILE_LIST_2=(59 60 61 65 69 70 85 87)
+# FILE_LIST=("${FILE_LIST_1[@]}" "${FILE_LIST_2[@]}")
 use_flash=True
 
 # Target active inference jobs (pending + running)
-TARGET_ACTIVE=160
+TARGET_ACTIVE=10
 # How many inference tasks to submit per top-up
 CHUNK_SIZE=10
 # Re-check interval when at capacity (seconds)
@@ -33,9 +34,9 @@ check_unfinished_tiles() {
   local tile_list=("$@")
   local result=""
   for tile in "${tile_list[@]}"; do
-    sync_flag="${HOME}/data/GVS/Deploy/flags_sync_${year}/${tile}_best_images_done"
-    translate_flag="${HOME}/data/GVS/Deploy/flags_translate_${year}/${tile}_best_images_done"
-    processed_flag="${HOME}/data/GVS/Deploy/flags_sync_${year}/${tile}_done"
+    sync_flag="${HOME}/data/GVS/deploy/flags_sync_${year}/${tile}_best_images_done"
+    translate_flag="${HOME}/data/GVS/deploy/flags_translate_${year}/${tile}_best_images_done"
+    processed_flag="${HOME}/data/GVS/deploy/flags_sync_${year}/${tile}_done"
     if [ ! -f "$sync_flag" ] && [ ! -f "$translate_flag" ] && [ ! -f "$processed_flag" ]; then
       result+="$tile "
     fi

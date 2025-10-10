@@ -282,8 +282,8 @@ class MyConfig:
     rewrite: bool = False
     gedi_dir: str = '~/data/GEDI/GEDI_with_s2_candidates_and_best' # GEDI data dir
     h5_dir: str = '~/data/GEDI/GEDI_S2_h5s_original'
-    save_dir: str = '~/data/GVS/GEDI_S2_h5'
-    flag_dir: str = '~/data/GVS/Correct_order_flags'
+    save_dir: str = '~/data/gvs/GEDI_S2_h5'
+    flag_dir: str = '~/data/gvs/Correct_order_flags'
     S2_meta_dir: str = 'S2_geoparquet_items'
     patch_size: int = 15
     debug: bool = False

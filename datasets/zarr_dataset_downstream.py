@@ -177,7 +177,7 @@ class DeployDataModel(L.LightningDataModule):
 
 
 if __name__ == "__main__":
-    dataset = ZarrSentinel2Downstream(zarr_store_path='~/data/GVS/downstream_task_data/s2_2017.zarr')
+    dataset = ZarrSentinel2Downstream(zarr_store_path='~/data/gvs/downstream_task_data/s2_2017.zarr')
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=4096, num_workers=4, worker_init_fn=zarrdataset_worker_init_fn, shuffle=False)
     for batch in dataloader:
         print(batch[0].shape)

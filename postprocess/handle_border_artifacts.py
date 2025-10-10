@@ -15,7 +15,7 @@ import dask
 from dask.diagnostics import ProgressBar
 
 
-def get_gedi_from_h5(h5_fp: str, mgrs_tiles:str, s2_fp: str, s2_tiles:str):
+def get_gedi_from_h5(h5_fp: str, mgrs_tiles: str, s2_fp: str, s2_tiles: str):
     '''
     Get GEDI data from h5 file
     '''
@@ -74,7 +74,7 @@ def check_correction_performance(
     # all_tiles = ['32SNA']
     print(f'{len(all_tiles)} tiles have predictions')
     rh_size = 101
-    
+
     @dask.delayed
     def test_correction_for_one_tile(tile_id: str, min_n_points: int = 200):
         gedi_ref_df = gpd.read_parquet(ref_data_dir / f'{tile_id}.parquet')
@@ -117,6 +117,7 @@ def check_correction_performance(
         correct_pred = preds[correct_idx]
         eval_true = gedi_ref[eval_idx]
         eval_pred = preds[eval_idx]
+
         # apply linear fit for all rhs
         a, b = get_scale_and_shift(correct_pred, correct_true*10)  # in decimeters
 
@@ -222,7 +223,7 @@ def check_correction_performance(
         print(df)
 
 
-# 
+#
 def aggregate_correction_performance(correction_result_dir: str, year: int):
     '''
     Aggregate correction performance
@@ -255,7 +256,8 @@ def aggregate_correction_performance(correction_result_dir: str, year: int):
             sum_me[group] += data[f'me{postfix}'] * data[f'n']
             sum_mae[group] += data[f'mae{postfix}'] * data[f'n']
             sum_mse[group] += data[f'rmse{postfix}']**2 * data[f'n']
-    me = {group: sum_me[group] / n for group in sum_me} #{'raw': (101,), 'linear_corrected': (101,), 'bias_corrected': (101,)}
+    # {'raw': (101,), 'linear_corrected': (101,), 'bias_corrected': (101,)}
+    me = {group: sum_me[group] / n for group in sum_me}
     mae = {group: sum_mae[group] / n for group in sum_mae}
     rmse = {group: (sum_mse[group] / n)**0.5 for group in sum_mse}
     data = {}
@@ -274,8 +276,7 @@ def aggregate_correction_performance(correction_result_dir: str, year: int):
     # df = df.sort_index()
     # df.index.name = 'Unnamed: 0'
     # pd.testing.assert_frame_equal(df, df_old) # NOTE: verified, no assertion
-        
-            
+
 
 def correction_performance_distribution(correction_result_dir: str, year: int):
     '''
@@ -299,7 +300,7 @@ def correction_performance_distribution(correction_result_dir: str, year: int):
     # plt.title(f'Correction performance for {year}')
     plt.savefig(correction_result_dir / f'correction_performance_{year}_all_tiles.png')
     plt.close()
-    
+
     stats_file = correction_result_dir / f'correction_performance_{year}_per_tile_distribution.csv'
     if not stats_file.exists():
         rows = []
@@ -308,13 +309,13 @@ def correction_performance_distribution(correction_result_dir: str, year: int):
             data = np.load(file)
             for postfix in ['', '_linear_corrected', '_bias_corrected']:
                 group = 'raw' if postfix == '' else 'linear_corrected' if postfix == '_linear_corrected' else 'bias_corrected'
-                rows.append({'tile_id': tile_id, 'group': group, 
-                            'RMSE_RH98': data[f'rmse{postfix}'][98], 
-                            'RMSE_all': data[f'rmse{postfix}'].mean(), 
-                            'MAE_RH98': data[f'mae{postfix}'][98], 
-                            'MAE_all': data[f'mae{postfix}'].mean(), 
-                            'ME_RH98': data[f'me{postfix}'][98], 
-                            'ME_all': data[f'me{postfix}'].mean()})
+                rows.append({'tile_id': tile_id, 'group': group,
+                            'RMSE_RH98': data[f'rmse{postfix}'][98],
+                             'RMSE_all': data[f'rmse{postfix}'].mean(),
+                             'MAE_RH98': data[f'mae{postfix}'][98],
+                             'MAE_all': data[f'mae{postfix}'].mean(),
+                             'ME_RH98': data[f'me{postfix}'][98],
+                             'ME_all': data[f'me{postfix}'].mean()})
         df = pd.DataFrame(rows)
         df.to_csv(stats_file)
     else:
@@ -323,26 +324,29 @@ def correction_performance_distribution(correction_result_dir: str, year: int):
     for metric in ['MAE', 'RMSE', 'ME']:
         for rh_idx in ['RH98', 'all']:
             plt.figure(figsize=(8, 6))
-            y_positions = {'raw': 100, 'linear_corrected': 100, 'bias_corrected': 500}  # Different y positions for each group
-            colors = {'raw': 'blue', 'linear_corrected': 'orange', 'bias_corrected': 'green'}  # Define colors for each group
+            y_positions = {'raw': 100, 'linear_corrected': 100,
+                           'bias_corrected': 500}  # Different y positions for each group
+            colors = {'raw': 'blue', 'linear_corrected': 'orange',
+                      'bias_corrected': 'green'}  # Define colors for each group
             for name, group in groups:
                 color = colors.get(name, 'black')  # Default to black if group name not in colors
                 group[f'{metric}_{rh_idx}'].hist(bins=100, alpha=0.7, label=f'Group: {name}', color=color)
                 max_value = group[f'{metric}_{rh_idx}'].max()
                 y_position = y_positions.get(name, 5)  # Default to 5 if group name not in y_positions
-                plt.annotate(f'Max: {max_value:.2f}', 
-                            xy=(max_value, 0), 
-                            xytext=(max_value, y_position),  # Offset x position for better readability
-                            arrowprops=dict(facecolor=color, shrink=0.1),  # Use the same color as the histogram
-                            fontsize=10, color='black')
-            plt.title(f'Distribution of tile-level {metric} ({rh_idx}) for raw, linear_corrected, and bias_corrected predictions')
+                plt.annotate(f'Max: {max_value:.2f}',
+                             xy=(max_value, 0),
+                             xytext=(max_value, y_position),  # Offset x position for better readability
+                             arrowprops=dict(facecolor=color, shrink=0.1),  # Use the same color as the histogram
+                             fontsize=10, color='black')
+            plt.title(
+                f'Distribution of tile-level {metric} ({rh_idx}) for raw, linear_corrected, and bias_corrected predictions')
             plt.xlabel(f'{metric} ({rh_idx})')
             plt.ylabel('Frequency')
             plt.grid(True)
             plt.legend()
             plt.savefig(f'{correction_result_dir}/tile_level_performance_distribution_{metric}_{rh_idx}.png')
-    
-    
+
+
 def correct_s2_tile_prediction(ref_data_dir: str, tile_id: str, save_dir: str, year: int):
     '''
     Correct S2 tile prediction
@@ -354,19 +358,19 @@ def correct_s2_tile_prediction(ref_data_dir: str, tile_id: str, save_dir: str, y
     save_dir = save_dir.with_stem(save_dir.stem + f'_{year}')
     save_dir = save_dir / f'{tile_id}_cog'
     save_dir.mkdir(parents=True, exist_ok=True)
-    
-    pred_dir = Path(f'~/data/GVS/Deploy/predictions_{year}/{tile_id}_cog').expanduser()
+
+    pred_dir = Path(f'~/data/gvs/deploy/predictions_{year}/{tile_id}_cog').expanduser()
     # rh_idx = 98
     # share_id ='cTWnFfMN97' # evze6lxv0t (2020)
     # q_idx = 1 # median prediction
     # erda_link=f'https://sid.erda.dk/cgi-sid/ls.py?share_id={share_id}&current_dir={tile_id}&flags=f'
     # file_url = f'https://sid.erda.dk/share_redirect/{share_id}/{tile_id}_cog/'
     # pred_dir = Path(file_url)
-    gedi_ref = gpd.read_parquet(ref_data_dir / f'{tile_id}.parquet') # to check: no duplicates?
+    gedi_ref = gpd.read_parquet(ref_data_dir / f'{tile_id}.parquet')  # to check: no duplicates?
 
     lon = gedi_ref.geometry.x.values
     lat = gedi_ref.geometry.y.values
-    
+
     @dask.delayed
     def correct_one_rh(median_pred_fp: Path):
         rh_idx = median_pred_fp.stem.split('_')[0][2:]
@@ -385,7 +389,7 @@ def correct_s2_tile_prediction(ref_data_dir: str, tile_id: str, save_dir: str, y
         if pred.shape[0] == 0:
             print(f'No valid data for {median_pred_fp}')
             return
-        a, b = get_scale_and_shift(pred, rhs*10) # in decimeters
+        a, b = get_scale_and_shift(pred, rhs*10)  # in decimeters
         # bias = (rhs*10 - pred).mean()
         # a = 1
         # b = bias
@@ -393,7 +397,7 @@ def correct_s2_tile_prediction(ref_data_dir: str, tile_id: str, save_dir: str, y
         xvalues = np.linspace(0, 500)
         yvalues = xvalues*a + b
         plt.plot(xvalues, yvalues)
-        file = Path(f'~/data/GVS/Deploy/plots_bias_correction/{median_pred_fp.stem}_linear_fit.png').expanduser()
+        file = Path(f'~/data/gvs/deploy/plots_bias_correction/{median_pred_fp.stem}_linear_fit.png').expanduser()
         plt.savefig(file)
         print(f'scale: {a}, shift: {b}')
         # for q_idx in range(3):
@@ -411,17 +415,16 @@ def correct_s2_tile_prediction(ref_data_dir: str, tile_id: str, save_dir: str, y
             correct_pred = correct_pred.astype(np.int16)
             dst.write(correct_pred, indexes=1)
         print(f'saved to {correct_fp}')
-    
+
     tasks = []
-    for rh_idx in range(98,99):
+    for rh_idx in range(98, 99):
         tasks.append(correct_one_rh(pred_dir / f'RH{rh_idx}_Q1.cog.tif'))
     with ProgressBar():
         dask.compute(*tasks)
     # correct_one_rh(pred_dir / f'RH98_Q1.cog.tif')
 
 
-
-def get_scale_and_shift(pred: np.ndarray, rhs: np.ndarray, eps: float=1e-6):
+def get_scale_and_shift(pred: np.ndarray, rhs: np.ndarray, eps: float = 1e-6):
     '''
     Get scale and shift from S2 tile prediction and GEDI point
     '''
@@ -434,6 +437,7 @@ def get_scale_and_shift(pred: np.ndarray, rhs: np.ndarray, eps: float=1e-6):
     # A = np.vstack([pred, np.ones_like(pred)]).T
     # a, b = np.linalg.lstsq(A, rhs, rcond=None)[0]
     return a, b
+
 
 def agg_gedi_to_s2(gedi_fps: str, s2_fp: str, output_dir: str):
     '''
@@ -459,24 +463,25 @@ def agg_gedi_to_s2(gedi_fps: str, s2_fp: str, output_dir: str):
         print(f'saved to {output_dir / f"{gedi_fp.stem}.parquet"}')
 
 
-
 @dataclass
 class AggGediToS2:
-    gedi_fps: str = '~/data/GVS/train_subsets/train*_filtered_v1.parquet'
-    s2_fp: str = '~/data/GVS/S2_tiles_with_growing_months.parquet'
-    output_dir: str = '~/data/GVS/train_gedi_agg_by_s2/'
-    ref_data_dir: str = '~/data/GVS/GEDI/GVS_correction_set_2020'
+    gedi_fps: str = '~/data/gvs/train_subsets/train*_filtered_v1.parquet'
+    s2_fp: str = '~/data/gvs/s2_tiles_with_growing_months.parquet'
+    output_dir: str = '~/data/gvs/gedi_with_biome_slope_s2_tile_train_partitions/'
+    ref_data_dir: str = '~/data/gvs/GEDI_for_correction/partitions_2020'
+    sota_chm_dir: str = '~/data/gvs/GEDI_for_correction/partitions_with_sota_chm_2020'
+    sota_and_ours_dir: str = '~/data/gvs/GEDI_for_correction/partitions_with_sota_and_ours_2020'
     tile_id: str = '20MRS'
-    prediction_dir: str = '~/data/GVS/Deploy/predictions_2020'
-    correction_result_dir: str = '~/data/GVS/Deploy/correction_2020'
-    corrected_pred_dir: str = '~/data/GVS/Deploy/predictions_corrected_2020'
+    prediction_dir: str = '~/data/gvs/deploy/predictions_2020'
+    correction_result_dir: str = '~/data/gvs/deploy/correction_2020'
+    corrected_pred_dir: str = '~/data/gvs/deploy/predictions_corrected_2020'
     tiles_list_file: str = ''
     year: int = 2020
     # test config
     mgrs_tiles: str = '20M,21M,20L,21L'
     s2_tiles: str = '20MRS,21MTM,20LRR,21LTL'
     task: str = 'check_correction_performance'
-    
+
 
 cs = ConfigStore.instance()
 cs.store(name='agg_gedi_to_s2', node=AggGediToS2)
@@ -487,7 +492,7 @@ def main(cfg):
     # agg_gedi_to_s2(cfg.gedi_fps, cfg.s2_fp, cfg.output_dir)
     time_start = time.time()
     # correct_s2_tile_prediction(cfg.ref_data_dir, cfg.tile_id, cfg.corrected_pred_dir, cfg.year)
-    # agg_correction_performance('~/data/GVS/Deploy/correction', cfg.year)
+    # agg_correction_performance('~/data/gvs/deploy/correction', cfg.year)
     # check_nan_tiles(cfg.correction_result_dir, cfg.year)
     if cfg.task == 'check_correction_performance':
         check_correction_performance(**cfg)
@@ -497,6 +502,7 @@ def main(cfg):
         aggregate_correction_performance(cfg.correction_result_dir, cfg.year)
     time_end = time.time()
     print(f'Time taken: {time_end - time_start} seconds')
+
 
 if __name__ == '__main__':
     # from dask.distributed import Client, LocalCluster

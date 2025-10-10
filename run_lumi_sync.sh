@@ -10,13 +10,13 @@
 #SBATCH --error=./logs/%x-%A_%a.err
 
 year=2024
-input_dir=${HOME}/data/GVS/Deploy/predictions_${year}
+input_dir=${HOME}/data/GVS/deploy/predictions_${year}
 
 MAX_ERDA_SESSIONS=10
 
 check_unsynced_tiles() {
-    local sync_dir="${HOME}/data/GVS/Deploy/sync_flags_${year}"
-    local translate_dir="${HOME}/data/GVS/Deploy/translate_flags_${year}"
+    local sync_dir="${HOME}/data/GVS/deploy/flags_sync_${year}"
+    local translate_dir="${HOME}/data/GVS/deploy/flags_translate_${year}"
 
     translated_tiles=$(find "$translate_dir" -name "*_best_images_done" -exec basename {} \; | sed 's/_best_images_done//')
     synced_tiles=$(find "$sync_dir" -name "*_best_images_done" -exec basename {} \; | sed 's/_best_images_done//')
@@ -29,8 +29,8 @@ check_unsynced_tiles() {
 
 sync_tile() {
     local tile_id=$1
-    local lock_file="${HOME}/data/GVS/Deploy/sync_flags_${year}/${tile_id}.lock"
-    local translate_flag_new="${HOME}/data/GVS/Deploy/translate_flags_${year}/${tile_id}_best_images_done"
+    local lock_file="${HOME}/data/GVS/deploy/sync_flags_${year}/${tile_id}.lock"
+    local translate_flag_new="${HOME}/data/GVS/deploy/translate_flags_${year}/${tile_id}_best_images_done"
     local predicted_cogs_count
 
     predicted_cogs_count=$(find "${input_dir}/${tile_id}_cog" -type f 2>/dev/null | wc -l)
@@ -54,7 +54,7 @@ EOF
         if [ $sftp_status -eq 0 ] && [ "$remote_count" -ge 303 ]; then
             echo "[${tile_id}] Remote verification passed (${remote_count}/${predicted_cogs_count}). Cleaning up..."
             rm -rf "${input_dir}/${tile_id}_cog"
-            touch "${HOME}/data/GVS/Deploy/sync_flags_${year}/${tile_id}_best_images_done"
+            touch "${HOME}/data/GVS/deploy/sync_flags_${year}/${tile_id}_best_images_done"
         else
             echo "[${tile_id}] Sync failed (sftp exit ${sftp_status}). Remote count: ${remote_count}"
         fi

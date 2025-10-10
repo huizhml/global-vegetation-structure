@@ -64,7 +64,7 @@ def get_tiles_in_countries(countries_file: Path, s2_grid_file: str):
     if len(countries) == 0:
         return []
     
-    countries_url = "~/data/GVS/ne_10m_admin_0_countries/ne_10m_admin_0_countries.shp"
+    countries_url = "~/data/gvs/ne_10m_admin_0_countries/ne_10m_admin_0_countries.shp"
     countries_df = gpd.read_file(countries_url)
     regions = countries_df[countries_df['ADMIN'].isin(countries)]
     s2_grid = gpd.read_parquet(s2_grid_file)
@@ -79,7 +79,7 @@ def resample_and_mosaic(year = 2020, rh_idx = 98, q_idx = 1, countries: str = No
     src_nodata = None                 # trust per-tile nodata if present
     dst_nodata = 32767
     
-    pred_dir = f"~/data/GVS/Deploy/predictions_{year}"
+    pred_dir = f"~/data/gvs/deploy/predictions_{year}"
     pred_dir = Path(pred_dir).expanduser()
     
     if len(countries) > 0:
@@ -154,7 +154,7 @@ class MosaicConfig:
     rh_idx: int = 98
     q_idx: int = 1
     countries: str = ''
-    s2_grid_file: str = '~/data/GVS/S2_tiles_with_growing_months.parquet'
+    s2_grid_file: str = '~/data/gvs/s2_tiles_with_growing_months.parquet'
     
 cs = ConfigStore.instance()
 cs.store(name='mosaic', node=MosaicConfig)

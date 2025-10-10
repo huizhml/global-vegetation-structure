@@ -302,9 +302,9 @@ class MyConfig:
     query_days: int = 90
     max_cloud_cover: int = 50
     max_water_percentage: int = 99
-    gedi_dir: str = '~/data/GVS/GEDI_extra' # GEDI data dir
-    save_dir: str = '~/data/GVS/GEDI_extra_with_s2_candidates'
-    temp_dir: str = '~/data/GVS/S2_temp'
+    gedi_dir: str = '~/data/gvs/GEDI_extra' # GEDI data dir
+    save_dir: str = '~/data/gvs/GEDI_extra_with_s2_candidates'
+    temp_dir: str = '~/data/gvs/S2_temp'
     S2_meta_dir: str = '~/data/GEDI/S2_geoparquet_items'
     s2_grid_file: str = '~/data/GEDI/Sentinel-2_tilling_shp/sentinel_2_index_shapefile.shp'
     rewrite: bool = False

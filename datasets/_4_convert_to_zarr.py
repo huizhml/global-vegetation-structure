@@ -121,10 +121,10 @@ class ConvertToZarr(DaskDownloader):
 
 @dataclass
 class MyConfig:
-    index_dir: str = '~/data/GVS/geo_index_table_with_sensitivity'
-    h5_dir: str = '~/data/GVS/GEDI_S2_h5'
-    save_dir: str = '~/data/GVS/GEDI_S2_zarr'
-    flag_dir: str = '~/data/GVS/flag_to_zarr'
+    index_dir: str = '~/data/gvs/geo_index_table_with_sensitivity'
+    h5_dir: str = '~/data/gvs/GEDI_S2_h5'
+    save_dir: str = '~/data/gvs/GEDI_S2_zarr'
+    flag_dir: str = '~/data/gvs/flag_to_zarr'
     n_parallel: int=32
     zone: Any=None
     version: str = 'v1'

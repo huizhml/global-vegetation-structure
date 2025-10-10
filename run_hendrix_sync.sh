@@ -14,8 +14,8 @@ MAX_ERDA_SESSIONS=10
 
 check_missing_tiles_on_hendrix() {
     local year=$1
-    local translate_dir="${HOME}/data/GVS/Deploy/translate_flags_${year}"
-    local prediction_dir="${HOME}/data/GVS/Deploy/predictions_${year}"
+    local translate_dir="${HOME}/data/GVS/deploy/translate_flags_${year}"
+    local prediction_dir="${HOME}/data/GVS/deploy/predictions_${year}"
 
     all_tiles=$(find "$translate_dir" -name "*_done" -exec basename {} \; | sed -E 's/(_best_images_done|_done)//')
     existing_tiles=$(find "$prediction_dir" -name "*_cog" -exec basename {} \; | sed -E 's/(_cog)//')
@@ -25,8 +25,8 @@ check_missing_tiles_on_hendrix() {
 
 check_unsynced_tiles() {
     local year=$1
-    local sync_dir="${HOME}/data/GVS/Deploy/sync_flags_${year}"
-    local translate_dir="${HOME}/data/GVS/Deploy/translate_flags_${year}"
+    local sync_dir="${HOME}/data/GVS/deploy/sync_flags_${year}"
+    local translate_dir="${HOME}/data/GVS/deploy/translate_flags_${year}"
 
     translated_tiles=$(find "$translate_dir" -name "*_best_images_done" -exec basename {} \; | sed 's/_best_images_done//')
     synced_tiles=$(find "$sync_dir" -name "*_best_images_done" -exec basename {} \; | sed 's/_best_images_done//')
@@ -38,7 +38,7 @@ check_unsynced_tiles() {
 sync_tile_from_erda() {
     local tile_id=$1
     local year=$2
-    local existing_dir="${HOME}/data/GVS/Deploy/predictions_${year}/${tile_id}_cog"
+    local existing_dir="${HOME}/data/GVS/deploy/predictions_${year}/${tile_id}_cog"
     if [ -d "$existing_dir" ]; then
         count=$(ls ${existing_dir}/*.cog.tif | wc -l)
         if [ $count -gt 303 ]; then
@@ -49,7 +49,7 @@ sync_tile_from_erda() {
     echo "[${tile_id}] Syncing data from ERDA..."
     sftp -q ucph-erda <<EOF | wc -l
 cd GVS/predictions_${year}
-get -r ${tile_id}_cog ${HOME}/data/GVS/Deploy/predictions_${year}/
+get -r ${tile_id}_cog ${HOME}/data/GVS/deploy/predictions_${year}/
 EOF
 exit_status=$?
 if [ $exit_status -ne 0 ]; then
@@ -64,7 +64,7 @@ echo "[${tile_id}] Sync completed (${count} files)"
 sync_tile_to_erda() {
     local tile_id=$1
     local year=$2
-    local input_dir="${HOME}/data/GVS/Deploy/predictions_${year}"
+    local input_dir="${HOME}/data/GVS/deploy/predictions_${year}"
     local predicted_cogs_count
 
     predicted_cogs_count=$(find "${input_dir}/${tile_id}_cog" -type f 2>/dev/null | wc -l)
@@ -85,7 +85,7 @@ EOF
     sftp_status=$?
     if [ $sftp_status -eq 0 ] && [ "$remote_count" -ge 303 ]; then
         echo "[${tile_id}] Remote verification passed (${remote_count}/${predicted_cogs_count}). Create sync flag..."
-        touch "${HOME}/data/GVS/Deploy/sync_flags_${year}/${tile_id}_best_images_done"
+        touch "${HOME}/data/GVS/deploy/sync_flags_${year}/${tile_id}_best_images_done"
     else
         echo "[${tile_id}] Sync failed (sftp exit ${sftp_status}). Remote count: ${remote_count}"
     fi

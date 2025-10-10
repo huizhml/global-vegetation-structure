@@ -215,9 +215,9 @@ if __name__ == "__main__":
     # n_workers = 8
     # client = Client(n_workers=n_workers)
     # Example usage
-    # input_fp = "~/data/GVS/Deploy/predictions_2017/32MQE_unnwuvie_DEFLATE_7.tif"
-    # output_dir = "~/data/GVS/Deploy/predictions_2017/32MQE"
+    # input_fp = "~/data/gvs/deploy/predictions_2017/32MQE_unnwuvie_DEFLATE_7.tif"
+    # output_dir = "~/data/gvs/deploy/predictions_2017/32MQE"
     # translate_multiband_to_cogs(input_fp, output_dir)
-    input_fp = "/home/ksb781/data/GVS/Deploy/predictions_2017/32MQE_xuyou07n_DEFLATE_7.RH100_Q1.tif"
-    output_dir = "~/data/GVS/Deploy/predictions_2017/32MQE"
+    input_fp = "/home/ksb781/data/gvs/deploy/predictions_2017/32MQE_xuyou07n_DEFLATE_7.RH100_Q1.tif"
+    output_dir = "~/data/gvs/deploy/predictions_2017/32MQE"
     compare_compression(input_fp, output_dir)

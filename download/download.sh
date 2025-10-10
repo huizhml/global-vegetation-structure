@@ -2,7 +2,7 @@
 ##SBATCH --account=project_465000894
 #SBATCH --partition=ml4good
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=128G
+#SBATCH --mem=64G
 #SBATCH --exclude hendrixgpu06fl
 #SBATCH --time=1-23:00:00
 #SBATCH --job-name=download
@@ -135,6 +135,25 @@ case $1 in
     echo download S2 images for specified tiles
     python -m download._5_download_inference job_id=0 year=$year specified_tiles_file=download/evaluation_tiles.txt task=download_by_api_query
     ;;
+    9)
+    echo download GEDI points for GVS correction for year 2024
+    python -m download._1_gedi task=download_gedi_for_gvs_correction \
+            correction_number_per_tile=4000 \
+            year=2024 \
+            save_dir=${HOME}/data/GVS/GEDI_for_correction/partitions_2024_v1 \
+            exclude_used_gedi_points=True \
+            used_gedi_points_dir=${HOME}/data/GVS/fitting_data_coord_partitions
+    ;;
+    10)
+    echo download GEDI points for GVS correction for year 2020
+    python -m download._1_gedi task=download_gedi_for_gvs_correction \
+                correction_number_per_tile=4000 \
+                year=2020 \
+                exclude_used_gedi_points=True \
+                used_gedi_points_dir=${HOME}/data/GVS/fitting_data_coord_partitions \
+                save_dir=${HOME}/data/GVS/GEDI_for_correction/partitions_2020_v1
+    ;;
+
 esac
 
 # python -m download.correct_order zone="[$zone_list]" merge_zones=$merge_zones

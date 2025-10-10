@@ -15,17 +15,17 @@ def check_input_images_availability(s2_grid_file: str):
     df = gpd.read_parquet(s2_grid_file)
     for year in [2020, 2024]:
         df[f'no_images_{year}'] = False
-        input_dir = Path(f'~/data/GVS/Deploy/inference_{year}.zarr').expanduser()
+        input_dir = Path(f'~/data/gvs/deploy/inference_{year}.zarr').expanduser()
         for tile in df['Name']:
             if not (input_dir / tile).exists():
                 df.loc[df['Name'] == tile, f'no_images_{year}'] = True
-    df.to_parquet(f'~/data/GVS/Deploy/s2_grid_input_images_availability.parquet')
+    df.to_parquet(f'~/data/gvs/deploy/s2_grid_input_images_availability.parquet')
 
 def check_prediction_status(s2_grid_file: str, flag_dir: str, prediction_dir: str, save_dir: str):
     s2_grid_file = Path(s2_grid_file).expanduser()
     save_dir = Path(save_dir).expanduser()
     prediction_dir = Path(prediction_dir).expanduser()
-    deploy_dir = Path(f'~/data/GVS/Deploy').expanduser()
+    deploy_dir = Path(f'~/data/gvs/deploy').expanduser()
     
     df = gpd.read_parquet(s2_grid_file, columns=['Name', 'geometry', 'growing_months'])
     tiles = df['Name'].unique()
@@ -33,7 +33,7 @@ def check_prediction_status(s2_grid_file: str, flag_dir: str, prediction_dir: st
         print('-'*100)
         print(f'Checking prediction status for {year}')
         flag_dir_ = Path(f'{flag_dir}_{year}').expanduser()
-        input_s2_dir = Path(f'~/data/GVS/Deploy/inference_{year}.zarr').expanduser()
+        input_s2_dir = Path(f'~/data/gvs/deploy/inference_{year}.zarr').expanduser()
         config_files = deploy_dir.glob(f'slurm_job_files_{year}/*_items_{year}_part*.txt')
         config_files = [config_file for config_file in config_files]
         df[f'predicted_{year}'] = pd.NA
@@ -84,22 +84,22 @@ def get_unfinished_tiles(deploy_status_file: str):
     for year in [2020, 2024]:
         # need to download images by api query
         tiles_without_images_and_metadata = df[(df[f'has_s2_images_{year}'] == False)&(df[f'has_s2_metadata_{year}'].isna())]
-        tiles_without_images_and_metadata['Name'].to_csv(f'~/data/GVS/Deploy/tiles_without_images_and_metadata_{year}.txt', index=False)
+        tiles_without_images_and_metadata['Name'].to_csv(f'~/data/gvs/deploy/tiles_without_images_and_metadata_{year}.txt', index=False)
         # need to download images by saved metadata
         tiles_without_images = df[(df[f'has_s2_images_{year}'] == False)&(~df[f'has_s2_metadata_{year}'].isna())]
-        tiles_without_images[['Name', f'meta_file_idx_{year}']].to_csv(f'~/data/GVS/Deploy/tiles_without_images_{year}.txt', index=False)
+        tiles_without_images[['Name', f'meta_file_idx_{year}']].to_csv(f'~/data/gvs/deploy/tiles_without_images_{year}.txt', index=False)
         # ready to predict tiles        
         unfinished_tiles = df[df[f'has_s2_images_{year}']==True]
-        unfinished_tiles[['Name', f'meta_file_idx_{year}']].to_csv(f'~/data/GVS/Deploy/unfinished_tiles_{year}.txt', index=False)
+        unfinished_tiles[['Name', f'meta_file_idx_{year}']].to_csv(f'~/data/gvs/deploy/unfinished_tiles_{year}.txt', index=False)
 
 
 
 @dataclass
 class MyConfig:
-    s2_grid_file: str = '~/data/GVS/S2_tiles_with_growing_months.parquet'
-    flag_dir: str = '~/data/GVS/Deploy/translate_flags'
-    prediction_dir: str = '~/data/GVS/Deploy/predictions'
-    save_dir: str = '~/data/GVS/'
+    s2_grid_file: str = '~/data/gvs/s2_tiles_with_growing_months.parquet'
+    flag_dir: str = '~/data/gvs/deploy/translate_flags'
+    prediction_dir: str = '~/data/gvs/deploy/predictions'
+    save_dir: str = '~/data/gvs/'
     
 cs = ConfigStore.instance()
 cs.store(name="config", node=MyConfig)

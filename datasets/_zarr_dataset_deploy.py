@@ -829,20 +829,20 @@ class DeployDataModel(L.LightningDataModule):
 # Example usage
 if __name__ == '__main__':
     dataset = ChunkedWriteDataset(
-        zarr_store_path='~/data/GVS/Deploy/inference_2024.zarr',
+        zarr_store_path='~/data/gvs/deploy/inference_2024.zarr',
         tile_id='32PNB',
-        prediction_dir='~/data/GVS/Deploy/predictions_GTiff_2024/32PNB_GTiff',
+        prediction_dir='~/data/gvs/deploy/predictions_GTiff_2024/32PNB_GTiff',
         patch_size=544,
         border=16,
         debug=False,
         input_lat_lon=True,
-        metadata_file='none' #'~/data/GVS/Deploy/slurm_job_files_2024/deploy_s2_items_2024_part51.parquet'
+        metadata_file='none' #'~/data/gvs/deploy/slurm_job_files_2024/deploy_s2_items_2024_part51.parquet'
     )
     # dataset = S2DatasetStream(
-    #     metadata_file='~/data/GVS/Deploy/deploy_s2_items_2024_part7.parquet',
-    #     h5_dir='~/flash/data/GVS/Deploy/inference_2024',
+    #     metadata_file='~/data/gvs/deploy/deploy_s2_items_2024_part7.parquet',
+    #     h5_dir='~/flash/data/gvs/deploy/inference_2024',
     #     tile_id='32MRE',
-    #     prediction_dir='~/data/GVS/Deploy/predictions_2024/11UMP_GTiff',
+    #     prediction_dir='~/data/gvs/deploy/predictions_2024/11UMP_GTiff',
         
     #     patch_size=544,
     #     border=16,

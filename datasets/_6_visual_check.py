@@ -32,9 +32,9 @@ def aggregate_gedi_by_biome(beton_fps: List[str], group_by_biome=False):
     batch_size = 100 if 'debug' in beton_fps[0] else 4096
     for fp in beton_fps:
         file = Path(fp).with_suffix('.parquet')
-        if file.exists():
-            print('file exists', file)
-            continue
+        # if file.exists():
+        #     print('file exists', file)
+        #     continue
         loader = Loader(fp, batch_size=batch_size, num_workers=1,
                         distributed=False, batches_ahead=3,
                         order=OrderOption.SEQUENTIAL, os_cache=False, drop_last=False)
@@ -81,7 +81,7 @@ def group_df_by_biome(df_fps: List[str] = None):
     df.groupby('BIOME').apply(save_parquet)
 
 
-def visualize_splitted_points(parquet_dir, data_version, train_tile=None, val_tile=None, cal_tile=None, test_tile=None, split_dir='~/data/GVS/split_test0.1_cal0.1_val0.1_seed42_v1'):
+def visualize_splitted_points(parquet_dir, data_version, train_tile=None, val_tile=None, cal_tile=None, test_tile=None, split_dir='~/data/gvs/split_test0.1_cal0.1_val0.1_seed42_v1'):
     import dask.dataframe as dd
     import matplotlib.pyplot as plt
     if train_tile is None:
@@ -183,13 +183,13 @@ def main(cfg: DictConfig) -> None:
     # find_sensitivity_beam_cor(glob.glob(cfg.parquet_fp))
     # find_sensitivity_biome_cor(glob.glob(cfg.parquet_fp))
     print(task)
-    # get_actual_downloaded_gedi('~/data/GEDI/GEDI_with_s2_candidates_and_best', '~/data/GVS/train_subsets')
+    # get_actual_downloaded_gedi('~/data/GEDI/GEDI_with_s2_candidates_and_best', '~/data/gvs/train_subsets')
     if task == 'aggregate_gedi_by_biome':
         aggregate_gedi_by_biome(cfg.beton_fps)
     elif task == 'visualize_splitted_points':
         visualize_splitted_points('~/data/GEDI/train_subsets', 'v3')
     elif task == 'visualize_quantile_distribution_per_rh':
-        visualize_quantile_distribution_per_rh('~/data/GVS/train_subsets/train*.parquet')
+        visualize_quantile_distribution_per_rh('~/data/gvs/train_subsets/train*.parquet')
     # # model.run_land_cover_effect_size_analysis()
 
     print(f'time taken for running {cfg.task}: {time.time() - t0}')

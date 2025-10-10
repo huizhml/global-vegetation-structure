@@ -137,8 +137,8 @@ class SOTAChmDownloader(DaskDownloader):
 
 @dataclass
 class MyConfig:
-    location_files: str='~/data/GVS/GEDI_for_correction/partitions_2020/*.parquet'
-    output_dir: str='~/data/GVS/GEDI_for_correction/partitions_with_sota_chm_2020'
+    location_files: str='~/data/gvs/GEDI_for_correction/partitions_2020/*.parquet'
+    output_dir: str='~/data/gvs/GEDI_for_correction/partitions_with_sota_chm_2020'
     n_parallel: int=40
     rewrite: bool=False
     debug: bool=False

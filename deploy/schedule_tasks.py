@@ -24,20 +24,23 @@ def configure_slurm_jobs_with_priority(
         parallel_files (bool, optional): if True, tiles in the same file will be predicted in parallel, else in sequence. Defaults to False.
     """
     print(f'Split S2 tiles and images for parallel inference in {year}. Prioritize tiles in {prioritized_countries}')
-    countries_url = "~/data/GVS/ne_10m_admin_0_countries/ne_10m_admin_0_countries.shp"
+    countries_url = "~/data/gvs/ne_10m_admin_0_countries/ne_10m_admin_0_countries.shp"
     countries = gpd.read_file(countries_url)
     regions = countries[countries['ADMIN'].isin(prioritized_countries)]
     s2_grid = gpd.read_parquet(s2_grid_file)
     prioritized_tiles = s2_grid[s2_grid.intersects(regions.union_all())]['Name'].unique().tolist()
     all_tiles = s2_grid['Name'].unique()
     old_slurm_job_dir = Path(old_slurm_job_dir).expanduser()
-    new_slurm_job_dir = Path(new_slurm_job_dir).expanduser()
+    new_slurm_job_dir = Path(f'{new_slurm_job_dir}_{year}').expanduser()
     new_slurm_job_dir.mkdir(parents=True, exist_ok=True)
     all_images = dgpd.read_parquet(old_slurm_job_dir / f'*_items_{year}_part*.parquet', gather_spatial_partitions=False)
     all_images = all_images.compute()
     tiles_with_images = all_images['s2:mgrs_tile'].unique()
     tiles_without_images = np.setdiff1d(all_tiles, tiles_with_images)
-    np.savetxt(new_slurm_job_dir / f'deploy_s2_items_{year}_without_images.txt', tiles_without_images, fmt='%s')
+    df = pd.DataFrame(tiles_without_images, columns=['Name'])
+    df['meta_file_idx_${year}'] = np.nan
+    df.to_csv(new_slurm_job_dir / f'deploy_s2_items_{year}_without_images.txt', index=False)
+    # np.savetxt(new_slurm_job_dir / f'deploy_s2_items_{year}_without_images.txt', tiles_without_images, fmt='%s')
     rest_tile_with_images = sorted(np.setdiff1d(tiles_with_images, prioritized_tiles))
     prioritized_tiles_with_images = sorted(np.setdiff1d(prioritized_tiles, tiles_without_images))
     print(f'There are {len(all_tiles)} tiles, {len(tiles_without_images)} withouth images...')
@@ -54,7 +57,10 @@ def configure_slurm_jobs_with_priority(
                 tile_ids = prioritized_tiles_with_images[job_id:job_id+1] + rest_tile_with_images[job_id: job_id+n_tiles_per_job-1]
             job_images = all_images[all_images['s2:mgrs_tile'].isin(tile_ids)]
             job_images.to_parquet(new_slurm_job_dir / f'deploy_s2_items_{year}_part{job_id}.parquet')
-            np.savetxt(new_slurm_job_dir / f'deploy_s2_items_{year}_part{job_id}.txt', tile_ids, fmt='%s')
+            df = pd.DataFrame(tile_ids, columns=['Name'])
+            df['meta_file_idx_${year}'] = job_id
+            df.to_csv(new_slurm_job_dir / f'deploy_s2_items_{year}_part{job_id}.txt', index=False)
+            # np.savetxt(new_slurm_job_dir / f'deploy_s2_items_{year}_part{job_id}.txt', tile_ids, fmt='%s')
             n_allocated_tiles += n_tiles_per_job
             job_id += 1
     else:
@@ -66,7 +72,10 @@ def configure_slurm_jobs_with_priority(
         prioritized_images.to_parquet(new_slurm_job_dir / f'deploy_s2_items_{year}_part0.parquet')
         assert len(prioritized_tiles_with_images) == n_tiles_per_job, 'prioritized_tiles_with_images should be equal to n_tiles_per_job'
         assert len(prioritized_tiles_with_images) == prioritized_images['s2:mgrs_tile'].nunique(), 'prioritized_tiles_with_images should be equal to unique tiles in prioritized_images'
-        np.savetxt(new_slurm_job_dir / f'deploy_s2_items_{year}_part0.txt', prioritized_tiles_with_images, fmt='%s')
+        df = pd.DataFrame(prioritized_tiles_with_images, columns=['Name'])
+        df[f'meta_file_idx_{year}'] = 0
+        df.to_csv(new_slurm_job_dir / f'deploy_s2_items_{year}_part0.txt', index=False)
+        # np.savetxt(new_slurm_job_dir / f'deploy_s2_items_{year}_part0.txt', prioritized_tiles_with_images, fmt='%s')
         actual_tiles_with_images = len(prioritized_tiles_with_images)
         n_allocated_tiles = 0
         job_id = 1
@@ -75,7 +84,10 @@ def configure_slurm_jobs_with_priority(
             job_images = all_images[all_images['s2:mgrs_tile'].isin(tile_ids)]
             job_images.to_parquet(new_slurm_job_dir / f'deploy_s2_items_{year}_part{job_id}.parquet')
             assert len(tile_ids) == job_images['s2:mgrs_tile'].nunique(), 'tile_ids should be equal to unique tiles in prioritized_images'
-            np.savetxt(new_slurm_job_dir / f'deploy_s2_items_{year}_part{job_id}.txt', tile_ids, fmt='%s')
+            df = pd.DataFrame(tile_ids, columns=['Name'])
+            df[f'meta_file_idx_{year}'] = job_id
+            df.to_csv(new_slurm_job_dir / f'deploy_s2_items_{year}_part{job_id}.txt', index=False)
+            # np.savetxt(new_slurm_job_dir / f'deploy_s2_items_{year}_part{job_id}.txt', tile_ids, fmt='%s')
             n_allocated_tiles += n_tiles_per_job
             job_id += 1
             actual_tiles_with_images += len(tile_ids)
@@ -105,9 +117,9 @@ def resplite_parquet_files(parquet_dir, save_dir, n_tiles_per_job=72):
 
 @dataclass
 class DeployConfig:
-    parquet_dir: str = '~/data/GVS/Deploy/'
-    save_dir: str = '~/data/GVS/Deploy/slurm_job_files_2020'
-    s2_grid_file: str = '~/data/GVS/S2_tiles_with_growing_months.parquet'
+    parquet_dir: str = '~/data/gvs/deploy/'
+    save_dir: str = '~/data/gvs/deploy/slurm_job_files'
+    s2_grid_file: str = '~/data/gvs/s2_tiles_with_growing_months.parquet'
     year: int = 2020
     n_tiles_per_job: int=200
     prioritized_countries: list = field(default_factory=lambda: ['Gabon', 'Switzerland'])

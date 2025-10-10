@@ -9,21 +9,21 @@ import matplotlib.pyplot as plt
 
 
 def vis_rgb(tile,year, col_off, row_off, width, height, title=None):
-    zarr_path = Path(f'~/data/GVS/Deploy/inference_{year}.zarr').expanduser()
+    zarr_path = Path(f'~/data/gvs/deploy/inference_{year}.zarr').expanduser()
     ds = xr.open_zarr(zarr_path, group=tile, consolidated=False, chunks='auto')
-    rgb = ds.s2.sel(band=['B04', 'B03', 'B02']).isel(time=0, x=slice(col_off, col_off+width), y=slice(row_off, row_off+height))
-    rgb = rgb.clip(0, 3000) / 3000
+    rgb = ds.s2.sel(band=['B04', 'B03', 'B02']).isel(time=1, x=slice(col_off, col_off+width), y=slice(row_off, row_off+height))
+    rgb = rgb.clip(0, 2000) / 2000
     plt.figure(figsize=(10, 10))
     rgb.plot.imshow(x='x', y='y', rgb='band')
     plt.tight_layout()
-    plt.savefig(f"output/{tile}_{year}_rgb.png")
+    plt.savefig(f"/home/ksb781/data/gvs/deploy/EU_results/{tile}_{year}_rgb.png")
     plt.title(title)
     plt.close()
     
 def vis_rhs(tile, year, rh_idx, window, z_exaggeration=2.0,
             camera=None, aspectratio=(1,1,0.25), cmin=None, cmax=None,
             orthographic=False, title=None):
-    file_path = Path(f'~/data/GVS/Deploy/predictions_{year}/{tile}_cog/RH{rh_idx}_Q1.cog.tif').expanduser()
+    file_path = Path(f'~/data/gvs/deploy/predictions_{year}/{tile}_cog/RH{rh_idx}_Q1.cog.tif').expanduser()
     name = file_path.stem.split('.')[0]
     with rio.open(file_path) as src:
         rh = src.read(1, window=window, masked=True)
@@ -74,14 +74,14 @@ def vis_rhs(tile, year, rh_idx, window, z_exaggeration=2.0,
         title=title
     )
     # fig.write_html(f"output/{tile}_{name}.html")
-    fig.write_image(f"output/{tile}_{name}.png")
+    fig.write_image(f"/home/ksb781/data/gvs/deploy/EU_results/{tile}_{name}.png")
     return fig
 
 def make_gif(tile):
     from PIL import Image
     from pathlib import Path
 
-    png_dir = Path("output")
+    png_dir = Path("/home/ksb781/data/gvs/deploy/EU_results")
     # png_files = sorted(png_dir.glob(f"{tile}_*.png"))
     png_files = []
     for i in range(101):
@@ -91,7 +91,7 @@ def make_gif(tile):
     frames = [Image.open(p) for p in png_files]
 
     frames[0].save(
-        f"output/{tile}_RH0-100_animation.gif",
+        f"/home/ksb781/data/gvs/deploy/EU_results/{tile}_RH0-100_animation.gif",
         save_all=True,
         append_images=frames[1:],
         duration=60,  # ms per frame
@@ -100,11 +100,14 @@ def make_gif(tile):
 
 # Define a window to read a small portion of the data
 tiles = [
-    {'name': 'Dry deciduous forest', 'tile_id':  '42QXJ', 'col_off':8150, 'row_off':6620}, # dry deciduous
-    {'name': 'Evergreen forest', 'tile_id':  '19MDT', 'col_off':6244, 'row_off':8330}, # evergreen
-    {'name': 'Seasonal inundated forest', 'tile_id':  '20MKC', 'col_off':542, 'row_off':4793}, # flooded forest
-    {'name': 'Crop-/grassland', 'tile_id':  '17RML', 'col_off':3384, 'row_off':8622}, # Sorghum
-    {'name': 'Tree plantation', 'tile_id':  '49MFT', 'col_off':900, 'row_off':5800}, # plantation
+    # {'name': 'Dry deciduous forest', 'tile_id':  '42QXJ', 'col_off':8150, 'row_off':6620}, # dry deciduous
+    # {'name': 'Evergreen forest', 'tile_id':  '19MDT', 'col_off':6244, 'row_off':8330}, # evergreen
+    # {'name': 'Seasonal inundated forest', 'tile_id':  '20MKC', 'col_off':542, 'row_off':4793}, # flooded forest
+    # {'name': 'Crop-/grassland', 'tile_id':  '17RML', 'col_off':3384, 'row_off':8622}, # Sorghum
+    # {'name': 'Tree plantation', 'tile_id':  '49MFT', 'col_off':900, 'row_off':5800}, # plantation
+    {'name': 'Plantation', 'tile_id':  '31TEJ', 'col_off':1122, 'row_off':1090}, # plantation
+    # {'name': 'Primary forest', 'tile_id':  '33WWN', 'col_off':5783, 'row_off':1564}, # primary forest # time=15
+    # {'name': 'Naturally regenerating forest', 'tile_id':  '32TNQ', 'col_off':6885, 'row_off':7923}, # plantation # time=3
 ]
 year = 2020
 width = 100
@@ -126,17 +129,17 @@ for tile_info in tiles:
     
     )
     
-    figs = []
-    # for rh_idx in [98]:
-    for rh_idx in range(0,101):
-        figs.append(
-            vis_rhs(tile, year, rh_idx, window,
-                    z_exaggeration=1,
-                    camera=common_camera,
-                    aspectratio=(1,1,0.4),
-                    cmin=-50, cmax=300,
-                    orthographic=True,
-                    title=name)
-        )
-    make_gif(tile)
-    print(f'animation generated for {tile}')
+    # figs = []
+    # # for rh_idx in [98]:
+    # for rh_idx in range(0,101):
+    #     figs.append(
+    #         vis_rhs(tile, year, rh_idx, window,
+    #                 z_exaggeration=1,
+    #                 camera=common_camera,
+    #                 aspectratio=(1,1,0.4),
+    #                 cmin=-50, cmax=300,
+    #                 orthographic=True,
+    #                 title=name)
+    #     )
+    # make_gif(tile)
+    # print(f'animation generated for {tile}')

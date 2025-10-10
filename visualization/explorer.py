@@ -1,0 +1,1 @@
+# curl -o thumbnail.png "http://localhost:8000/mosaicjson/thumbnail?url=file:///home/ksb781/data/GVS/deploy/mosaic_2020/rh1.mosaic.json"

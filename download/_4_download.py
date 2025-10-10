@@ -542,9 +542,9 @@ class MyConfig:
     year: int = 2019
     n_parallel: int = 8
     rewrite: bool = False
-    gedi_dir: str = '~/data/GVS/GEDI_extra_with_s2_candidates_and_best' # GEDI data dir
-    save_dir: str = '~/data/GVS/GEDI_S2_h5_extra'
-    flag_dir: str = '~/data/GVS/Correct_order_flags/'
+    gedi_dir: str = '~/data/gvs/GEDI_extra_with_s2_candidates_and_best' # GEDI data dir
+    save_dir: str = '~/data/gvs/GEDI_S2_h5_extra'
+    flag_dir: str = '~/data/gvs/Correct_order_flags/'
     S2_meta_dir: str = '~/data/GEDI/S2_geoparquet_items'
     wc_dem_meta_dir: str = '~/data/GEDI'
     patch_size: int = 15

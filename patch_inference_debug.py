@@ -126,10 +126,10 @@ def main(cfg: DictConfig):
     model = get_model(cfg.model, cfg.run_id, cfg.wandb_project, cfg.bias_correction_column, cfg.model_alias)
     model = model.to('cuda')
     dataset = S2DatasetStream(
-        metadata_file='~/data/GVS/Deploy/deploy_s2_items_2024_part7.parquet',
-        h5_dir='~/flash/data/GVS/Deploy/inference_2020',
+        metadata_file='~/data/gvs/deploy/deploy_s2_items_2024_part7.parquet',
+        h5_dir='~/flash/data/gvs/deploy/inference_2020',
         tile_id='32MPD',
-        prediction_dir='~/data/GVS/Deploy/predictions_2024/11UMP_GTiff',
+        prediction_dir='~/data/gvs/deploy/predictions_2024/11UMP_GTiff',
         input_lat_lon=True,
         patch_size=544,
         border=16,

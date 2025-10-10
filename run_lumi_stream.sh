@@ -29,25 +29,25 @@ hostname=$(hostname)
 use_flash=${3:-False}
 echo "use_flash=$use_flash"
 if [ "$use_flash" == "True" ]; then
-    save_dir=${HOME}/flash/data/GVS/Deploy/inference_${year}
+    save_dir=${HOME}/flash/data/GVS/deploy/inference_${year}
     download_data=True # Download data in inference pipeline
 else
-    save_dir=${HOME}/data/GVS/Deploy/inference_${year}
+    save_dir=${HOME}/data/GVS/deploy/inference_${year}
     download_data=False
 fi
 
-config_dir=${HOME}/data/GVS/Deploy/slurm_job_files
+config_dir=${HOME}/data/GVS/deploy/slurm_job_files
 tile_id_file=${config_dir}/deploy_s2_items_${year}_part${part}.txt
 tile_id=$(sed -n "${line_num}p" "$tile_id_file")
 echo "Processing tile ID: $tile_id, line $line_num from $tile_id_file"
 
 
-if [ -f "${HOME}/data/GVS/Deploy/stream_flags_${year}/${tile_id}_done" ]; then
+if [ -f "${HOME}/data/GVS/deploy/stream_flags_${year}/${tile_id}_done" ]; then
     echo "Tile $tile_id already processed, skip"
     exit 0
 fi
 
-sync_flag_new="${HOME}/data/GVS/Deploy/sync_flags_${year}/${tile_id}_best_images_done"
+sync_flag_new="${HOME}/data/GVS/deploy/sync_flags_${year}/${tile_id}_best_images_done"
 if [ ! -f "$sync_flag_new" ] && [ ! -f "${save_dir}/${tile_id}.h5" ]; then
     echo "***************************** START STREAMING *****************************"
     echo Stream input data for tile $tile_id in year $year;
@@ -57,14 +57,14 @@ if [ ! -f "$sync_flag_new" ] && [ ! -f "${save_dir}/${tile_id}.h5" ]; then
         echo "Stream command failed with exit status $exit_status"
     else
         echo "Stream command completed successfully"
-        touch ${HOME}/data/GVS/Deploy/stream_flags_${year}/${tile_id}_best_images_done
+        touch ${HOME}/data/GVS/deploy/stream_flags_${year}/${tile_id}_best_images_done
     fi
     echo "***************************** END STREAMING *****************************"
 fi
 
 # while IFS= read -r tile_id; do
-#     sync_flag="${HOME}/data/GVS/Deploy/sync_flags_${year}/${tile_id}_done"
-#     sync_flag_new="${HOME}/data/GVS/Deploy/sync_flags_${year}/${tile_id}_best_images_done"
+#     sync_flag="${HOME}/data/GVS/deploy/sync_flags_${year}/${tile_id}_done"
+#     sync_flag_new="${HOME}/data/GVS/deploy/sync_flags_${year}/${tile_id}_best_images_done"
 #     if [ ! -f "$sync_flag" ] && [ ! -f "$sync_flag_new" ] && [ ! -f "${save_dir}/${tile_id}.h5" ]; then
 #         echo "***************************** START STREAMING *****************************"
 #         echo Stream input data for tile $tile_id in year $year;
@@ -74,7 +74,7 @@ fi
 #             echo "Stream command failed with exit status $exit_status"
 #         else
 #             echo "Stream command completed successfully"
-#             touch ${HOME}/data/GVS/Deploy/stream_flags_${year}/${tile_id}_best_images_done
+#             touch ${HOME}/data/GVS/deploy/stream_flags_${year}/${tile_id}_best_images_done
 #         fi
 #         echo "***************************** END STREAMING *****************************"
 #     fi

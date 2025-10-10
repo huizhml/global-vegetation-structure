@@ -134,11 +134,15 @@ def prepare_items(
     for item_i, item in enumerate(items):
         # ********* Changed here *********
         # proj:code is the new way to get the epsg code
-        # item_epsg = item["properties"].get("proj:epsg")
-        if item['stac_version'] == '1.0.0':
+        if item["properties"].get('proj:code') is None:
             item_epsg = item["properties"].get("proj:epsg")
         else:
             item_epsg = int(item["properties"].get('proj:code')[5:])
+        # item_epsg = item["properties"].get("proj:epsg")
+        # if item['stac_version'] == '1.0.0':
+        #     item_epsg = item["properties"].get("proj:epsg")
+        # else:
+        #     item_epsg = int(item["properties"].get('proj:code')[5:])
         item_bbox = item["properties"].get("proj:bbox")
         item_shape = item["properties"].get("proj:shape")
         item_transform = item["properties"].get("proj:transform")
@@ -227,8 +231,8 @@ def prepare_items(
             if (
                 asset_bbox is not None
                 and asset_epsg is not None
-                and asset_transform == item_transform
-                and asset_shape == item_shape
+                and (asset_transform == item_transform).all()
+                and (asset_shape == item_shape).all()
                 # TODO this still misses the case where the asset overrides bbox, but not transform/shape.
                 # At that point would need to significantly restructure the code
                 # to express this complex of prioritization:

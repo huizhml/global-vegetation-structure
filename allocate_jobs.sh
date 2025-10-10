@@ -2,7 +2,7 @@
 a100_nodes=(hendrixgpu01fl hendrixgpu02fl)
 l40s_nodes=(hendrixgpu23fl hendrixgpu24fl hendrixgpu25fl hendrixgpu26fl)
 year=2024
-config_dir="${HOME}/data/GVS/Deploy/slurm_job_files_${year}"
+config_dir="${HOME}/data/GVS/deploy/slurm_job_files_${year}"
 
 FILE_LIST=$(seq 0 22)
 TARGET_ACTIVE=24
@@ -15,8 +15,8 @@ check_unfinished_tiles() {
   local tile_list=("$@")
   local result=""
   for tile in "${tile_list[@]}"; do
-    translate_flag="${HOME}/data/GVS/Deploy/translate_flags_${year}/${tile}_done"
-    translate_flag_new="${HOME}/data/GVS/Deploy/translate_flags_${year}/${tile}_best_images_done"
+    translate_flag="${HOME}/data/GVS/deploy/translate_flags_${year}/${tile}_done"
+    translate_flag_new="${HOME}/data/GVS/deploy/translate_flags_${year}/${tile}_best_images_done"
     if [ ! -f "$translate_flag" ] && [ ! -f "$translate_flag_new" ]; then
       result+="$tile "
     fi

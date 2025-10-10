@@ -284,8 +284,8 @@ if __name__ == '__main__':
     import hydra
     @hydra.main(config_name='train', config_path='../config', version_base='1.2')
     def main(cfg):
-        cfg.data.init_args.val_fp = '~/data/GVS/train_subsets/train0_filtered_v1.beton'
-        cfg.data.init_args.train_fp = '~/data/GVS/train_subsets/train*_filtered_v1.beton'
+        cfg.data.init_args.val_fp = '~/data/gvs/train_subsets/train0_filtered_v1.beton'
+        cfg.data.init_args.train_fp = '~/data/gvs/train_subsets/train*_filtered_v1.beton'
         cfg.data.init_args.batch_size = 4096
         cfg.data.init_args.distributed = False
         cfg.data.init_args.order = 'SEQUENTIAL'

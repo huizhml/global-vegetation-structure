@@ -5,7 +5,7 @@ import hydra
 from hydra.core.config_store import ConfigStore
 from omegaconf import DictConfig
 
-def merge_all_zones(h5_dir:str='~/data/GEDI', merged_h5_file:str='~/data/GVS.h5', **kwargs):
+def merge_all_zones(h5_dir:str='~/data/GEDI', merged_h5_file:str='~/data/gvs.h5', **kwargs):
     """
     Merge all zones in h5_dir into a single h5 file.
     """
@@ -102,8 +102,8 @@ def merge_partitions(zone='02K', h5_dir='~/data/GEDI', h5_out_dir: str=None, **k
 
 @dataclass
 class MyConfig:
-    h5_dir: str = '~/data/GEDI/split_test0.1_cal0.1_val0.1_seed42/train_h5s'
-    merged_h5_file: str = '~/data/GEDI/train.h5'
+    h5_dir: str = '~/data/GEDI/split_test0.1_cal0.1_val0.1_seed42/h5_partitions_train'
+    merged_h5_file: str = '~/data/gvs/data_train.h5'
     h5_out_dir: str = '~/data/GEDI/h5s_no_partitions' # flatten h5 groups
     zone: str = '37N'
     functions: list = field(default_factory=lambda: ['merge_all_zones'])

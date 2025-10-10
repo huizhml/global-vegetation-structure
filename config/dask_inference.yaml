@@ -9,8 +9,8 @@ wandb_project: global-vegetation-structure-v1
 model_alias: best
 
 data:
-  metadata_file: ~/data/GVS/Deploy/deploy_s2_items_2024_part5.parquet
-  prediction_dir: ~/data/GVS/Deploy/predictions_2024
+  metadata_file: ~/data/gvs/deploy/deploy_s2_items_2024_part5.parquet
+  prediction_dir: ~/data/gvs/deploy/predictions_2024
   tile_id: 20UPD
   patch_size: 512
   border: 16

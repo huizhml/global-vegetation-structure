@@ -15,8 +15,8 @@ lr_scheduler:
 data:
   class_path: datasets.ffcv_datamodule.FFCVDataModel
   init_args: 
-    train_fp: ~/data/GVS/train_subsets/debug0_filtered_v0.beton
-    val_fp: ~/data/GVS/train_subsets/debug1_filtered_v0.beton
+    train_fp: ~/data/gvs/train_subsets/debug0_filtered_v0.beton
+    val_fp: ~/data/gvs/train_subsets/debug1_filtered_v0.beton
     pred_fp:
     test_fp:
     num_workers: 1

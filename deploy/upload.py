@@ -77,7 +77,7 @@ class AzureUploader:
 #     blob_service_client = BlobServiceClient(account_url, credential=default_credential)
     
 #     # Create a local directory to hold blob data
-#     local_path = "/home/ksb781/data/GVS/Deploy/predictions_2017/32MQE/"
+#     local_path = "/home/ksb781/data/gvs/deploy/predictions_2017/32MQE/"
 
 #     # Create a file in the local data directory to upload and download
 #     local_file_name = '32MQE_xuyou07n_DEFLATE_7.RH100_Q1_lerc_0_1024.tif'
@@ -100,7 +100,7 @@ class AzureUploader:
 class AzureUploadConfig:
     storage_account_name: str = 'vvsm'
     blob_container_name: str = 'vsm'
-    local_file_path: str='~/data/GVS/Deploy/predictions_2020/32MQE_cog/RH9_Q2.cog.tif'
+    local_file_path: str='~/data/gvs/deploy/predictions_2020/32MQE_cog/RH9_Q2.cog.tif'
     
 cs = ConfigStore.instance()
 cs.store(name="config", node=AzureUploadConfig)

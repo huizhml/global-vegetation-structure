@@ -46,22 +46,22 @@ sync_data_to_scratch() {
         local hostname=$(hostname)
         local number=$(echo "$hostname" | grep -o '[0-9]\+')
         echo "Number is $number"
-        data_dir=${HOME}/data/GVS/train_subsets
+        data_dir=${HOME}/data/gvs/train_subsets
         if hostname | grep -q "hendrix"; then
         host_list=("01" "02" "07" "22" "23" "24" "25" "26")
                 if [[ " ${host_list[@]} " =~ " $number " ]]; then
                         echo "Host ${hostname} has an accessible scratch folder. Syncing data to /scratch."
                         # sync data to /scratch
                         mkdir -p /scratch/train_subsets
-                        SOURCE_DIR="$HOME/data/GVS/train_subsets"
+                        SOURCE_DIR="$HOME/data/gvs/train_subsets"
                         DEST_DIR="/scratch/train_subsets/"
                         for file in "$SOURCE_DIR"/train*_v1.beton; do
                                 [ -f "$file" ] && rsync -av --progress "$file" "$DEST_DIR" &
                         done
                         #     rsync -av --progress ~/data/GEDI/train_subsets/${train_data_name}.beton /scratch/train_subsets/
-                        rsync -av --progress ~/data/GVS/train_subsets/${val_data_name}.beton /scratch/train_subsets/ &
+                        rsync -av --progress ~/data/gvs/train_subsets/${val_data_name}.beton /scratch/train_subsets/ &
                         wait
-                        rsync -av --progress ~/data/GVS/train_subsets/${val_data_name}.parquet /scratch/train_subsets/
+                        rsync -av --progress ~/data/gvs/train_subsets/${val_data_name}.parquet /scratch/train_subsets/
                         data_dir=/scratch/train_subsets
                 else
                         echo "Host ${hostname} doesn't have scratch folder. Skipping data sync."
@@ -119,7 +119,7 @@ case $id in
 run_id=cg11fpjr
 test_data_name=test_filtered_v1
 # sync_data_to_scratch
-data_dir=${HOME}/data/GVS/train_subsets
+data_dir=${HOME}/data/gvs/train_subsets
 correct_bias=True
 echo get sparse prediction for model $run_id on $test_data_name;
 python run.py test -c config/train.yaml --model.backbone config/model/xception_mix_order.yaml \
@@ -133,7 +133,7 @@ python run.py test -c config/train.yaml --model.backbone config/model/xception_m
         --recalculate_bias False \
         --trainer.logger.init_args.id $run_id \
         --trainer.callbacks+=callbacks.prediction_logger.PredictionLogger \
-        --trainer.callbacks.save_dir ~/data/GVS/uncertainty/ \
+        --trainer.callbacks.save_dir ~/data/gvs/uncertainty/ \
         --trainer.callbacks.outfile_suffix _corrected
         # --trainer.callbacks.output_rh_idxs "[0,25,50,95,98,100]"
 
@@ -205,8 +205,8 @@ python run.py predict -c config/deploy.yaml --model.backbone config/model/xcepti
         --data.init_args.input_lat_lon True \
         --data.init_args.num_workers 8 \
         --data.init_args.tile_id $tile_id \
-        --data.init_args.pred_fp ~/data/GVS/Deploy/inference_${year}.zarr \
-        --data.init_args.prediction_dir ~/data/GVS/Deploy/predictions_${year} \
+        --data.init_args.pred_fp ~/data/gvs/deploy/inference_${year}.zarr \
+        --data.init_args.prediction_dir ~/data/gvs/deploy/predictions_${year} \
         --correct_bias False \
         --data.init_args.comp_level $level \
         --data.init_args.compression $comp \
@@ -228,8 +228,8 @@ echo $run_id
 echo predict for downstream task;
 python run.py predict -c config/predict.yaml --model.backbone config/model/xception_mix_order.yaml \
         --data.class_path datasets._h5_dataset.SparsePredDataModule \
-        --data.init_args.pred_fp ~/data/GVS/downstream_task_data/s2_2017_ps31.h5 \
-        --data.init_args.prediction_dir ~/data/GVS/downstream_task_data/rhs_predictions_2017 \
+        --data.init_args.pred_fp ~/data/gvs/downstream_task_data/s2_2017_ps31.h5 \
+        --data.init_args.prediction_dir ~/data/gvs/downstream_task_data/rhs_predictions_2017 \
         --data.init_args.batch_size 2048 \
         --trainer.logger.init_args.id $run_id
 ;;
@@ -240,10 +240,10 @@ echo $run_id
 echo downstream task training with full profile;
 python run.py fit -c config/train_naturalness.yaml --model.backbone config/model/xception_mix_order.yaml \
         --data.class_path datasets._h5_dataset.NaturalnessDataModule \
-        --data.init_args.h5_file ~/data/GVS/downstream_task_data/rhs_predictions_2017_${run_id}_ps31.h5 \
-        --data.init_args.naturalness_fp ~/data/GVS/downstream_task_data/naturalness/reference_data_set_updated.with_images.csv \
+        --data.init_args.h5_file ~/data/gvs/downstream_task_data/rhs_predictions_2017_${run_id}_ps31.h5 \
+        --data.init_args.naturalness_fp ~/data/gvs/downstream_task_data/naturalness/reference_data_set_updated.with_images.csv \
         --data.init_args.use_full_profile True \
-        --model.init_args.mean_std_fp ~/data/GVS/downstream_task_data/naturalness/mean_std_${run_id}.npz \
+        --model.init_args.mean_std_fp ~/data/gvs/downstream_task_data/naturalness/mean_std_${run_id}.npz \
         --model.init_args.backbone.init_args.in_channels 113 \
         --model.init_args.backbone.init_args.out_channels 7 \
         --data.init_args.class_balance False \
@@ -257,9 +257,9 @@ echo $run_id
 echo downstream task training with s2 only;
 python run.py fit -c config/train_naturalness.yaml --model.backbone config/model/xception_mix_order.yaml \
         --data.class_path datasets._h5_dataset.NaturalnessDataModule \
-        --data.init_args.h5_file ~/data/GVS/downstream_task_data/rhs_predictions_2017_${run_id}_ps31.h5 \
-        --data.init_args.naturalness_fp ~/data/GVS/downstream_task_data/naturalness/reference_data_set_updated.with_images.csv \
-        --model.init_args.mean_std_fp ~/data/GVS/downstream_task_data/naturalness/mean_std_${run_id}.npz \
+        --data.init_args.h5_file ~/data/gvs/downstream_task_data/rhs_predictions_2017_${run_id}_ps31.h5 \
+        --data.init_args.naturalness_fp ~/data/gvs/downstream_task_data/naturalness/reference_data_set_updated.with_images.csv \
+        --model.init_args.mean_std_fp ~/data/gvs/downstream_task_data/naturalness/mean_std_${run_id}.npz \
         --model.init_args.backbone.init_args.in_channels 12 \
         --model.init_args.backbone.init_args.out_channels 7 \
         --data.init_args.class_balance False \
@@ -273,12 +273,12 @@ echo $run_id
 echo downstream task training with s2 and top height;
 python run.py fit -c config/train_naturalness.yaml --model.backbone config/model/xception_mix_order.yaml \
         --data.class_path datasets._h5_dataset.NaturalnessDataModule \
-        --data.init_args.h5_file ~/data/GVS/downstream_task_data/rhs_predictions_2017_${run_id}_ps31.h5 \
-        --data.init_args.naturalness_fp ~/data/GVS/downstream_task_data/naturalness/reference_data_set_updated.with_images.csv \
-        --data.init_args.mean_std_fp ~/data/GVS/downstream_task_data/naturalness/mean_std_${run_id}.npz \
+        --data.init_args.h5_file ~/data/gvs/downstream_task_data/rhs_predictions_2017_${run_id}_ps31.h5 \
+        --data.init_args.naturalness_fp ~/data/gvs/downstream_task_data/naturalness/reference_data_set_updated.with_images.csv \
+        --data.init_args.mean_std_fp ~/data/gvs/downstream_task_data/naturalness/mean_std_${run_id}.npz \
         --data.init_args.use_full_profile False \
         --model.init_args.transform.init_args.input_top_height True \
-        --model.init_args.transform.init_args.mean_std_fp ~/data/GVS/downstream_task_data/naturalness/mean_std_${run_id}.npz \
+        --model.init_args.transform.init_args.mean_std_fp ~/data/gvs/downstream_task_data/naturalness/mean_std_${run_id}.npz \
         --model.init_args.backbone.init_args.in_channels 13 \
         --model.init_args.backbone.init_args.out_channels 7 \
         --data.init_args.class_balance False \
@@ -291,10 +291,10 @@ echo $run_id
 echo downstream task training with rhs only;
 python run.py fit -c config/train_naturalness.yaml --model.backbone config/model/xception_mix_order.yaml \
         --data.class_path datasets._h5_dataset.NaturalnessDataModule \
-        --data.init_args.h5_file ~/data/GVS/downstream_task_data/rhs_predictions_2017_${run_id}_ps31.h5 \
-        --data.init_args.naturalness_fp ~/data/GVS/downstream_task_data/naturalness/reference_data_set_updated.with_images.csv \
+        --data.init_args.h5_file ~/data/gvs/downstream_task_data/rhs_predictions_2017_${run_id}_ps31.h5 \
+        --data.init_args.naturalness_fp ~/data/gvs/downstream_task_data/naturalness/reference_data_set_updated.with_images.csv \
         --data.init_args.use_full_profile True \
-        --model.init_args.mean_std_fp ~/data/GVS/downstream_task_data/naturalness/mean_std_${run_id}.npz \
+        --model.init_args.mean_std_fp ~/data/gvs/downstream_task_data/naturalness/mean_std_${run_id}.npz \
         --model.init_args.backbone.init_args.in_channels 101 \
         --model.init_args.backbone.init_args.out_channels 7 \
         --lr_scheduler.init_args.max_lr 0.0001 \
@@ -309,10 +309,10 @@ echo $run_id
 echo downstream task training with rhs only;
 python run.py fit -c config/train_naturalness.yaml --model.backbone config/model/xception_mix_order.yaml \
         --data.class_path datasets._h5_dataset.NaturalnessDataModule \
-        --data.init_args.h5_file ~/data/GVS/downstream_task_data/rhs_predictions_2017_${run_id}_ps31.h5 \
-        --data.init_args.naturalness_fp ~/data/GVS/downstream_task_data/naturalness/reference_data_set_updated.with_images.csv \
+        --data.init_args.h5_file ~/data/gvs/downstream_task_data/rhs_predictions_2017_${run_id}_ps31.h5 \
+        --data.init_args.naturalness_fp ~/data/gvs/downstream_task_data/naturalness/reference_data_set_updated.with_images.csv \
         --data.init_args.use_full_profile False \
-        --model.init_args.mean_std_fp ~/data/GVS/downstream_task_data/naturalness/mean_std_${run_id}.npz \
+        --model.init_args.mean_std_fp ~/data/gvs/downstream_task_data/naturalness/mean_std_${run_id}.npz \
         --model.init_args.backbone.init_args.in_channels 1 \
         --model.init_args.backbone.init_args.out_channels 7 \
         --data.init_args.class_balance False \
@@ -362,8 +362,8 @@ python run.py predict -c config/predict.yaml --model.backbone config/model/xcept
         --data.init_args.tile_id $tile_id \
         --data.init_args.stream_input False \
         --data.init_args.metadata_file none  \
-        --data.init_args.pred_fp ~/data/GVS/Deploy/inference_${year}.zarr \
-        --data.init_args.prediction_dir ~/data/GVS/Deploy/predictions_GTiff_${year}_test/${tile_id}_GTiff \
+        --data.init_args.pred_fp ~/data/gvs/deploy/inference_${year}.zarr \
+        --data.init_args.prediction_dir ~/data/gvs/deploy/predictions_GTiff_${year}_test/${tile_id}_GTiff \
         --data.init_args.year $year \
         --correct_bias True \
         --data.init_args.patch_size 544 \
@@ -388,8 +388,8 @@ python run.py predict -c config/predict.yaml --model.backbone config/model/xcept
         --data.init_args.tile_id $tile_id \
         --data.init_args.stream_input False \
         --data.init_args.metadata_file none  \
-        --data.init_args.pred_fp ~/data/GVS/Deploy/inference_${year}.zarr \
-        --data.init_args.prediction_dir ~/data/GVS/Deploy/predictions_GTiff_${year}_test/${tile_id}_GTiff \
+        --data.init_args.pred_fp ~/data/gvs/deploy/inference_${year}.zarr \
+        --data.init_args.prediction_dir ~/data/gvs/deploy/predictions_GTiff_${year}_test/${tile_id}_GTiff \
         --data.init_args.year $year \
         --correct_bias True \
         --data.init_args.patch_size 544 \
@@ -416,10 +416,10 @@ run_id=cg11fpjr
 echo run prediction for model $run_id for tile $tile_id in year $year;
 python run.py predict -c config/predict.yaml --model.backbone config/model/xception_mix_order.yaml \
         --data.init_args.tile_id $tile_id \
-        --data.init_args.metadata_file ~/data/GVS/Deploy/slurm_job_files_${year}/deploy_s2_items_${year}_part4.parquet \
+        --data.init_args.metadata_file ~/data/gvs/deploy/slurm_job_files_${year}/deploy_s2_items_${year}_part4.parquet \
         --data.init_args.download_data True \
-        --data.init_args.pred_fp ~/flash/data/GVS/Deploy/inference_${year} \
-        --data.init_args.prediction_dir ~/flash/data/GVS/Deploy/predictions_GTiff_${year}/${tile_id}_GTiff \
+        --data.init_args.pred_fp ~/flash/data/gvs/deploy/inference_${year} \
+        --data.init_args.prediction_dir ~/flash/data/gvs/deploy/predictions_GTiff_${year}/${tile_id}_GTiff \
         --data.init_args.year $year \
         --data.init_args.cache_predictions False \
         --data.init_args.stream_input True \
@@ -445,8 +445,8 @@ python run.py predict -c config/predict.yaml --model.backbone config/model/xcept
         --data.init_args.input_lat_lon True \
         --data.init_args.num_workers 4 \
         --data.init_args.tile_id $tile_id \
-        --data.init_args.pred_fp ~/data/GVS/Deploy/inference_${year}.zarr \
-        --data.init_args.prediction_dir ~/data/GVS/Deploy/predictions_${year}/${tile_id}_fp32_infer \
+        --data.init_args.pred_fp ~/data/gvs/deploy/inference_${year}.zarr \
+        --data.init_args.prediction_dir ~/data/gvs/deploy/predictions_${year}/${tile_id}_fp32_infer \
         --data.init_args.year $year \
         --data.init_args.batch_size 1 \
         --data.init_args.cache_predictions False \
@@ -512,8 +512,8 @@ python run.py predict -c config/predict.yaml --model.backbone config/model/xcept
         --data.init_args.input_lat_lon True \
         --data.init_args.num_workers 8 \
         --data.init_args.tile_id $tile_id \
-        --data.init_args.pred_fp ~/data/GVS/Deploy/inference_${year}.zarr \
-        --data.init_args.prediction_dir ~/data/GVS/Deploy/predictions_${year} \
+        --data.init_args.pred_fp ~/data/gvs/deploy/inference_${year}.zarr \
+        --data.init_args.prediction_dir ~/data/gvs/deploy/predictions_${year} \
         --data.init_args.comp_level $SLURM_ARRAY_TASK_ID \
         --data.init_args.compression $compression \
         --correct_bias True \

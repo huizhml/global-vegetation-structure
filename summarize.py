@@ -251,6 +251,6 @@ def regression_results(ids):
 if __name__ == '__main__':
     # boxplot(run_ids)
     run_ids = ['izraz2av', 'uew6hxbn','g7h7446j','cg11fpjr' ]# 'uew6hxbn', 'g7h7446j','cg11fpjr'
-    analyse_prediction(run_ids, corrected=True, ref_path='~/data/GVS/train_subsets/val_filtered_v1.parquet')
-    boxplot_of_sota_maps(run_id='cg11fpjr', corrected=True, sota_chm_path='~/data/GVS/evaluation/sota_chm_val_with_gedi_biome.parquet')
+    analyse_prediction(run_ids, corrected=True, ref_path='~/data/gvs/train_subsets/val_filtered_v1.parquet')
+    boxplot_of_sota_maps(run_id='cg11fpjr', corrected=True, sota_chm_path='~/data/gvs/evaluation/sota_chm_val_with_gedi_biome.parquet')
     print('done')

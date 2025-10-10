@@ -30,33 +30,31 @@ year=${2:-2020}
 use_flash=${3:-True}
 echo "use_flash=$use_flash"
 if [ "$use_flash" == "True" ]; then
-    input_dir=${HOME}/flash/data/GVS/Deploy/predictions_GTiff_${year}
-    # output_dir=${HOME}/flash/data/GVS/Deploy/predictions_${year}
+    input_dir=${HOME}/flash/data/GVS/deploy/predictions_GTiff_${year}
+    # output_dir=${HOME}/flash/data/GVS/deploy/predictions_${year}
 else
-    input_dir=${HOME}/data/GVS/Deploy/predictions_GTiff_${year}
-    # output_dir=${HOME}/data/GVS/Deploy/predictions_${year}
+    input_dir=${HOME}/data/GVS/deploy/predictions_GTiff_${year}
+    # output_dir=${HOME}/data/GVS/deploy/predictions_${year}
 fi
-output_dir=${HOME}/data/GVS/Deploy/predictions_${year}
+output_dir=${HOME}/data/GVS/deploy/predictions_${year}
 
-# config_dir=${HOME}/data/GVS/Deploy/slurm_job_files
+# config_dir=${HOME}/data/GVS/deploy/slurm_job_files
 # tile_id_file=${config_dir}/deploy_s2_items_${year}_part${part}.txt
 ## Check if processed before submitting job
-if [ $line_num -eq 0 ]; then
-    tile_id=$1
-else
-    tile_id=$(sed -n "${line_num}p" "$tile_id_file")
-fi
+line=$(sed -n "${line_num}p" $tile_id_file)
+IFS=',' read -r tile_id idx <<< "$line"
+echo "Line $line_num: Tile=$tile_id, idx=$idx"
 echo "Processing tile ID: $tile_id, line $line_num from $tile_id_file"
 
 
 
-if [ -f "${HOME}/data/GVS/Deploy/flags_translate_${year}/${tile_id}_done" ]; then
+if [ -f "${HOME}/data/GVS/deploy/flags_translate_${year}/${tile_id}_done" ]; then
     echo "Tile $tile_id already translated, skip"
     exit 0
 fi
 
-inference_flag_new="${HOME}/data/GVS/Deploy/flags_inference_${year}/${tile_id}_best_images_done"
-translate_flag_new="${HOME}/data/GVS/Deploy/flags_translate_${year}/${tile_id}_best_images_done"
+inference_flag_new="${HOME}/data/GVS/deploy/flags_inference_${year}/${tile_id}_best_images_done"
+translate_flag_new="${HOME}/data/GVS/deploy/flags_translate_${year}/${tile_id}_best_images_done"
 if [ -f "$translate_flag_new" ]; then
     file_count=$(ls ${output_dir}/${tile_id}_cog/*.cog.tif | wc -l)
     if [ $file_count -lt 303 ]; then
@@ -109,22 +107,22 @@ fi
 #         echo "Delete local data..."
 #         rm -rf ${output_dir}/${tile_id}_cog
 #         echo "Delete local data completed."
-#         touch ${HOME}/data/GVS/Deploy/sync_flags_${year}/${tile_id}_best_images_done
+#         touch ${HOME}/data/GVS/deploy/sync_flags_${year}/${tile_id}_best_images_done
 #     fi
 #     echo "***************************** END SYNC *****************************"
 # fi
 
 
 
-# tile_id_file=${HOME}/data/GVS/Deploy/lumi_job_files/deploy_s2_items_${year}_part${part}.txt
+# tile_id_file=${HOME}/data/GVS/deploy/lumi_job_files/deploy_s2_items_${year}_part${part}.txt
 # echo "Stream tiles listed in $tile_id_file"
 # # Get tile ID from line number specified by SLURM array task ID
 # while true; do
 #     while IFS= read -r tile_id; do
-#         inference_flag="${HOME}/data/GVS/Deploy/inference_flags_${year}/${tile_id}_done"
-#         inference_flag_new="${HOME}/data/GVS/Deploy/inference_flags_${year}/${tile_id}_best_images_done"
-#         translate_flag="${HOME}/data/GVS/Deploy/translate_flags_${year}/${tile_id}_done"
-#         translate_flag_new="${HOME}/data/GVS/Deploy/translate_flags_${year}/${tile_id}_best_images_done"
+#         inference_flag="${HOME}/data/GVS/deploy/inference_flags_${year}/${tile_id}_done"
+#         inference_flag_new="${HOME}/data/GVS/deploy/inference_flags_${year}/${tile_id}_best_images_done"
+#         translate_flag="${HOME}/data/GVS/deploy/translate_flags_${year}/${tile_id}_done"
+#         translate_flag_new="${HOME}/data/GVS/deploy/translate_flags_${year}/${tile_id}_best_images_done"
 #         if [ -f "$inference_flag" || -f "$inference_flag_new" ] && [ ! -f "$translate_flag" && ! -f "$translate_flag_new" ]; then
 #             echo "***************************** START TRANSLATE *****************************"
 #             echo Translate predictions for tile $tile_id in year $year;
@@ -155,7 +153,7 @@ fi
 #                 echo "Delete local data..."
 #                 rm -rf ${output_dir}/${tile_id}_cog
 #                 echo "Delete local data completed."
-#                 touch ${HOME}/data/GVS/Deploy/sync_flags_${year}/${tile_id}_best_images_done
+#                 touch ${HOME}/data/GVS/deploy/sync_flags_${year}/${tile_id}_best_images_done
 #             fi
 #             echo "***************************** END SYNC *****************************"
 #         fi

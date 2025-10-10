@@ -49,7 +49,7 @@ def correct_s2_tile_prediction(h5_fp: str, mgrs_tiles: str, s2_fp: str, s2_tiles
         lon = df_tile['lon'].values
         lat = df_tile['lat'].values
         
-        pred_fp = Path(f'~/data/GVS/Deploy/predictions_2020/{tile_id}_cog/RH{rh_idx}_Q{q_idx}.cog.tif').expanduser()
+        pred_fp = Path(f'~/data/gvs/deploy/predictions_2020/{tile_id}_cog/RH{rh_idx}_Q{q_idx}.cog.tif').expanduser()
         with rasterio.open(pred_fp) as src:
             xs, ys = transform('EPSG:4326', src.crs, lon, lat)
             coords = list(zip(xs, ys))
@@ -63,7 +63,7 @@ def correct_s2_tile_prediction(h5_fp: str, mgrs_tiles: str, s2_fp: str, s2_tiles
         rhs = rhs[mask]
         a, b = get_scale_and_shift(pred, rhs*10) # in decimeters
         print(f'scale: {a}, shift: {b}')
-        correct_fp = Path(f'~/data/GVS/Deploy/predictions_corrected_2020/{tile_id}_cog/RH{rh_idx}_Q{q_idx}_corrected.cog.tif').expanduser()
+        correct_fp = Path(f'~/data/gvs/deploy/predictions_corrected_2020/{tile_id}_cog/RH{rh_idx}_Q{q_idx}_corrected.cog.tif').expanduser()
         correct_fp.parent.mkdir(parents=True, exist_ok=True)
         with rasterio.open(correct_fp, 'w', **profile) as dst:
             with rasterio.open(pred_fp) as src:
@@ -109,10 +109,10 @@ def agg_gedi_to_s2(gedi_fps: str, s2_fp: str, output_dir: str):
 
 @dataclass
 class AggGediToS2:
-    gedi_fps: str = '~/data/GVS/train_subsets/train*_filtered_v1.parquet'
-    s2_fp: str = '~/data/GVS/S2_tiles_with_growing_months.parquet'
-    output_dir: str = '~/data/GVS/train_gedi_agg_by_s2/'
-    h5_fp: str = '~/data/GVS/train.h5'
+    gedi_fps: str = '~/data/gvs/train_subsets/train*_filtered_v1.parquet'
+    s2_fp: str = '~/data/gvs/s2_tiles_with_growing_months.parquet'
+    output_dir: str = '~/data/gvs/gedi_with_biome_slope_s2_tile_train_partitions/'
+    h5_fp: str = '~/data/gvs/data_train.h5'
     mgrs_tiles: str = '20M,21M,20L,21L'
     s2_tiles: str = '20MRS,21MTM,20LRR,21LTL'
 

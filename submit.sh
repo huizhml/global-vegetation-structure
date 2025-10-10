@@ -18,7 +18,7 @@ echo "Number of tasks: $SLURM_NTASKS"
 echo "Time requested: $SLURM_TIMELIMIT"
 scontrol show job $SLURM_JOB_ID | grep "TRES="
 
-data_dir=${HOME}/data/GVS
+data_dir=${HOME}/data/gvs
 
 id=$1
 echo running job $id;
@@ -46,10 +46,10 @@ echo split training data index into $nsplit subsets, and converting to beton usi
 input_dir=$data_dir
 # if hostname | grep -q "hendrix"; then
 #         echo "Running on Hendrix"
-#         if [ ! -f /scratch/train.h5 ]; then
-#                 rsync -av --progress $data_dir/train.h5 /scratch/
+#         if [ ! -f /scratch/data_train.h5 ]; then
+#                 rsync -av --progress $data_dir/data_train.h5 /scratch/
 #         else
-#                 echo "train.h5 already exists in /scratch"
+#                 echo "data_train.h5 already exists in /scratch"
 #         fi
 #         input_dir=/scratch
 # else
@@ -65,22 +65,22 @@ echo "Number is $number"
 #         if [[ " ${host_list[@]} " =~ " $number " ]]; then
 #                 echo "node $number has scratch folder"
 #                 input_dir=/scratch
-#                 rsync -av --progress ${HOME}/data/GVS/cal.h5 $input_dir/cal.h5
+#                 rsync -av --progress ${HOME}/data/gvs/data_cal.h5 $input_dir/data_cal.h5
                 
 #         else
 #                 echo "node $number does not have scratch folder"
-#                 input_dir=${HOME}/data/GVS
+#                 input_dir=${HOME}/data/gvs
 #         fi
 #         fi
-input_dir=${HOME}/data/GVS
+input_dir=${HOME}/data/gvs
 
 # python -m datasets._4_convert_to_beton nsplit=$nsplit split_idx=$idx \
-#         h5_file=$input_dir/train.h5 out_idx_dir=$data_dir/index_table_train_subsets \
+#         h5_file=$input_dir/data_train.h5 out_idx_dir=$data_dir/index_table_train_subsets \
 #         index_table=$data_dir/split_test0.1_cal0.1_val0.1_seed42_v1/index_table_train \
 #         shuffle_indices=True +debug=$debug version=$3
 
 python -m datasets._4_convert_to_beton \
-        h5_file=$input_dir/test.h5 \
+        h5_file=$input_dir/data_test.h5 \
         index_table=$data_dir/split_test0.1_cal0.1_val0.1_seed42_v1/index_table_test \
         shuffle_indices=False +debug=$debug version=1 +create_subset=False
 ;;
@@ -117,21 +117,21 @@ python -m datasets._6_visual_check task=aggregate_gedi_by_biome beton_fps=${data
 10)
 year=2020
 echo download inference data for $year by api query;
-python -m download._5_download_inference task=download_by_api_query year=$year specified_tiles_file=~/data/GVS/Deploy/tiles_without_images_$year.txt;;
+python -m download._5_download_inference task=download_by_api_query year=$year specified_tiles_file=~/data/gvs/deploy/tiles_without_images_$year.txt;;
 11)
 year=2020
 echo download inference data for $year by metadata;
-python -m download._5_download_inference task=download year=$year job_id=0 specified_tiles_file=~/data/GVS/Deploy/tiles_without_images_$year.txt;;
+python -m download._5_download_inference task=download year=$year job_id=0 specified_tiles_file=~/data/gvs/deploy/tiles_without_images_$year.txt;;
 12)
 year=${2:-2020}
 echo schedule slurm jobs, i.e, split tiles, for $year;
-python -m deploy.schedule_tasks year=$year parquet_dir=~/data/GVS/Deploy/slurm_job_files_${year} save_dir=~/data/GVS/Deploy/slurm_job_files_${year}
+python -m deploy.schedule_tasks year=$year parquet_dir=~/data/gvs/deploy/slurm_job_files_${year} save_dir=~/data/gvs/deploy/slurm_job_files_${year}
 ;;
 13)
 year=${2:-2020}
-ref_data_dir=${HOME}/data/GVS/GEDI_for_correction/partitions_${year}_v1
-sota_chm_dir=${HOME}/data/GVS/GEDI_for_correction/partitions_with_sota_chm_${year}_v1
-save_dir=${HOME}/data/GVS/Deploy/correction_${year}
+ref_data_dir=${HOME}/data/gvs/GEDI_for_correction/partitions_${year}_v1
+sota_chm_dir=${HOME}/data/gvs/GEDI_for_correction/partitions_with_sota_chm_${year}_v1
+save_dir=${HOME}/data/gvs/deploy/correction_${year}
 if [ ! -f ${save_dir}/tiles_${year}.txt ]; then
     echo "gather all tiles with GEDI reference data (for correction)"
     find $ref_data_dir -maxdepth 1 -name '*.parquet' -printf '%f\n' | sed 's/\.parquet$//' > ${save_dir}/tiles_${year}.txt
@@ -142,7 +142,7 @@ split -n l/8 --numeric-suffixes=1 --suffix-length=1 --additional-suffix=.txt ${s
 echo compare the performance of linear and bias correction;
 python -m postprocess.handle_border_artifacts year=$year \
         ref_data_dir=${ref_data_dir} \
-        prediction_dir=${HOME}/data/GVS/Deploy/predictions_${year} \
+        prediction_dir=${HOME}/data/gvs/deploy/predictions_${year} \
         tiles_list_file=${save_dir}/nan_tiles_${year}_part${SLURM_ARRAY_TASK_ID}.txt \
         correction_result_dir=${save_dir} \
         task=check_correction_performance
@@ -151,8 +151,8 @@ python -m postprocess.handle_border_artifacts year=$year \
 14)
 echo download sota chm data for correction set 2020;
 python -m download._7_download_sota_chm \
-        location_files="${HOME}/data/GVS/GEDI_for_correction/partitions_2020_v1/*.parquet" \
-        output_dir="${HOME}/data/GVS/GEDI_for_correction/partitions_with_sota_chm_2020_v1"
+        location_files="${HOME}/data/gvs/GEDI_for_correction/partitions_2020_v1/*.parquet" \
+        output_dir="${HOME}/data/gvs/GEDI_for_correction/partitions_with_sota_chm_2020_v1"
 ;;
 *)
 echo runnning nothing ;;

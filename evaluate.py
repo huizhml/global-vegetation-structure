@@ -18,6 +18,7 @@ import requests
 from io import StringIO
 from shapely.geometry import shape
 import json
+import geopandas as gpd
 from download._utils import authenticate  
 # import geemap
 # geemap.df_to_ee
@@ -38,7 +39,7 @@ def sample_canopy_height(partition):
         print(partition)
         return
     zone = partition.path.iloc[0].split('/')[1]
-    file = f'~/data/GVS/evaluation/existing_canopy_height_pred_val/{zone}.parquet'
+    file = f'~/data/gvs/evaluation/existing_canopy_height_pred_test/{zone}.parquet'
     file = Path(file).expanduser()
     print(f'Processing {zone}', file.exists())
     if file.exists():
@@ -119,7 +120,7 @@ def sample_canopy_height(partition):
         df2s['RH95_META'] = pd.NA
     partition.loc[df1s.index, ['RH95_UMD','RH98_ETH']] = df1s[['RH95_UMD','RH98_ETH']]
     partition.loc[df2s.index, ['RH100_UM','RH95_META']] = df2s[['RH100_UM','RH95_META']]
-    partition = partition.drop(columns=['geometry'])
+    # partition = partition.drop(columns=['geometry'])
     partition.to_parquet(file)
 
 
@@ -230,6 +231,32 @@ def compare_result_precision(run_id, corrected=False):
     comp_dfs.to_csv(f'output/evaluation/compare_round_precision_val_{run_id}{suffix}.csv')
         
 
+def compare_with_sota_maps_eu(sota_chm_dir, pred_df_fp: str, countries_file: str=None):
+    from utils import get_geom_for_countries
+    countries_df = get_geom_for_countries(countries_file)
+    
+    sota_chm_df_fp = Path(sota_chm_dir).expanduser()
+    sota_chm_df = dgp.read_parquet(sota_chm_df_fp, gather_spatial_partitions=False)
+    sota_chm_df = sota_chm_df.compute()
+    sota_chm_df = sota_chm_df[sota_chm_df.intersects(countries_df.union_all())]
+    
+    pred_df_fp = Path(pred_df_fp).expanduser()
+    pred_df = pd.read_parquet(pred_df_fp, columns=['RH95_1', 'RH98_1', 'RH100_1', 'RH95_GEDI', 'RH98_GEDI', 'RH100_GEDI', 'slope_mask', 'veg_mask', 'wc', 'slope', 'lon', 'lat', 'BIOME'])
+    pred_df[['lat', 'lon']] = pred_df[['lat', 'lon']].astype(float)
+    pred_df = gpd.GeoDataFrame(pred_df, geometry=gpd.points_from_xy(pred_df.lon, pred_df.lat, crs="EPSG:4326"))
+    pred_df = pred_df[pred_df.intersects(countries_df.union_all())]
+    
+    import ipdb; ipdb.set_trace()
+    pred_df = pred_df.sjoin(sota_chm_df, how='left', predicate='intersects')
+    import ipdb; ipdb.set_trace()
+    comp_dfs = []
+    for product, name in [('RH95_1', 'RH95_GEDI'), ('RH98_1', 'RH98_GEDI'), ('RH100_1', 'RH100_GEDI')]:
+        rmse = ((pred_df[product] - pred_df[name])**2).mean()**0.5
+        mae = (pred_df[product] - pred_df[name]).abs().mean()
+        me = (pred_df[product] - pred_df[name]).mean()
+        df = pd.DataFrame({'RMSE': rmse, 'MAE': mae, 'ME': me}, index=[product])
+        comp_dfs.append(df)
+
 def compare_with_sota_maps(sota_chm_df_fp, run_id, corrected=False):
     # df_dir = Path(df_dir).expanduser()
 
@@ -268,9 +295,52 @@ def compare_with_sota_maps(sota_chm_df_fp, run_id, corrected=False):
     comp_dfs.to_csv(f'output/evaluation/comparison_metrics_{run_id}{suffix}.csv')
 
 
+
+class Evaluation:
+    """
+    Evaluation class for comparing the performance of the model with the sota maps.
+    Parameters:
+        sota_chm_df_fp: Path to the sota maps dataframe
+        run_id: Run id of the model
+        corrected: Whether the model is corrected
+    """
+    def __init__(self, sota_chm_df_fp, run_id, corrected):
+        self.sota_chm_df_fp = Path(sota_chm_df_fp).expanduser()
+        self.run_id = run_id
+        self.corrected = corrected
+        self.sota_chm_df = pd.read_parquet(self.sota_chm_df_fp)
+        self.ddf_ours = pd.read_parquet(f'output/canopy_height_predictions_{self.run_id}{self.corrected}.parquet')
+        self.ddf_ours = self.ddf_ours.rename(columns=lambda x: x+'_ours' if x.startswith('RH') and '_' not in x else x)
+
+    def extract_pred_from_big_tile(self, tile_id):
+        """
+        Extract the predictions from the big tile prediction.
+        Parameters:
+            tile_id: Tile id of the big tile
+        """
+        sota_chm_df = gpd.read_parquet(self.sota_chm_dir / f'{tile_id}.parquet')
+        lon = sota_chm_df.geometry.x.values
+        lat = sota_chm_df.geometry.y.values
+        preds = []
+        for rh_idx in [95, 98, 100]:
+            pred_fp = Path(f'~/data/gvs/deploy/predictions_2020/{tile_id}_cog/RH{rh_idx}_Q1.cog.tif').expanduser()
+            with rasterio.open(pred_fp) as src:
+                xs, ys = transform('EPSG:4326', src.crs, lon, lat)
+                coords = list(zip(xs, ys))
+                rhs = list(rasterio.sample.sample_gen(src, coords))
+                preds.append(np.concatenate(rhs, axis=0)[:, None])
+                nodata = src.nodata
+        preds = np.concatenate(preds, axis=1) # (n_points, 3)
+        
+        # add uncorrected predictions to sota_chm_df
+        sota_chm_df[['RH95_ours_raw', 'RH98_ours_raw', 'RH100_ours_raw']] = preds
+        
+        # add corrected predictions to sota_chm_df
+
+
 @dataclass
 class MyConfig:
-    sota_chm_df_fp: str = '~/data/GVS/evaluation/sota_chm_val_with_gedi_biome.parquet'
+    sota_chm_df_fp: str = '~/data/gvs/evaluation/sota_chm_val_with_gedi_biome.parquet'
     run_id: str = ''
     data_name: str = 'test'
     output_dir: str = 'output'
@@ -283,34 +353,43 @@ cs.store(name="my_config", node=MyConfig)
 
 @hydra.main(config_name="my_config", version_base="1.2")
 def main(cfg):
-    # compare_result_precision(cfg.run_id, cfg.corrected)
+    if cfg.task == 'compare_result_precision':
+        compare_result_precision(cfg.run_id, cfg.corrected)
+    elif cfg.task == 'add_biome':
+        add_biome(val_df_fp=f'~/data/gvs/train_subsets/{cfg.data_name}_filtered_v1.parquet', cal_pred_fp=cal_pred_fp)
+    elif cfg.task == 'compare_with_sota_maps':
+        compare_with_sota_maps(cfg.sota_chm_df_fp, cfg.run_id, cfg.corrected)
+    elif cfg.task == 'compare_with_sota_maps_eu':
+        compare_with_sota_maps_eu(cfg.sota_chm_df_fp, cfg.pred_df_fp, cfg.countries_file)
+
     # add biome for sota maps
-    # add_biome(val_df_fp='~/data/GVS/train_subsets/val_filtered_v1.parquet', sota_chm_df_dir='~/data/GVS/evaluation/existing_canopy_height_pred_val_with_gedi')
+    # add_biome(val_df_fp='~/data/gvs/train_subsets/val_filtered_v1.parquet', sota_chm_df_dir='~/data/gvs/evaluation/existing_canopy_height_pred_val_with_gedi')
     # add biome for cal/test predictions
-    cal_pred_fp = f'~/data/GVS/uncertainty/canopy_height_predictions_{cfg.run_id}_corrected.parquet'
-    add_biome(val_df_fp=f'~/data/GVS/train_subsets/{cfg.data_name}_filtered_v1.parquet', cal_pred_fp=cal_pred_fp)
+    cal_pred_fp = f'~/data/gvs/uncertainty/canopy_height_predictions_{cfg.run_id}_corrected.parquet'
+    add_biome(val_df_fp=f'~/data/gvs/train_subsets/{cfg.data_name}_filtered_v1.parquet', cal_pred_fp=cal_pred_fp)
 
 if __name__ == '__main__':
-    from dask.distributed import Client, LocalCluster
-    cluster = LocalCluster(n_workers=8, dashboard_address=':38787')
-    client = Client(cluster)
+    # from dask.distributed import Client, LocalCluster
+    # cluster = LocalCluster(n_workers=8, dashboard_address=':38787')
+    # client = Client(cluster)
 
-    index_dir = '~/data/GVS/split_test0.1_cal0.1_val0.1_seed42_v1/index_table_val'
-    save_dir = '~/data/GVS/evaluation/existing_canopy_height_pred_val'
+    index_dir = '~/data/gvs/split_test0.1_cal0.1_val0.1_seed42_v1/index_table_test'
+    save_dir = '~/data/gvs/evaluation/existing_canopy_height_pred_test'
     canopy_height_eth = ee.Image('users/nlang/ETH_GlobalCanopyHeight_2020_10m_v1').rename('RH98_ETH')
     canopy_height_umd = ee.ImageCollection("users/potapovpeter/GEDI_V27")
     canopy_height_meta = ee.ImageCollection("projects/meta-forest-monitoring-okw37/assets/CanopyHeight")
     canopy_height_um = ee.ImageCollection('projects/worldwidemap/assets/canopyheight2020')
 
     # sample_canopy_height_maps(index_dir, save_dir)
-    h5_dir = '~/data/GVS/split_test0.1_cal0.1_val0.1_seed42_v1/val_h5s'
+    compare_with_sota_maps_eu(save_dir, '~/data/gvs/uncertainty/rh_predictions_test.parquet', '~/data/gvs/deploy/EU_results/countries_list.txt')
+    h5_dir = '~/data/gvs/split_test0.1_cal0.1_val0.1_seed42_v1/h5_partitions_val'
     # get_gedi_rhs(h5_dir, save_dir)
-    # for file in Path('~/data/GVS/evaluation/existing_canopy_height_pred_val_with_gedi').expanduser().glob('*.parquet'):
+    # for file in Path('~/data/gvs/evaluation/existing_canopy_height_pred_val_with_gedi').expanduser().glob('*.parquet'):
     #     df = pd.read_parquet(file)
     #     zone = file.stem
     #     if 'RH95_UMD' not in df.columns:
     #         try:
-    #             file2 = Path(f'~/data/GVS/evaluation/existing_canopy_height_pred_val/{zone}.parquet').expanduser()
+    #             file2 = Path(f'~/data/gvs/evaluation/existing_canopy_height_pred_val/{zone}.parquet').expanduser()
     #             df_ = pd.read_parquet(file2)
     #             df.loc[:, 'RH95_UMD'] = df_['RH95_UMD']
     #             df.to_parquet(file)
@@ -319,6 +398,6 @@ if __name__ == '__main__':
     #             os.remove(file2)
     #             os.remove(file)
         
-    main()
+    # main()
 
     

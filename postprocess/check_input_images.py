@@ -44,7 +44,7 @@ def check_duplicated_images():
             print(f'Checking year {year} part {part_idx}')
             cnt = 0
             tiles_need_redownload = []    
-            s2_geoparq_file = Path(f'~/data/GVS/Deploy/deploy_s2_items_{year}_part{part_idx}.parquet').expanduser()
+            s2_geoparq_file = Path(f'~/data/gvs/deploy/deploy_s2_items_{year}_part{part_idx}.parquet').expanduser()
             s2_df = gpd.read_parquet(s2_geoparq_file)
             unique_tiles = s2_df['s2:mgrs_tile'].unique()
             for tile_id in unique_tiles:
@@ -55,13 +55,13 @@ def check_duplicated_images():
                     tiles_need_redownload.append(tile_id)
             print(f'Total duplicated images in year {year} part {part_idx}: {cnt}/{len(unique_tiles)}')
             tiles_unique_images = s2_df[~s2_df['s2:mgrs_tile'].isin(tiles_need_redownload)]
-            tiles_unique_images.to_parquet(f'~/data/GVS/Deploy/s2_deploy_items_{year}_part{part_idx}_unique_images.parquet')
+            tiles_unique_images.to_parquet(f'~/data/gvs/deploy/s2_deploy_items_{year}_part{part_idx}_unique_images.parquet')
             tiles_duplicated_images.append(s2_df[s2_df['s2:mgrs_tile'].isin(tiles_need_redownload)])
             total_cnt += cnt
         tiles_duplicated_images = pd.concat(tiles_duplicated_images)
         tiles_duplicated_images['growing_months'] = tiles_duplicated_images['growing_months'].apply(normalize_to_list)
         tiles_duplicated_images.drop_duplicates(subset=['id'], inplace=True)
-        tiles_duplicated_images.to_parquet(f'~/data/GVS/Deploy/s2_deploy_items_{year}_part{part_idx+1}_unique_images.parquet')
+        tiles_duplicated_images.to_parquet(f'~/data/gvs/deploy/s2_deploy_items_{year}_part{part_idx+1}_unique_images.parquet')
         print(f'Total duplicated tiles in year {year}: {total_cnt}')
 
 def check_images_order():
@@ -69,7 +69,7 @@ def check_images_order():
         for part_idx in range(22):
             not_ordered_tiles = []
             print(f'Checking year {year} part {part_idx}')
-            s2_geoparq_file = Path(f'~/data/GVS/Deploy/s2_deploy_items_{year}_part{part_idx}_unique_images.parquet').expanduser()
+            s2_geoparq_file = Path(f'~/data/gvs/deploy/s2_deploy_items_{year}_part{part_idx}_unique_images.parquet').expanduser()
             s2_df = gpd.read_parquet(s2_geoparq_file)
             unique_tiles = s2_df['s2:mgrs_tile'].unique()
             for tile_id in unique_tiles:
@@ -85,7 +85,7 @@ def check_n_images_per_tile():
     for year in [2020, 2024]:
         for part_idx in range(22):
             print(f'Checking year {year} part {part_idx}')
-            s2_geoparq_file = Path(f'~/data/GVS/Deploy/deploy_s2_items_{year}_part{part_idx}_unique_images.parquet').expanduser()
+            s2_geoparq_file = Path(f'~/data/gvs/deploy/deploy_s2_items_{year}_part{part_idx}_unique_images.parquet').expanduser()
             s2_df = gpd.read_parquet(s2_geoparq_file)
             df = s2_df.groupby('s2:mgrs_tile').size().reset_index(name='n_images')
             import ipdb; ipdb.set_trace()
@@ -97,9 +97,9 @@ def check_n_images_per_tile():
 
 
 def convert_rgb_to_geotiff(year, tile_id):
-    ds = xr.open_zarr(f'~/data/GVS/Deploy/inference_{year}.zarr', group=tile_id)
+    ds = xr.open_zarr(f'~/data/gvs/deploy/inference_{year}.zarr', group=tile_id)
     rgb = ds.s2.sel(band=['B04', 'B03', 'B02'])
-    save_dir = Path(f'~/data/GVS/debug/').expanduser()
+    save_dir = Path(f'~/data/gvs/debug/').expanduser()
     save_dir.mkdir(parents=True, exist_ok=True)
     for time in rgb.time:
         img = rgb.sel(time=time)
@@ -111,11 +111,11 @@ def check_image_statistics(tile_ids, year, plot_type='bar'):
     '''
     There're systematic shifts in predictions (RH98 checked), so we check the input images here.
     '''
-    file_path = Path(f'~/data/GVS/Deploy/check_input_images_{year}/stats_{'_'.join(tile_ids)}.csv').expanduser()
+    file_path = Path(f'~/data/gvs/deploy/check_input_images_{year}/stats_{'_'.join(tile_ids)}.csv').expanduser()
     if file_path.exists():
         stats = {'tile_id': [],'date': [], 'band': [],'mean': [], 'std': [], 'min': [], 'max': []}
         for tile_id, (col_offset, row_offset, patch_size) in tile_ids.items():
-            ds = xr.open_zarr(f'~/data/GVS/Deploy/inference_{year}.zarr', group=tile_id)
+            ds = xr.open_zarr(f'~/data/gvs/deploy/inference_{year}.zarr', group=tile_id)
             for time in ds.s2.time:
                 img = ds.s2.sel(time=time).isel(x=slice(col_offset, col_offset+patch_size), y=slice(row_offset, row_offset+patch_size)).compute()
                 scl = img.sel(band=['SCL'])
@@ -191,12 +191,12 @@ def visualize_image_statistics(stats_fp, plot_type='bar'):
 
 def check_intermediate_preds(tile_ids, year):
     import matplotlib.pyplot as plt
-    out_file = Path(f'~/data/GVS/Deploy/check_input_images_{year}/intermediate_preds_{'_'.join(tile_ids.keys())}.csv').expanduser()
+    out_file = Path(f'~/data/gvs/deploy/check_input_images_{year}/intermediate_preds_{'_'.join(tile_ids.keys())}.csv').expanduser()
     if out_file.exists():
         import rasterio
         stats = {'tile_id': [],'date': [], 'band': [],'mean': [], 'std': [], 'min': [], 'max': []}
         for tile_id, (col_offset, row_offset, patch_size) in tile_ids.items():
-            tile_pred_dir = Path(f'~/data/GVS/Deploy/predictions_GTiff_{year}_test/{tile_id}_GTiff').expanduser()
+            tile_pred_dir = Path(f'~/data/gvs/deploy/predictions_GTiff_{year}_test/{tile_id}_GTiff').expanduser()
             tif_paths = list(tile_pred_dir.glob('*.tif'))
             window = rasterio.windows.Window(col_offset, row_offset, patch_size, patch_size)
             for tif_path in tif_paths:
@@ -241,10 +241,10 @@ def check_intermediate_preds(tile_ids, year):
 
 @dataclass
 class MyConfig:
-    zarr_store_path: str = '~/data/GVS/Deploy/inference_2024.zarr'
+    zarr_store_path: str = '~/data/gvs/deploy/inference_2024.zarr'
     year: int = 2024
     tile_id: str = '20XNR'
-    output_dir: str = '~/data/GVS/Deploy/check_input_images_2024'
+    output_dir: str = '~/data/gvs/deploy/check_input_images_2024'
     
 cs = ConfigStore.instance()
 cs.store(name="check_input_images", node=MyConfig)

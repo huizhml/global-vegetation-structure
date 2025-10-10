@@ -27,7 +27,7 @@ def get_data(h5_file: str, naturalness_fp: str, use_full_profile: bool=False, s2
             x = f['rhs_median'][idx]
             if to_meter:
                 x = x / 100
-                return x, y, rowid
+                return x, y
             avg = x.mean(axis=(2,3))
             var = x.var(axis=(2,3))
             return np.concatenate([avg, var], axis=1), y
@@ -80,28 +80,39 @@ def run_rf(h5_file: str, naturalness_fp: str, use_full_profile: bool, s2_only: b
 def plot_mean_std(h5_file: str, naturalness_fp: str, rhs_only: bool=False, s2_only: bool=False, **kwargs):
     import matplotlib.pyplot as plt
     print('plotting mean and std of RH profile for each naturalness class')
-    x, y, rowid = get_data(h5_file, naturalness_fp, rhs_only=rhs_only, s2_only=s2_only, to_meter=True)
+    x, y = get_data(h5_file, naturalness_fp, rhs_only=rhs_only, s2_only=s2_only, to_meter=True)
     feature_size = x.shape[1]
     x = x.transpose(0, 2, 3, 1).reshape(-1, feature_size)
+    rowid = y.index
+    y = y.values
+    y = np.repeat(y, x.shape[0] // y.shape[0])
+    rowid = np.repeat(rowid, x.shape[0] // rowid.shape[0])
     name = 'RH' if rhs_only else 'S2'
     columns = [f'{name}_{i}' for i in range(feature_size)]
     df = pd.DataFrame(x, columns=columns)
-    import ipdb; ipdb.set_trace()
     df['rowid'] = rowid
     df['class_idx'] = y
     df = df.dropna(subset=['class_idx'])
-    import ipdb; ipdb.set_trace()
     df_avg = df.groupby('class_idx').mean()
     df_std = df.groupby('class_idx').std()
+    class_names = {
+        0: 'No forest',
+        11: 'Naturally regenerating forest without any signs of human activities',
+        20: 'Naturally regenerating forest with signs of human activities',
+        31: 'Planted forest.',
+        32: 'Short rotation plantations for timber.',
+        40: 'Oil palm plantations.',
+        53: 'Agroforestry.',
+    }
     
     for class_idx in df['class_idx'].unique():
         plt.figure(figsize=(10, 5))
-        plt.plot(range(feature_size), df_avg.loc[class_idx], label='Mean ' + name, linestyle='-', marker='o')
+        plt.plot(range(feature_size), df_avg.loc[class_idx, columns], label='Mean ' + name, linestyle='-', marker='o')
         plt.fill_between(range(feature_size), 
-                         df_avg.loc[class_idx] - df_std.loc[class_idx], 
-                         df_avg.loc[class_idx] + df_std.loc[class_idx], 
+                         df_avg.loc[class_idx, columns] - df_std.loc[class_idx, columns], 
+                         df_avg.loc[class_idx, columns] + df_std.loc[class_idx, columns], 
                          alpha=0.2, label='Std ' + name + ' Range')
-        plt.title(f'{name} Profile for Class {class_idx}')
+        plt.title(f'{name} Profile for Class {class_names[class_idx]}')
         plt.xlabel(name + ' Index')
         plt.ylabel('Value')
         plt.legend()
@@ -114,8 +125,8 @@ def plot_mean_std(h5_file: str, naturalness_fp: str, rhs_only: bool=False, s2_on
 
 @dataclass
 class RFConfig:
-    h5_file: str = '~/data/GVS/downstream_task_data/rhs_predictions_2017_0crmfaia_ps31.h5'
-    naturalness_fp: str = '~/data/GVS/downstream_task_data/naturalness/reference_data_set_updated.with_images.csv'
+    h5_file: str = '~/data/gvs/downstream_task_data/rhs_predictions_2017_0crmfaia_ps31.h5'
+    naturalness_fp: str = '~/data/gvs/downstream_task_data/naturalness/reference_data_set_updated.with_images.csv'
     use_full_profile: bool = True
     rhs_only: bool = False
     s2_only: bool = False

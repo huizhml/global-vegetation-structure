@@ -7,9 +7,8 @@ from torchsummary import summary
 from .modules.unet_blocks import UnetBlockDeep, CatResBlock, PassBlock, get_upscaler
 from .modules.util import CustomPixelShuffle_ICNR, icnr_init
 from utils import get_class
-from ._base_pl_model import BaseModel
 
-class UNet(BaseModel):
+class UNet(nn.Module):
 
     @torch.no_grad()
     def __init__(self, 

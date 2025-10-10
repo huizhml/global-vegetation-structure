@@ -37,21 +37,21 @@ source setup_env.sh
 # line_num=${1:-0}
 line_num=${SLURM_ARRAY_TASK_ID:-0}
 tile_id_file=$1
-tile_id_file_num=${2:-0}
-year=${3:-2020}
+tile_id_file_num=${2:-15}
+year=${3:-2024}
 use_flash=${4:-False}
 echo "use_flash=$use_flash"
 if [ "$use_flash" == "True" ]; then
-    input_dir=${HOME}/flash/data/GVS/Deploy/inference_${year}
-    save_dir=${HOME}/flash/data/GVS/Deploy/predictions_GTiff_${year}
+    input_dir=${HOME}/flash/data/GVS/deploy/inference_${year}
+    save_dir=${HOME}/flash/data/GVS/deploy/predictions_GTiff_${year}
     download_data=True # Download data in inference pipeline
 else
-    input_dir=${HOME}/data/GVS/Deploy/inference_${year}
-    save_dir=${HOME}/data/GVS/Deploy/predictions_GTiff_${year}
+    input_dir=${HOME}/data/GVS/deploy/inference_${year}
+    save_dir=${HOME}/data/GVS/deploy/predictions_GTiff_${year}
     download_data=False
 fi
 
-config_dir=${HOME}/data/GVS/Deploy/slurm_job_files_${year}
+config_dir=${HOME}/data/GVS/deploy/slurm_job_files_${year}
 # tile_id_file=${config_dir}/deploy_s2_items_${year}_part${part}.txt
 ## Check if processed before submitting job
 # tile_id=$(sed -n "${line_num}p" "$tile_id_file")
@@ -68,12 +68,12 @@ fi
 echo "Processing tile ID: $tile_id, line $line_num from $tile_id_file"
 
 
-# if [ -f "${HOME}/data/GVS/Deploy/translate_flags_${year}/${tile_id}_done" ]; then
+# if [ -f "${HOME}/data/GVS/deploy/translate_flags_${year}/${tile_id}_done" ]; then
 #     echo "Tile $tile_id already translated, skip"
 #     exit 0
 # fi
 
-# translate_flag_new="${HOME}/data/GVS/Deploy/translate_flags_${year}/${tile_id}_best_images_done"  
+# translate_flag_new="${HOME}/data/GVS/deploy/translate_flags_${year}/${tile_id}_best_images_done"  
 # if [ -f "$translate_flag_new" ]; then
 #     echo "Translate flag file $translate_flag_new exists. Skipping tile $tile_id"
 #     exit 0
@@ -81,7 +81,7 @@ echo "Processing tile ID: $tile_id, line $line_num from $tile_id_file"
 # wait for input data being streamed for the first tile
 # Check if the h5 file is being used by another process
 h5_file="${input_dir}/${tile_id}.h5"
-stream_flag="${HOME}/data/GVS/Deploy/flags_stream_${year}/${tile_id}_best_images_done"
+stream_flag="${HOME}/data/GVS/deploy/flags_stream_${year}/${tile_id}_best_images_done"
 if [ ! -f "$stream_flag" ] && [ "$use_flash" == "False" ]; then
     echo "Failed: tile $tile_id doesn't exist" >&2
     exit 1
@@ -111,7 +111,7 @@ sync_to_lumi() {
     DST=${remote}${bucket_name}/predictions_GTiff_${year}/${tile_id}
     # e.g. remote="lumi-${lumi_project}-private:"  ← note the trailing colon
     rclone sync "$SRC" "$DST" --checksum  # --local-no-check-updated
-    # rclone sync ${HOME}/data/GVS/Deploy/predictions_${year}/${tile_id}_cog ${remote}${bucket_name}/predictions_${year}/${tile_id}_cog --local-no-check-updated
+    # rclone sync ${HOME}/data/GVS/deploy/predictions_${year}/${tile_id}_cog ${remote}${bucket_name}/predictions_${year}/${tile_id}_cog --local-no-check-updated
     count=$(rclone ls "${DST}" | wc -l)
     echo "Number of files in ${DST}: $count"
     if [ $count -lt 303 ]; then
@@ -153,7 +153,7 @@ if [ $exit_status -ne 0 ]; then
     fi
 else
     echo "Prediction command completed successfully"
-    touch ${HOME}/data/GVS/Deploy/flags_inference_${year}/${tile_id}_best_images_done
+    touch ${HOME}/data/GVS/deploy/flags_inference_${year}/${tile_id}_best_images_done
     echo "Delete input h5 file..."
     rm -f ${h5_file}
     sync_to_lumi
@@ -165,8 +165,8 @@ echo "***************************** END INFERENCE *****************************"
 # ===============================================================================================
 # if [ -z "$line_num" ]; then
 #     while IFS= read -r tile_id; do
-#         translate_flag="${HOME}/data/GVS/Deploy/translate_flags_${year}/${tile_id}_done" 
-#         translate_flag_new="${HOME}/data/GVS/Deploy/translate_flags_${year}/${tile_id}_best_images_done"  
+#         translate_flag="${HOME}/data/GVS/deploy/translate_flags_${year}/${tile_id}_done" 
+#         translate_flag_new="${HOME}/data/GVS/deploy/translate_flags_${year}/${tile_id}_best_images_done"  
 #         if [ -f "$translate_flag" ] || [ -f "$translate_flag_new" ]; then
 #             echo "Translate flag file $translate_flag or $translate_flag_new exists. Skipping tile $tile_id"
 #             continue
@@ -174,7 +174,7 @@ echo "***************************** END INFERENCE *****************************"
 #         # wait for input data being streamed for the first tile
 #         # Check if the h5 file is being used by another process
 #         h5_file="${input_dir}/${tile_id}.h5"
-#         stream_flag="${HOME}/data/GVS/Deploy/stream_flags_${year}/${tile_id}_best_images_done"
+#         stream_flag="${HOME}/data/GVS/deploy/stream_flags_${year}/${tile_id}_best_images_done"
 #         while [ ! -f "$stream_flag" ] && [ "$use_flash" == "False" ]; do
 #             echo "Tile $tile_id is still in streaming. Waiting for 60 seconds..."
 #             sleep 60
@@ -207,7 +207,7 @@ echo "***************************** END INFERENCE *****************************"
 #             rm -rf $save_dir/${tile_id}_GTiff
 #         else
 #             echo "Prediction command completed successfully"
-#             touch ${HOME}/data/GVS/Deploy/inference_flags_${year}/${tile_id}_best_images_done
+#             touch ${HOME}/data/GVS/deploy/inference_flags_${year}/${tile_id}_best_images_done
 #             echo "Delete input h5 file..."
 #             rm -f ${h5_file}
 #             rm -f ${stream_flag}
@@ -220,7 +220,7 @@ echo "***************************** END INFERENCE *****************************"
 # echo "***************************** SYNC DATA TO SCRATCH *****************************"
 # mkdir -p /scratch/${tile_id}
 # t0=$(date +%s)
-# data_dir="${HOME}/data/GVS/Deploy/inference_${year}.zarr"
+# data_dir="${HOME}/data/GVS/deploy/inference_${year}.zarr"
 # cd "${data_dir}"
 # TAR_FILE="${data_dir}/${tile_id}.tar"
 # if [ ! -f "${TAR_FILE}" ]; then
@@ -231,7 +231,7 @@ echo "***************************** END INFERENCE *****************************"
 #     tar xf "${TAR_FILE}" -C /scratch/
 # fi
 # cd ~/gvs
-# # rsync -a --stats ${HOME}/data/GVS/Deploy/inference_${year}.zarr/${tile_id} /scratch/
+# # rsync -a --stats ${HOME}/data/GVS/deploy/inference_${year}.zarr/${tile_id} /scratch/
 # t1=$(date +%s)
 # duration=$((t1-t0))
 # hours=$((duration / 3600))

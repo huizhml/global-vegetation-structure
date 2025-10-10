@@ -363,9 +363,9 @@ class S2Downloader(DaskDownloader):
 @dataclass
 class Config:
     task_name: str = ""  # The name of the task for which the data is being downloaded.
-    crowd_source_data_file: str = "~/data/GVS/downstream_task_data/naturalness/reference_data_set_updated.csv"  # Path to the CSV file containing crowd-sourced data.
-    output_dir: str = "~/data/GVS/downstream_task_data"  # Directory where the downloaded data will be saved.
-    s2_parquet: str = '~/data/GVS/S2_tiles_with_growing_months.parquet'  # Path to the Parquet file containing S2 tiles with growing months information.
+    crowd_source_data_file: str = "~/data/gvs/downstream_task_data/naturalness/reference_data_set_updated.csv"  # Path to the CSV file containing crowd-sourced data.
+    output_dir: str = "~/data/gvs/downstream_task_data"  # Directory where the downloaded data will be saved.
+    s2_parquet: str = '~/data/gvs/s2_tiles_with_growing_months.parquet'  # Path to the Parquet file containing S2 tiles with growing months information.
     wc_dem_meta_dir: str = '~/data/GEDI'
     n_parallel: int = 100
     maxCloudCover: int = 50
@@ -382,7 +382,7 @@ def main(cfg: DictConfig) -> None:
     downloader = S2Downloader(**cfg)
     # downloader.download(job_id=cfg.job_id)
     # downloader.merge_zarr_stores(zarr_paths=cfg.output_dir, output_path=f'{cfg.output_dir}/s2_{cfg.year}.zarr')
-    downloader.merge_h5s('~/data/GVS/downstream_task_data/s2_2017_part*.h5', '~/data/GVS/downstream_task_data/s2_2017_ps31.h5')
+    downloader.merge_h5s('~/data/gvs/downstream_task_data/s2_2017_part*.h5', '~/data/gvs/downstream_task_data/s2_2017_ps31.h5')
 
     
 if __name__ == "__main__":

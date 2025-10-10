@@ -45,8 +45,8 @@ def zarr_to_zip(zarr_path, zip_path, tile_id):
 
 if __name__ == '__main__':
     year = 2020
-    zarr_path = f'~/data/GVS/Deploy/inference_{year}.zarr'
-    h5_path = '~/data/GVS/Deploy/32MQE/32MQE.zip'
+    zarr_path = f'~/data/gvs/deploy/inference_{year}.zarr'
+    h5_path = '~/data/gvs/deploy/32MQE/32MQE.zip'
     tile_id = '32MQE'
     zarr_to_zip(zarr_path, h5_path, tile_id)
 

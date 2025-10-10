@@ -4,10 +4,10 @@ quantize_model: False
 data:
   class_path: datasets._zarr_dataset_deploy.DeployDataModel
   init_args: 
-    pred_fp: ~/data/GVS/Deploy/inference_2020.zarr 
+    pred_fp: ~/data/gvs/deploy/inference_2020.zarr 
     tile_id: 32MQE
     num_workers: 8
-    prediction_dir: ~/data/GVS/Deploy/2020/predictions
+    prediction_dir: ~/data/gvs/deploy/2020/predictions
     patch_size: 544
     input_lat_lon: True
 
