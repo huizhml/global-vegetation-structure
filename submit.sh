@@ -1,9 +1,9 @@
 #!/bin/bash
 ##SBATCH --account=project_465000894
 #SBATCH --partition=ml4good
-#SBATCH --cpus-per-task=32
-#SBATCH --mem=128GB
-#SBATCH --time=1-00:00:00
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=64GB
+#SBATCH --time=4-00:00:00
 #SBATCH --job-name=submit
 #SBATCH --output=./logs/%x-%A_%a.out
 #SBATCH --error=./logs/%x-%A_%a.err
@@ -129,7 +129,8 @@ python -m deploy.schedule_tasks year=$year parquet_dir=~/data/GVS/Deploy/slurm_j
 ;;
 13)
 year=${2:-2020}
-ref_data_dir=${HOME}/data/GVS/GEDI/GVS_correction_set_${year}
+ref_data_dir=${HOME}/data/GVS/GEDI_for_correction/partitions_${year}_v1
+sota_chm_dir=${HOME}/data/GVS/GEDI_for_correction/partitions_with_sota_chm_${year}_v1
 save_dir=${HOME}/data/GVS/Deploy/correction_${year}
 if [ ! -f ${save_dir}/tiles_${year}.txt ]; then
     echo "gather all tiles with GEDI reference data (for correction)"
@@ -142,9 +143,16 @@ echo compare the performance of linear and bias correction;
 python -m postprocess.handle_border_artifacts year=$year \
         ref_data_dir=${ref_data_dir} \
         prediction_dir=${HOME}/data/GVS/Deploy/predictions_${year} \
-        tiles_list_file=${save_dir}/tiles_${year}_part${SLURM_ARRAY_TASK_ID}.txt \
+        tiles_list_file=${save_dir}/nan_tiles_${year}_part${SLURM_ARRAY_TASK_ID}.txt \
         correction_result_dir=${save_dir} \
         task=check_correction_performance
+;;
+
+14)
+echo download sota chm data for correction set 2020;
+python -m download._7_download_sota_chm \
+        location_files="${HOME}/data/GVS/GEDI_for_correction/partitions_2020_v1/*.parquet" \
+        output_dir="${HOME}/data/GVS/GEDI_for_correction/partitions_with_sota_chm_2020_v1"
 ;;
 *)
 echo runnning nothing ;;
