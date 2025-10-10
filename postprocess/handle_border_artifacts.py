@@ -43,9 +43,11 @@ def get_gedi_from_h5(h5_fp: str, mgrs_tiles:str, s2_fp: str, s2_tiles:str):
     return df
 
 
-def check_correction_performance(ref_data_dir: str=None, year: int=None, prediction_dir: str=None, tiles_list_file: str=None, correction_result_dir: str=None, **kwargs):
+def check_correction_performance(
+        ref_data_dir: str = None, year: int = None, prediction_dir: str = None, tiles_list_file: str = None,
+        correction_result_dir: str = None, sota_chm_dir: str = None, sota_and_ours_dir: str = None, **kwargs):
     '''
-    Check the correction performance (RMSE, MAE and ME)
+    Check the correction performance (RMSE, MAE and ME) with GEDI reference data and sota chm
     Split the correction data into 2 parts:
     - Part 1: used for correction
     - Part 2: used for evaluation
@@ -54,6 +56,9 @@ def check_correction_performance(ref_data_dir: str=None, year: int=None, predict
     correction_result_dir.mkdir(parents=True, exist_ok=True)
     ref_data_dir = Path(f'{ref_data_dir}').expanduser()
     prediction_dir = Path(f'{prediction_dir}').expanduser()
+    sota_chm_dir = Path(f'{sota_chm_dir}').expanduser()
+    sota_and_ours_dir = Path(sota_and_ours_dir).expanduser()
+    sota_and_ours_dir.mkdir(parents=True, exist_ok=True)
     if tiles_list_file != '':
         with open(tiles_list_file, 'r') as f:
             all_tiles = f.read().splitlines()
@@ -71,13 +76,14 @@ def check_correction_performance(ref_data_dir: str=None, year: int=None, predict
     rh_size = 101
     
     @dask.delayed
-    def test_correction_for_one_tile(tile_id: str, min_n_points: int=200):
-        gedi_ref = gpd.read_parquet(ref_data_dir / f'{tile_id}.parquet')
-        if len(gedi_ref) <= min_n_points:
+    def test_correction_for_one_tile(tile_id: str, min_n_points: int = 200):
+        gedi_ref_df = gpd.read_parquet(ref_data_dir / f'{tile_id}.parquet')
+
+        if len(gedi_ref_df) <= min_n_points:
             print(f'{tile_id} has less than {min_n_points} points')
             return None, None, None
-        lon = gedi_ref.geometry.x.values
-        lat = gedi_ref.geometry.y.values
+        lon = gedi_ref_df.geometry.x.values
+        lat = gedi_ref_df.geometry.y.values
         preds = []
         for rh_idx in range(rh_size):
             pred_fp = Path(f'{prediction_dir}/{tile_id}_cog/RH{rh_idx}_Q1.cog.tif').expanduser()
@@ -86,35 +92,35 @@ def check_correction_performance(ref_data_dir: str=None, year: int=None, predict
                 coords = list(zip(xs, ys))
                 rh = list(rasterio.sample.sample_gen(src, coords))
                 pred = np.concatenate(rh, axis=0).reshape(-1, 1)
-                preds.append(pred) # (n_points, 1)
+                preds.append(pred)  # (n_points, 1)
                 nodata = src.nodata
-        
-        preds = np.concatenate(preds, axis=1) # (n_points, rh_size)
+
+        preds = np.concatenate(preds, axis=1)  # (n_points, rh_size)
         # mask nodata (non-vegetation) for pred and ref
         mask = (preds == nodata).any(axis=1)
         preds = preds[~mask]
         preds = preds.astype(np.float32)
-        if preds.shape[0] == 0:
-            print(f'No valid data for {tile_id}')
-            return None, None, None
         rh_cols = [f'rh{i}' for i in range(rh_size)]
-        gedi_ref = gedi_ref[rh_cols].values
+        gedi_ref = gedi_ref_df[rh_cols].values
         gedi_ref = gedi_ref[~mask]
         if len(gedi_ref) <= min_n_points:
             print(f'{tile_id} has less than {min_n_points} valid (not nodata) points')
             return None, None, None
+
         # split data into correct and eval
         n = gedi_ref.shape[0]
         idx = np.random.permutation(gedi_ref.shape[0])
         correct_idx = idx[:int(n*0.5)]
         eval_idx = idx[int(n*0.5):]
-        
+
         correct_true = gedi_ref[correct_idx]
         correct_pred = preds[correct_idx]
         eval_true = gedi_ref[eval_idx]
         eval_pred = preds[eval_idx]
         # apply linear fit for all rhs
-        a, b = get_scale_and_shift(correct_pred, correct_true*10) # in decimeters
+        a, b = get_scale_and_shift(correct_pred, correct_true*10)  # in decimeters
+
+        # verify the linear fit
         # print(f'scale: {a}, shift: {b}')
         # coef_list = []
         # intercept_list = []
@@ -127,17 +133,35 @@ def check_correction_performance(ref_data_dir: str=None, year: int=None, predict
         # print(f'scale: {coef_list}, shift: {intercept_list}')
         # np.isclose(a, coef_list) # True every where
         # np.isclose(b, intercept_list) # True every where
-        
-        eval_pred_linear_corrected = a * eval_pred + b # in decimeters
-        residuals_linear_corrected = eval_pred_linear_corrected.round()/10 - eval_true # (n_points, rh_size) # In meters
-        
+
+        eval_pred_linear_corrected = (a * eval_pred + b).round()  # in decimeters
+        residuals_linear_corrected = eval_pred_linear_corrected/10 - eval_true  # (n_points, rh_size) # In meters
+
         # apply bias correction for all rhs
-        bias = (correct_true*10 - correct_pred).mean(axis=0) # >0 means under-estimation, <0 means over-estimation
-        eval_pred_bias_corrected = eval_pred + bias
-        residuals_bias_corrected = eval_pred_bias_corrected.round()/10 - eval_true # (n_points, rh_size)
-        
+        bias = (correct_true*10 - correct_pred).mean(axis=0)  # >0 means under-estimation, <0 means over-estimation
+        eval_pred_bias_corrected = (eval_pred + bias).round()
+        residuals_bias_corrected = eval_pred_bias_corrected/10 - eval_true  # (n_points, rh_size)
+
         # raw residuals
-        residuals = eval_pred/10 - eval_true # (n_points, rh_size) # In meters
+        residuals = eval_pred/10 - eval_true  # (n_points, rh_size) # In meters
+
+        # add sota chm residuals
+        sota_chm_df = gpd.read_parquet(sota_chm_dir / f'{tile_id}.parquet')
+        assert (sota_chm_df['rh95'] == gedi_ref_df['rh95']).all(), 'index mismatch'
+
+        sota_chm_df = sota_chm_df[~mask].iloc[eval_idx]  # drop points we don't have prediction for (masked area)
+        # perhaps also drop locations where sota chm is nan
+        
+        
+        sota_chm_df[['RH95_raw', 'RH98_raw', 'RH100_raw']] = eval_pred[:, [95, 98, 100]]
+        sota_chm_df[['RH95_linear_corrected', 'RH98_linear_corrected',
+                        'RH100_linear_corrected']] = eval_pred_linear_corrected[:, [95, 98, 100]]
+        sota_chm_df[['RH95_bias_corrected', 'RH98_bias_corrected',
+                        'RH100_bias_corrected']] = eval_pred_bias_corrected[:, [95, 98, 100]]
+        sota_chm_df = sota_chm_df.dropna(subset=['RH95_UMD', 'RH95_META', 'RH98_ETH', 'RH100_UM'])
+        if not sota_chm_df.empty:
+            sota_chm_df.to_parquet(sota_and_ours_dir / f'{tile_id}.parquet')
+
         stats = {
             'n': len(eval_pred),
             'scale': a,
@@ -184,10 +208,15 @@ def check_correction_performance(ref_data_dir: str=None, year: int=None, predict
         rmse_bias_corrected = (np.concatenate(residuals_bias_corrected)**2).mean(axis=0)**0.5
         mae_bias_corrected = np.abs(np.concatenate(residuals_bias_corrected)).mean(axis=0)
         me_bias_corrected = np.concatenate(residuals_bias_corrected).mean(axis=0)
-        data = [rmse, rmse_linear_corrected, rmse_bias_corrected, mae, mae_linear_corrected, mae_bias_corrected, me, me_linear_corrected, me_bias_corrected]
+        data = [rmse, rmse_linear_corrected, rmse_bias_corrected, mae, mae_linear_corrected,
+                mae_bias_corrected, me, me_linear_corrected, me_bias_corrected]
         cols = [f'rh{i}' for i in range(rh_size)]
-        
-        df = pd.DataFrame(data, index=['RMSE_raw', 'RMSE_linear_corrected', 'RMSE_bias_corrected', 'MAE_raw', 'MAE_linear_corrected', 'MAE_bias_corrected', 'ME_raw', 'ME_linear_corrected', 'ME_bias_corrected'], columns=cols)
+
+        df = pd.DataFrame(
+            data,
+            index=['RMSE_raw', 'RMSE_linear_corrected', 'RMSE_bias_corrected', 'MAE_raw', 'MAE_linear_corrected',
+                   'MAE_bias_corrected', 'ME_raw', 'ME_linear_corrected', 'ME_bias_corrected'],
+            columns=cols)
         df['avg'] = df.mean(axis=1)
         df.to_csv(f'{correction_result_dir}/correction_performance_{year}_all_tiles.csv')
         print(df)
