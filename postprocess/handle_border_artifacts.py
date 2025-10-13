@@ -13,39 +13,71 @@ import time
 import matplotlib.pyplot as plt
 import dask
 from dask.diagnostics import ProgressBar
+import pystac
+import stackstac
+from rasterio.warp import transform
+from rasterio.transform import rowcol
+import xarray as xr
+import numpy as np
+import dask.dataframe as dd
 
 
-def get_gedi_from_h5(h5_fp: str, mgrs_tiles: str, s2_fp: str, s2_tiles: str):
+def sample_locs_for_all_rhs(tile_id: str, stac_collection_dir:str=None, gedi_ref_df: pd.DataFrame=None, rh_size: int = 101, chunks: int = 1024):
     '''
-    Get GEDI data from h5 file
+    Sample locations for all RHS (bands) at once
+    10s faster than the for loop, but takes more memory (OOM-kill when mem=64GB)
     '''
-    h5_fp = Path(h5_fp).expanduser()
-    s2_fp = Path(s2_fp).expanduser()
-    s2_df = gpd.read_parquet(s2_fp, columns=['Name', 'geometry'])
-    h5_file = h5py.File(h5_fp, 'r')
-    mgrs_tiles = mgrs_tiles.split(',')
-    s2_tiles = s2_tiles.split(',')
-    data = []
-    for mgrs_tile in mgrs_tiles:
-        mgrs_zone_data = h5_file[f'{mgrs_tile}/2020']
-        for partition in mgrs_zone_data.keys():
-            partition_data = mgrs_zone_data[partition]
-            rhs = partition_data['rhs']
-            latlon = partition_data['latlon']
-            data.append(np.concatenate([rhs, latlon], axis=1))
-    data = np.concatenate(data, axis=0)
-    cols = [f'rh{i}' for i in range(101)] + ['lat', 'lon']
-    df = pd.DataFrame(data, columns=cols)
-    df = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.lon, df.lat, crs="EPSG:4326"))
-    df = gpd.sjoin(df, s2_df, how='left', predicate='intersects')
-    df = df.drop(columns=['index_right'])
-    df = df[df['Name'].isin(s2_tiles)]
-    return df
+    item_json_path = Path(stac_collection_dir).expanduser() / tile_id / f"{tile_id}.json"
+    item = pystac.Item.from_file(str(item_json_path))
+    assets = [f"RH{i}" for i in range(rh_size)]
+    # GEDI points -> target CRS
+    lon = gedi_ref_df.geometry.x.values
+    lat = gedi_ref_df.geometry.y.values
+    crs_epsg = item.properties["proj:epsg"]
+    xs, ys = transform("EPSG:4326", f"EPSG:{crs_epsg}", lon, lat)
+    # IMPORTANT: compute (row,col) using rasterio.index() from an actual RH file
+    # (this matches rasterio.sample pixel selection exactly)
+    rh0_href = item.assets["RH0"].href.replace("file://", "")
+    with rasterio.open(rh0_href) as src0:
+        rows, cols = rowcol(src0.transform, xs, ys, op=np.floor)
+        H, W = src0.height, src0.width
+        nodata = src0.nodata
+    # bounds check
+    rows = rows.astype(np.int64)
+    cols = cols.astype(np.int64)
+    valid = (rows >= 0) & (rows < H) & (cols >= 0) & (cols < W)
+    lin_idx = rows[valid] * W + cols[valid]
+    
+    # Build a single (band, y, x) stack, native grid, lazy
+    da = stackstac.stack(
+        [item],
+        assets=assets,
+        epsg=item.properties["proj:epsg"],
+        resolution=None,
+        dtype="int16",
+        rescale=False,
+        fill_value=np.int16(nodata),
+        chunksize=chunks,
+    ).isel(time=0)  # (band, y, x)
 
+
+
+    # Gather via single-axis fancy indexing
+    flat = da.stack(spatial=("y", "x"))         # (band, spatial)
+    pts = xr.DataArray(lin_idx, dims=("points",))
+    gathered = flat.isel(spatial=pts)           # (band, points)
+    preds_valid = gathered.transpose("points", "band").data.compute().astype(np.int16)
+
+    # Re-expand and fill nodata
+    N = len(gedi_ref_df)
+    preds = np.full((N, rh_size), nodata, dtype=np.int16)
+    preds[valid] = preds_valid
+    return preds, nodata
 
 def check_correction_performance(
         ref_data_dir: str = None, year: int = None, prediction_dir: str = None, tiles_list_file: str = None,
-        correction_result_dir: str = None, sota_chm_dir: str = None, sota_and_ours_dir: str = None, **kwargs):
+        correction_result_dir: str = None, sota_chm_dir: str = None, sota_and_ours_dir: str = None,
+        stac_collection_dir: str = None, **kwargs):
     '''
     Check the correction performance (RMSE, MAE and ME) with GEDI reference data and sota chm
     Split the correction data into 2 parts:
@@ -55,7 +87,7 @@ def check_correction_performance(
     correction_result_dir = Path(f'{correction_result_dir}/tile_stats').expanduser()
     correction_result_dir.mkdir(parents=True, exist_ok=True)
     ref_data_dir = Path(f'{ref_data_dir}').expanduser()
-    prediction_dir = Path(f'{prediction_dir}').expanduser()
+    stac_collection_dir = Path(f'{stac_collection_dir}').expanduser()
     sota_chm_dir = Path(f'{sota_chm_dir}').expanduser()
     sota_and_ours_dir = Path(sota_and_ours_dir).expanduser()
     sota_and_ours_dir.mkdir(parents=True, exist_ok=True)
@@ -64,24 +96,21 @@ def check_correction_performance(
             all_tiles = f.read().splitlines()
     else:
         all_tiles = [tile.stem for tile in ref_data_dir.glob('*.parquet')]
-    # check prediction completeness
-    for tile_id in all_tiles:
-        pred_fp = Path(f'{prediction_dir}/{tile_id}_cog').expanduser()
-        n_files = len(list(pred_fp.glob('*Q1*.tif')))
-        if n_files != 101:
-            print(f'{pred_fp} not complete')
-            all_tiles.remove(tile_id)
     # all_tiles = ['32SNA']
     print(f'{len(all_tiles)} tiles have predictions')
     rh_size = 101
 
     @dask.delayed
     def test_correction_for_one_tile(tile_id: str, min_n_points: int = 200):
+        if not (stac_collection_dir/tile_id).exists():
+            print(f'{tile_id} not found in stac collection')
+            return None, None, None
         gedi_ref_df = gpd.read_parquet(ref_data_dir / f'{tile_id}.parquet')
 
         if len(gedi_ref_df) <= min_n_points:
             print(f'{tile_id} has less than {min_n_points} points')
             return None, None, None
+        # preds, nodata = sample_locs_for_all_rhs(tile_id, stac_collection_dir, gedi_ref_df, rh_size)
         lon = gedi_ref_df.geometry.x.values
         lat = gedi_ref_df.geometry.y.values
         preds = []
@@ -120,20 +149,6 @@ def check_correction_performance(
 
         # apply linear fit for all rhs
         a, b = get_scale_and_shift(correct_pred, correct_true*10)  # in decimeters
-
-        # verify the linear fit
-        # print(f'scale: {a}, shift: {b}')
-        # coef_list = []
-        # intercept_list = []
-        # for rh_idx in range(rh_size):
-        #     reg = LinearRegression().fit(correct_pred[:, rh_idx:rh_idx+1], correct_true[:, rh_idx:rh_idx+1]*10)
-        #     coef_list.append(reg.coef_[0,0])
-        #     intercept_list.append(reg.intercept_[0,0])
-        # coef_list = np.array(coef_list)
-        # intercept_list = np.array(intercept_list)
-        # print(f'scale: {coef_list}, shift: {intercept_list}')
-        # np.isclose(a, coef_list) # True every where
-        # np.isclose(b, intercept_list) # True every where
 
         eval_pred_linear_corrected = (a * eval_pred + b).round()  # in decimeters
         residuals_linear_corrected = eval_pred_linear_corrected/10 - eval_true  # (n_points, rh_size) # In meters
@@ -183,6 +198,7 @@ def check_correction_performance(
             print(f'{tile_id} has nan in residuals')
         return residuals, residuals_linear_corrected, residuals_bias_corrected
     
+    # all_tiles = ['48RWN']
     tasks = []
     for tile_id in all_tiles:
         tasks.append(test_correction_for_one_tile(tile_id))
@@ -232,6 +248,24 @@ def aggregate_correction_performance(correction_result_dir: str, year: int):
         year: int
     '''
     correction_result_dir = Path(f'{correction_result_dir}').expanduser()
+    # compare with SOTA CHM
+    df = dd.read_parquet(f'{correction_result_dir}/partitions_with_sota_and_ours_2020/*.parquet')
+    df = df.dropna(subset=['RH95_UMD', 'RH95_META', 'RH98_ETH', 'RH100_UM'])
+    df = df.compute()
+    rmse, mae, me = [], [], []
+    products = [('RH95_UMD', 'rh95', 1), ('RH95_META', 'rh95', 1), ('RH98_ETH', 'rh98', 1), ('RH100_UM', 'rh100', 1),
+                ('RH95_raw', 'rh95', 10), ('RH98_raw', 'rh98', 10), ('RH100_raw', 'rh100', 10),
+                ('RH95_linear_corrected', 'rh95', 10), ('RH98_linear_corrected', 'rh98', 10), ('RH100_linear_corrected', 'rh100', 10),
+                ('RH95_bias_corrected', 'rh95', 10), ('RH98_bias_corrected', 'rh98', 10), ('RH100_bias_corrected', 'rh100', 10)]
+    for product, name, scale in products:
+        rmse.append(((df[product]/scale - df[name])**2).mean()**0.5)
+        mae.append((df[product]/scale - df[name]).abs().mean())
+        me.append((df[product]/scale - df[name]).mean())
+    df = pd.DataFrame({'RMSE': rmse, 'MAE': mae, 'ME': me}, index=[name for name, _ in products])
+    df.to_csv(f'{correction_result_dir}/correction_performance_{year}_compared_with_sota_chm.csv')
+    print(df)
+    
+    # for all RHs
     n = 0
     sum_me = {
         'raw': np.zeros(101),
@@ -248,7 +282,7 @@ def aggregate_correction_performance(correction_result_dir: str, year: int):
         'linear_corrected': np.zeros(101),
         'bias_corrected': np.zeros(101)
     }
-    for file in correction_result_dir.glob('*.npz'):
+    for file in correction_result_dir.glob('tile_stats/*.npz'):
         data = np.load(file)
         n += data[f'n']
         for postfix in ['', '_linear_corrected', '_bias_corrected']:
@@ -469,10 +503,11 @@ class AggGediToS2:
     s2_fp: str = '~/data/gvs/s2_tiles_with_growing_months.parquet'
     output_dir: str = '~/data/gvs/gedi_with_biome_slope_s2_tile_train_partitions/'
     ref_data_dir: str = '~/data/gvs/GEDI_for_correction/partitions_2020'
-    sota_chm_dir: str = '~/data/gvs/GEDI_for_correction/partitions_with_sota_chm_2020'
-    sota_and_ours_dir: str = '~/data/gvs/GEDI_for_correction/partitions_with_sota_and_ours_2020'
+    sota_chm_dir: str = '~/data/gvs/GEDI_for_correction/partitions_with_sota_chm_2020' # output dir
+    sota_and_ours_dir: str = '~/data/gvs/deploy/correction_2020/partitions_with_sota_and_ours_2020'
     tile_id: str = '20MRS'
     prediction_dir: str = '~/data/gvs/deploy/predictions_2020'
+    stac_collection_dir: str = '~/data/gvs/deploy/gvsm_stac_catalog/vsm_2020'
     correction_result_dir: str = '~/data/gvs/deploy/correction_2020'
     corrected_pred_dir: str = '~/data/gvs/deploy/predictions_corrected_2020'
     tiles_list_file: str = ''
