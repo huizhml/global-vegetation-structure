@@ -135,15 +135,19 @@ save_dir=${HOME}/data/gvs/deploy/correction_${year}
 if [ ! -f ${save_dir}/tiles_${year}.txt ]; then
     echo "gather all tiles with GEDI reference data (for correction)"
     find $ref_data_dir -maxdepth 1 -name '*.parquet' -printf '%f\n' | sed 's/\.parquet$//' > ${save_dir}/tiles_${year}.txt
+    n=10
+    echo "split tiles into $n parts, clean old parts if exist"
+    rm -f ${save_dir}/tiles_${year}_part*.txt
+    split -n l/$n --numeric-suffixes=1 --suffix-length=1 --additional-suffix=.txt ${save_dir}/tiles_${year}.txt ${save_dir}/tiles_${year}_part
 fi
-echo "split tiles into 8 parts, clean old parts if exist"
-rm -f ${save_dir}/tiles_${year}_part*.txt
-split -n l/8 --numeric-suffixes=1 --suffix-length=1 --additional-suffix=.txt ${save_dir}/tiles_${year}.txt ${save_dir}/tiles_${year}_part
+ID=$(printf "%02d" ${SLURM_ARRAY_TASK_ID})
+echo ${save_dir}/tiles_${year}_part${ID}.txt
 echo compare the performance of linear and bias correction;
 python -m postprocess.handle_border_artifacts year=$year \
         ref_data_dir=${ref_data_dir} \
-        prediction_dir=${HOME}/data/gvs/deploy/predictions_${year} \
-        tiles_list_file=${save_dir}/nan_tiles_${year}_part${SLURM_ARRAY_TASK_ID}.txt \
+        sota_chm_dir=${sota_chm_dir} \
+        stac_collection_dir=${HOME}/data/gvs/deploy/gvsm_stac_catalog/vsm_${year} \
+        tiles_list_file=${save_dir}/tiles_${year}_part${ID}.txt \
         correction_result_dir=${save_dir} \
         task=check_correction_performance
 ;;
