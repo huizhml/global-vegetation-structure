@@ -78,35 +78,45 @@ class SOTAChmDownloader(DaskDownloader):
         else:
             partitions = [loc_df]
             
-        df1s = []
-        df2s = []
+        partition_dfs = {
+            'eth_umd': [],
+            'um': [],
+            'meta': []
+        }
         for part in partitions:
             eefc = part.apply(set_fc_properties, axis=1)
             eefc = ee.FeatureCollection(eefc.tolist())
+            polyCol = eefc.map(lambda f: f.buffer(12.5))
             # points = ee.Geometry.MultiPoint(partition.geometry.apply(lambda x: [x.x, x.y]).tolist())
             img_um = self.canopy_height_um.filterBounds(eefc).mosaic().divide(100).rename('RH100_UM')
             img_umd = self.canopy_height_umd.filterBounds(eefc).mosaic().rename('RH95_UMD')
             img_meta = self.canopy_height_meta.filterBounds(eefc).mosaic().rename('RH95_META')
             group1 = self.canopy_height_eth.addBands(img_umd)
-            group2 = img_um.addBands(img_meta)
+            # group2 = img_um.addBands(img_meta)
+            
             # EPSG:4326
-            fc1 = group1.sampleRegions(
+            fc_eth_umd = group1.sampleRegions(
                 collection=eefc,
                 scale=10
             )
             # EPSG:3857
-            fc2 = group2.sampleRegions(
+            fc_um = img_um.sampleRegions(
                 collection=eefc,
+                scale=10
+            )
+            fc_meta = img_meta.reduceRegions(
+                collection=polyCol,
+                reducer=ee.Reducer.max(),
                 scale=10
             )
             dfs = []
             
-            if fc1.size().getInfo() == 0 or fc2.size().getInfo() == 0:
-                print('nothing found')
-                df1s.append(pd.DataFrame(np.nan, columns=['RH95_UMD','RH98_ETH'], index=part.index))
-                df2s.append(pd.DataFrame(np.nan, columns=['RH100_UM','RH95_META'], index=part.index))
+            if fc_eth_umd.size().getInfo() == 0 or fc_um.size().getInfo() == 0 or fc_meta.size().getInfo() == 0:
+                partition_dfs['eth_umd'].append(pd.DataFrame(np.nan, columns=['RH95_UMD', 'RH98_ETH'], index=part.index))
+                partition_dfs['um'].append(pd.DataFrame(np.nan, columns=['RH100_UM'], index=part.index))
+                partition_dfs['meta'].append(pd.DataFrame(np.nan, columns=['RH95_META'], index=part.index))
                 continue
-            for fc in [fc1, fc2]:
+            for i, fc in enumerate([fc_eth_umd, fc_um, fc_meta]):
                 download_id = ee.data.getTableDownloadId({'table': fc, 'fileFormat': 'CSV'})
                 res = requests.get(ee.data.makeTableDownloadUrl(download_id))
                 if res.status_code == 200:
@@ -116,24 +126,31 @@ class SOTAChmDownloader(DaskDownloader):
                     dfs.append(df)
                 else:
                     raise requests.HTTPError(f'Failed to download ')
-            df1s.append(dfs[0])
-            df2s.append(dfs[1])
-        if len(df1s) == 0:
+            
+            partition_dfs['eth_umd'].append(dfs[0])
+            partition_dfs['um'].append(dfs[1])
+            partition_dfs['meta'].append(dfs[2])
+        if len(partition_dfs['eth_umd']) == 0 or len(partition_dfs['um']) == 0 or len(partition_dfs['meta']) == 0:
             return
-        df1s = pd.concat(df1s)
-        df2s = pd.concat(df2s)
+        df1s = pd.concat(partition_dfs['eth_umd'])
+        df2s = pd.concat(partition_dfs['um'])
+        df3s = pd.concat(partition_dfs['meta'])
+        ### if nodata in AOI, GEE will return nothing, so we need to fill with NA
         if 'RH95_UMD' not in df1s.columns:
             df1s['RH95_UMD'] = pd.NA
         if 'RH98_ETH' not in df1s.columns:
             df1s['RH98_ETH'] = pd.NA
         if 'RH100_UM' not in df2s.columns:
             df2s['RH100_UM'] = pd.NA
-        if 'RH95_META' not in df2s.columns:
-            df2s['RH95_META'] = pd.NA
+        if 'max' not in df3s.columns:
+            df3s['max'] = pd.NA
+        
         loc_df.loc[df1s.index, ['RH95_UMD','RH98_ETH']] = df1s[['RH95_UMD','RH98_ETH']]
-        loc_df.loc[df2s.index, ['RH100_UM','RH95_META']] = df2s[['RH100_UM','RH95_META']]
+        loc_df.loc[df2s.index, ['RH100_UM']] = df2s[['RH100_UM']]
+        assert loc_df.index.equals(df3s.index)
+        loc_df[['RH95_META']] = df3s[['max']]
         loc_df.to_parquet(output_file)
-
+        
 
 @dataclass
 class MyConfig:
