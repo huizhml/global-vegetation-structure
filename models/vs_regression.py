@@ -7,6 +7,9 @@ import torch.nn.functional as F
 import numpy as np
 from typing import Any, Dict
 from lightning import Trainer, LightningModule
+import kornia.augmentation as K
+from kornia.enhance import normalize
+from pathlib import Path
 from models.metrics import MAE, RMSE, MAPE, ME
 from utils import print_size_of_model
 from models.modules.util import get_veg_mask
@@ -28,8 +31,9 @@ class VSRegression(LightningModule):
             evaluate_high_slope: bool = False,
             loss_fc: nn.Module = None,
             transform: nn.Module = None,
-            yhat_transform: nn.Module = None, *args: Any, **
-            kwargs: Any) -> None:
+            yhat_transform: nn.Module = None, 
+            stats_dir: str = None,
+            *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         # self.backbone = backbone
         if backbone is not None:
@@ -47,6 +51,17 @@ class VSRegression(LightningModule):
         self.loss_fc = loss_fc
         self.transform = transform
         self.yhat_transform = yhat_transform
+        stats_dir = Path(stats_dir).expanduser()
+        self.lat_mean = np.loadtxt(stats_dir / 'lat_mean_filtered.txt')
+        self.lat_std = np.loadtxt(stats_dir / 'lat_std_filtered.txt')
+        self.lon_sin_mean = np.loadtxt(stats_dir / 'lon_sin_mean_filtered.txt')
+        self.lon_sin_std = np.loadtxt(stats_dir / 'lon_sin_std_filtered.txt')
+        self.lon_cos_mean = np.loadtxt(stats_dir / 'lon_cos_mean_filtered.txt')
+        self.lon_cos_std = np.loadtxt(stats_dir / 'lon_cos_std_filtered.txt')
+        self.slope_mean = np.loadtxt(stats_dir / 'slope_mean_filtered.txt')
+        self.slope_std = np.loadtxt(stats_dir / 'slope_std_filtered.txt')
+        self.s2_mean = np.loadtxt(stats_dir / 's2_mean_filtered.txt')
+        self.s2_std = np.loadtxt(stats_dir / 's2_std_filtered.txt')
         self.train_metrics = torchmetrics.MetricCollection(
             {
                 'MAE/': MAE(),
@@ -129,7 +144,9 @@ class VSRegression(LightningModule):
     
     
     def training_step(self, sample, batch_idx):
-        x = self.transform(sample[0])
+        x = self.augment(sample[0])
+        x = normalize(x.float(), self.s2_mean, self.s2_std)
+        # x = self.transform(x)
         rhs = sample[1]
         slope_mask = self.get_slope_mask(sample[3][..., 7, 7])
         veg_mask = get_veg_mask(sample[2]) # NOTE: make all masks based on the raw batch size
@@ -167,7 +184,7 @@ class VSRegression(LightningModule):
     
 
     def validation_step(self, sample, batch_idx):
-        x = self.transform(sample[0])
+        x = normalize(sample[0], self.s2_mean, self.s2_std)
         rhs = sample[1]
         slope_mask = self.get_slope_mask(sample[3][..., 7, 7])
         veg_mask = get_veg_mask(sample[2])
@@ -232,7 +249,7 @@ class VSRegression(LightningModule):
             lat = sample[5].unsqueeze(2).repeat(1, 1, 15)
             sin_lon = torch.sin(lon*torch.pi/180)
             cos_lon = torch.cos(lon*torch.pi/180)
-            lat = (lat - LAT_MEAN) / LAT_STD
+            lat = (lat - LAT_MEAN) / LAT_STD # TODO
             sin_lon = (sin_lon - LON_SIN_MEAN) / LON_SIN_STD
             cos_lon = (cos_lon - LON_COS_MEAN) / LON_COS_STD
             x = torch.cat([x, lat.unsqueeze(1), sin_lon.unsqueeze(1), cos_lon.unsqueeze(1)], dim=1)
