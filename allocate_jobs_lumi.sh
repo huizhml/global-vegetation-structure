@@ -13,10 +13,10 @@
 #    JOB ARRAY FOR LINES, CONTROL THE MAX NUMBER OF 
 # =======================================
 year=2024
-config_dir="${HOME}/data/GVS/deploy/slurm_job_files_${year}"
+config_dir="${HOME}/data/GVS/Deploy/slurm_job_files_${year}"
 # FILE_START=0
 # FILE_END=46
-FILE_LIST=(0 1)
+FILE_LIST=($(seq 1 88))
 # FILE_LIST=(59 60 61 65 69 70 85 87)
 # FILE_LIST_1=($(seq 21 46))
 # FILE_LIST_2=(59 60 61 65 69 70 85 87)
@@ -24,7 +24,7 @@ FILE_LIST=(0 1)
 use_flash=True
 
 # Target active inference jobs (pending + running)
-TARGET_ACTIVE=10
+TARGET_ACTIVE=180
 # How many inference tasks to submit per top-up
 CHUNK_SIZE=10
 # Re-check interval when at capacity (seconds)
@@ -34,10 +34,12 @@ check_unfinished_tiles() {
   local tile_list=("$@")
   local result=""
   for tile in "${tile_list[@]}"; do
-    sync_flag="${HOME}/data/GVS/deploy/flags_sync_${year}/${tile}_best_images_done"
-    translate_flag="${HOME}/data/GVS/deploy/flags_translate_${year}/${tile}_best_images_done"
-    processed_flag="${HOME}/data/GVS/deploy/flags_sync_${year}/${tile}_done"
-    if [ ! -f "$sync_flag" ] && [ ! -f "$translate_flag" ] && [ ! -f "$processed_flag" ]; then
+    # sync_flag="${HOME}/data/GVS/Deploy/flags_sync_${year}/${tile}_best_images_done"
+    # translate_flag="${HOME}/data/GVS/Deploy/flags_translate_${year}/${tile}_best_images_done"
+    # processed_flag="${HOME}/data/GVS/Deploy/flags_sync_${year}/${tile}_done"
+    inference_flag="${HOME}/data/GVS/Deploy/flags_inference_${year}/${tile}_best_images_done"
+    # if [ ! -f "$sync_flag" ] && [ ! -f "$translate_flag" ] && [ ! -f "$processed_flag" ]; then
+    if [ ! -f "$inference_flag" ]; then
       result+="$tile "
     fi
   done
@@ -45,54 +47,13 @@ check_unfinished_tiles() {
 }
 
 # Count active (PD+R) tasks for our inference/translate jobs, expanding array ranges
-count_active_tasks() {
-  local total_inference=0
-  local total_translate=0
-  # Format: JOBID JOBNAME
-  while IFS= read -r line; do
-    # Split into jobid and jobname
-    local jobid jobname
-    jobid=$(echo "$line" | awk '{print $1}')
-    jobname=$(echo "$line" | awk '{print $2}')
-    # Count inference and translate jobs separately
-    if [[ "$jobname" == "inference" || "$jobname" == "translate" ]]; then
-      # If jobid contains a task range like 12345_[1-100%10]
-      if [[ "$jobid" =~ \[([^\]]+)\] ]]; then
-        local range_part="${BASH_REMATCH[1]}"
-        # Split by commas: e.g., 1-5,7,10-20%2
-        IFS=',' read -r -a parts <<< "$range_part"
-        for part in "${parts[@]}"; do
-          # Match start-end%step or single number
-          if [[ "$part" =~ ^([0-9]+)-([0-9]+)(%([0-9]+))?$ ]]; then
-            local start=${BASH_REMATCH[1]}
-            local end=${BASH_REMATCH[2]}
-            local step=${BASH_REMATCH[4]:-1}
-            local span=$((end - start))
-            local cnt=$(( span / step + 1 ))
-            if [[ "$jobname" == "inference" ]]; then
-              total_inference=$(( total_inference + cnt ))
-            else
-              total_translate=$(( total_translate + cnt ))
-            fi
-          elif [[ "$part" =~ ^[0-9]+$ ]]; then
-            if [[ "$jobname" == "inference" ]]; then
-              total_inference=$(( total_inference + 1 ))
-            else
-              total_translate=$(( total_translate + 1 ))
-            fi
-          fi
-        done
-      else
-        # Non-array job counts as 1
-        if [[ "$jobname" == "inference" ]]; then
-          total_inference=$(( total_inference + 1 ))
-        else
-          total_translate=$(( total_translate + 1 ))
-        fi
-      fi
-    fi
-  done < <(squeue -u "$USER" -h -t PD,R -o "%A %j")
-  echo "$total_inference $total_translate"
+count_jobs() {
+  local job_name="$1"
+  if [[ -z "$job_name" ]]; then
+    echo "Usage: count_jobs <job_name>"
+    return 1
+  fi
+  squeue -h --array -u "$USER" -t RUNNING,PENDING -n "$job_name" | wc -l
 }
 
 # for file_num in $(seq $FILE_START $FILE_END); do
@@ -100,7 +61,7 @@ for file_num in "${FILE_LIST[@]}"; do
   echo "Launching jobs for file $file_num, use_flash=$use_flash"
   
   tile_id_file="${config_dir}/deploy_s2_items_${year}_part${file_num}.txt"
-  mapfile -t tile_array < "$tile_id_file"  # read file into array
+  mapfile -t tile_array < <(cut -d, -f1 "$tile_id_file" | tail -n +2)  # read only the first item of each line into array, skipping header
   unfinished_tiles=$(check_unfinished_tiles "${tile_array[@]}")
   
   echo "Unfinished tiles: $unfinished_tiles"
@@ -123,18 +84,22 @@ for file_num in "${FILE_LIST[@]}"; do
   while [ $end_index -lt $num_tiles ]; do
     # Wait until we have room to submit more
     while true; do
-      read active_inf_now active_trans_now < <(count_active_tasks)
-      echo "********** Active tasks: Inference=$active_inf_now, Translate=$active_trans_now"
-      if [ "$active_inf_now" -lt "$TARGET_ACTIVE" ] && [ "$active_trans_now" -lt "$TARGET_ACTIVE" ]; then
+      read active_inf_now < <(count_jobs inference)
+      # read active_inf_now active_trans_now < <(count_active_tasks)
+      echo "********** Active tasks: Inference=$active_inf_now"
+      if [ "$active_inf_now" -lt "$TARGET_ACTIVE" ]; then
+        # if [ "$active_inf_now" -lt "$TARGET_ACTIVE" ] && [ "$active_trans_now" -lt "$TARGET_ACTIVE" ]; then
         break
       fi
-      echo "Active tasks ($active_inf_now, $active_trans_now) >= target ($TARGET_ACTIVE). Sleeping ${RECHECK_INTERVAL}s..."
+      echo "Active tasks ($active_inf_now) >= target ($TARGET_ACTIVE). Sleeping ${RECHECK_INTERVAL}s..."
+      # echo "Active tasks ($active_inf_now, $active_trans_now) >= target ($TARGET_ACTIVE). Sleeping ${RECHECK_INTERVAL}s..."
       sleep "$RECHECK_INTERVAL"
     done
 
     # Determine how many tasks to submit in this top-up
     remaining=$(( num_tiles - end_index ))
-    max_active=$(( active_inf_now > active_trans_now ? active_inf_now : active_trans_now ))
+    max_active=$(( active_inf_now ))
+    # max_active=$(( active_inf_now > active_trans_now ? active_inf_now : active_trans_now ))
     capacity=$(( TARGET_ACTIVE - max_active ))
     submit_now=$CHUNK_SIZE
     if [ $submit_now -gt $remaining ]; then submit_now=$remaining; fi
