@@ -37,9 +37,8 @@ source setup_env.sh
 # line_num=${1:-0}
 line_num=${SLURM_ARRAY_TASK_ID:-0}
 tile_id_file=$1
-tile_id_file_num=${2:-15}
 year=${3:-2024}
-use_flash=${4:-False}
+use_flash=${4:-True}
 echo "use_flash=$use_flash"
 if [ "$use_flash" == "True" ]; then
     input_dir=${HOME}/flash/data/GVS/Deploy/inference_${year}
@@ -129,6 +128,7 @@ echo run prediction for model $run_id for tile $tile_id;
 python run.py predict -c config/predict.yaml --model.backbone config/model/xception_mix_order.yaml \
         --data.init_args.tile_id $tile_id \
         --data.init_args.metadata_file $meta_file \
+        --data.init_args.s2_grid_file ${HOME}/flash/data/GVS/s2_tiles_with_growing_months.parquet \
         --data.init_args.pred_fp ${input_dir} \
         --data.init_args.prediction_dir ${save_dir}/${tile_id}_GTiff \
         --data.init_args.year $year \

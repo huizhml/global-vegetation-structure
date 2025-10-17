@@ -4,7 +4,6 @@ import pystac
 import planetary_computer
 import xarray as xr
 from pathlib import Path
-from utils._stackstac import stack
 from dask.utils import natural_sort_key
 import dask.array as da
 import pystac_client
@@ -201,6 +200,7 @@ class WorldS2(DaskDownloader):
         epsg = int(items[0].properties['proj:code'][5:])
         items = [item for item in items.items if item.id in df['id'].values]
         images = stack(items, self.bands, dtype='uint16', fill_value=np.uint16(0), epsg=epsg, resolution=10, rescale=False)
+        images = harmonize_to_old(images)
         assert images.shape[2] == images.shape[3] == 10980, f'{tile} has incorrect shape {images.shape}'
         images.name = 's2'
         # wc_df = wc_df[wc_df.Name == tile]

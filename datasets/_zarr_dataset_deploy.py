@@ -32,6 +32,10 @@ from dask.distributed import get_client
 import h5py
 import xarray as xr
 from collections import defaultdict
+from pystac_client.stac_api_io import StacApiIO
+import planetary_computer
+import pystac_client
+from utils._stackstac import stack
 from download._4_download import harmonize_to_old
 
 MASKED_VALUE = {
@@ -524,6 +528,7 @@ def collate_batch(batch):
 class S2DatasetStream(BaseDeployDataset):
     def __init__(self, 
                  metadata_file: str, 
+                 s2_grid_file: str,
                  h5_dir: str,
                  tile_id: str = None, 
                  prediction_dir: str = None,
@@ -542,7 +547,14 @@ class S2DatasetStream(BaseDeployDataset):
                  download_data: bool = False,
                  save_intermediate_tif: bool = False,
                  **kwargs):
-        self.metadata_file = Path(metadata_file).expanduser()
+        if metadata_file != 'none':
+            self.metadata_file = Path(metadata_file).expanduser()
+        else:
+            self.metadata_file = None
+        if s2_grid_file != 'none':
+            self.s2_grid_file = Path(s2_grid_file).expanduser()
+        else:
+            self.s2_grid_file = None
         self.h5_file = Path(h5_dir).expanduser() / f'{tile_id}.h5'
         self.output_format = output_format
         self.output_dtype = output_dtype
@@ -563,7 +575,10 @@ class S2DatasetStream(BaseDeployDataset):
         self.save_intermediate_tif = save_intermediate_tif
         if download_data and not self.h5_file.exists():
             print(f'{self.h5_file} does not exist, downloading...')
-            self.download_tile()
+            if self.metadata_file != 'none':
+                self.download_tile_by_api()
+            else:
+                self.download_tile()
         self.store = h5py.File(self.h5_file, 'r')
         if not hasattr(self, 'mean') and self.impute_cloud_with_mean:
             print('Calculating mean and std of the training data')
@@ -685,6 +700,82 @@ class S2DatasetStream(BaseDeployDataset):
         t0=time.time()
         image.to_netcdf(self.h5_file, engine='h5netcdf', encoding={'s2': {'zlib': False, 'chunksizes': (1, 1, 1024, 1024)}})
         print(f'Time taken to save image: {time.time() - t0:.2f} seconds')
+        
+    def download_tile_by_api(self, collection_id='sentinel-2-l2a', max_cloud_cover=90):
+        '''
+        This function is used to download the tile by api.
+        '''
+        bands = [
+            'B01', 'B04', 'B03', 'B02', 'B05', 'B06', 'B07', 'B08', 'B8A',
+            'B09', 'B11', 'B12', 'SCL'
+        ]
+        stac_api_io = StacApiIO()
+        stac_endpoint = 'https://planetarycomputer.microsoft.com/api/stac/v1'
+        api = pystac_client.Client.open(stac_endpoint, modifier=planetary_computer.sign_inplace, stac_io=stac_api_io)
+        datetime = f'{self.year}-01-01/{self.year}-12-31'
+        s2_df = gpd.read_parquet(self.s2_grid_file)
+        row = s2_df[s2_df['Name'] == self.tile_id].iloc[0]
+        tile = row['Name']
+        bbox = row.geometry.bounds
+        bbox = [bbox[0], bbox[1], min(bbox[2], 180), bbox[3]]
+        search = api.search(collections=collection_id, bbox=bbox, datetime=datetime, 
+                            query={'eo:cloud_cover': {'lt': max_cloud_cover},
+                                    's2:nodata_pixel_percentage': {'lt': 90},
+                                    's2:mgrs_tile': {'eq': tile}})
+        items = search.item_collection()
+        if len(items) == 0:
+            print(f'{tile} has no images, bbox={bbox}, skipping...')
+            return
+        df = gpd.GeoDataFrame.from_features(items.to_dict(), crs='epsg:4326')
+        df['id'] = df['s2:product_uri'].str.replace(r'_[A-Z]\d{4}', '', regex=True).str.replace('.SAFE', '')
+        month = pd.to_datetime(df['datetime']).dt.month
+        df = df[month.isin(row.growing_months)]
+        # get top 30 images, 10 from the best orbits and 20 from the rest
+        if (df['s2:nodata_pixel_percentage']==0).sum() > 0:
+            best_orbits = df[df['s2:nodata_pixel_percentage']==0]['sat:relative_orbit'].unique()
+            best = df[df['sat:relative_orbit'].isin(best_orbits)]
+            rest = df[~df['sat:relative_orbit'].isin(best_orbits)]
+        else:
+            rest = df
+            best = pd.DataFrame([], columns=df.columns)
+            
+        unique_orbits = rest['sat:relative_orbit'].unique()
+        if len(unique_orbits) >= 2:
+            top_orbits = rest.groupby('sat:relative_orbit').min('s2:nodata_pixel_percentage').sort_values('s2:nodata_pixel_percentage').head(2)
+            rest = rest[rest['sat:relative_orbit'].isin(top_orbits.index)]
+            idx = rest.groupby('sat:relative_orbit')['eo:cloud_cover'].nsmallest(10).index.get_level_values(1)
+            rest = rest.loc[idx]
+            df = pd.concat([best, rest])
+        else:
+            rest = rest.sort_values('eo:cloud_cover').head(10)
+            best = best.sort_values('eo:cloud_cover').head(20)
+        df = pd.concat([best, rest])
+        
+        # get top 20 images
+        df = df.drop_duplicates(subset='id')
+        if len(df)>self.n_iamges_per_tile:
+            df['s2:nodata_pixel_percentage'] = df['s2:nodata_pixel_percentage'].round()
+            df = df.sort_values(['s2:nodata_pixel_percentage', 'eo:cloud_cover'])
+            if (df['s2:nodata_pixel_percentage']==0).sum() > 0:
+                df = df.head(self.n_iamges_per_tile)
+            else:
+                idx = df.groupby('orbit')['eo:cloud_cover'].nsmallest(self.n_iamges_per_tile//2).index.get_level_values(1)
+                df = df.loc[idx]
+        df = gpd.GeoDataFrame(df, geometry='geometry', crs='EPSG:4326')
+        # df.to_parquet(self.save_dir/ f'{self.year}_{tile}_images.parquet')
+        epsg = int(items[0].properties['proj:code'][5:])
+        items = [item for item in items.items if item.id in df['id'].values]
+        images = stack(items, bands, dtype='uint16', fill_value=np.uint16(0), epsg=epsg, resolution=10, rescale=False)
+        images = harmonize_to_old(images)
+        assert images.shape[2] == images.shape[3] == 10980, f'{tile} has incorrect shape {images.shape}'
+        images.name = 's2'
+        del images.attrs['spec']
+        del images.attrs['crs']
+        images = images.reset_coords(['proj:bbox'], drop=True)
+        t0=time.time()
+        images.to_netcdf(self.h5_file, engine='h5netcdf', encoding={'s2': {'zlib': False, 'chunksizes': (1, 1, 1024, 1024)}})
+        print(f'Time taken to save image: {time.time() - t0:.2f} seconds')
+        
         
     def initialize_output(self):
         self.options = [
