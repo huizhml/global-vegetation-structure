@@ -1,0 +1,71 @@
+# - {'name': 'Dry deciduous forest', 'tile_id':  '42QXJ', 'col_off':8150, 'row_off':6620} # dry deciduous
+# - {'name': 'Evergreen forest', 'tile_id':  '19MDT', 'col_off':6244, 'row_off':8330} # evergreen
+# - {'name': 'Seasonal inundated forest', 'tile_id':  '20MKC', 'col_off':542, 'row_off':4793} # flooded forest
+# - {'name': 'Crop-/grassland', 'tile_id':  '17RML', 'col_off':3384, 'row_off':8622} # Sorghum
+# - {'name': 'Tree plantation', 'tile_id':  '49MFT', 'col_off':900, 'row_off':5800} # plantation
+# Examples of different forest types for 3D visualization
+# - {'name': 'Plantation', 'tile_id':  '31TEJ', 'col_off':1122, 'row_off':1090, 'time': 15} # plantation
+# - {'name': 'Primary forest', 'tile_id':  '33WWN', 'col_off':5783, 'row_off':1564, time: 15} # primary forest # time=15
+# - {'name': 'Naturally regenerating forest', 'tile_id':  '32TNQ', 'col_off':6885, 'row_off':7923, time: 3} # plantation # time=3
+
+# Example of small structures captured by RH25 instead of RH98
+
+width: 1200
+height: 900
+tile_id: "32UMV"
+# params for plotting RHs for the same location
+rhs:
+  width: ${width}
+  height: ${height}
+  row_off: 9077
+  col_off: 5361
+  tile_id: ${tile_id}
+  name: "vsm_example"
+  rh_idxs: [25, 98]
+
+# Params for rgb plot
+rgb:
+  width: ${width}
+  height: ${height}
+  row_off: 9077
+  col_off: 5361
+  tile_id: ${tile_id}
+  name: "vsm_example"
+  max_val: 2000
+  time_idxs: [4, 5, 6, 7, 8, 9, 10, 11]
+
+gif:
+  width: 100
+  height: 100
+  cmin: -50
+  cmax: 300
+  z_exaggeration: 2.0
+  camera:
+    eye: {x: -0.8, y: -1.2, z: 0.6}
+    center: {x: 0, y: 0, z: 0}
+    up: {x: 0, y: 0, z: 1}
+    projection: {type: "perspective"}
+  aspectratio: [1, 1, 0.4]
+  orthographic: False
+  rh_idxs: [25, 98]
+  tiles:
+    - name: "Dry deciduous forest"
+      tile_id: "42QXJ"
+      col_off: 8150
+      row_off: 6620
+    - name: "Evergreen forest"
+      tile_id: "19MDT"
+      col_off: 6244
+      row_off: 8330
+    - name: "Seasonal inundated forest"
+      tile_id: "20MKC"
+      col_off: 542
+      row_off: 4793
+    - name: "Crop-/grassland"
+      tile_id: "17RML"
+      col_off: 3384
+      row_off: 8622
+    - name: "Tree plantation"
+      tile_id: "49MFT"
+      col_off: 900
+      row_off: 5800

@@ -1,0 +1,9 @@
+rh25: 
+  cmin: 0
+  cmax: 120
+rh50:
+  cmin: 0
+  cmax: 200
+rh98:
+  cmin: 0
+  cmax: 400
