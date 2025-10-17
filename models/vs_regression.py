@@ -16,12 +16,36 @@ from models.modules.util import get_veg_mask
 from const import LAT_MEAN, LAT_STD, LON_SIN_MEAN, LON_SIN_STD, LON_COS_MEAN, LON_COS_STD, SLOPE_MEAN, SLOPE_STD
 
 MASKED_VALUE = 32767
+S2_MEAN = np.array([587.0255, 1361.4782, 1091.5225,  739.6226, 1772.4885, 2550.3611,
+        2870.9454, 2952.2076, 3080.6981, 3086.7147, 2886.7224, 2175.1265
+    # 630.6893, # 628.1879 , # unfiltered
+    #              1359.3749, # 1475.1014 , 
+    #              1108.1755, # 1165.6053 , 
+    #              747.1477, # 794.6629 , 
+    #              1778.6479,  # 1873.0237 , 
+    #              2570.6654, # 2563.7012 , 
+    #              2872.9004, # 2852.5837 , 
+    #              2942.0968, # 2928.7439 , 
+    #              3083.4950, # 3045.0754 , 
+    #              3091.6063, # 3052.8425 , 
+    #              2837.6595, # 3006.8704 , 
+    #              2107.9847, # 2330.9114 ,
+        ])
+S2_STD = np.array([529.5716, 1314.4954,  846.1677,  635.8849, 1293.3423, 1078.8700,
+        1119.9127, 1133.3539, 1116.3337, 1100.1368, 1651.3810, 1718.6127 # train1_v3
+    # 608.2745, 1320.2338,  875.1261,  689.7431, 1298.4036, 1109.1152,
+        # 1152.3742, 1167.4110, 1160.0978, 1145.2506, 1639.9369, 1669.9939 # 1698.3635
+        # 20.39255142211914,
+        # 0.385648638010025,
+        # 0.3675101101398468
+        ])
 
 class VSRegression(LightningModule):
 
     def __init__(
             self,
             backbone: nn.Module = None,
+            augment: nn.Module = None,
             feed_slope: bool = False,
             zero_slope: bool = False,
             slope_th: float = 20,
@@ -33,8 +57,10 @@ class VSRegression(LightningModule):
             transform: nn.Module = None,
             yhat_transform: nn.Module = None, 
             stats_dir: str = None,
+            load_from_file: bool = False,
             *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
+        self.augment = augment
         # self.backbone = backbone
         if backbone is not None:
             for name, module in backbone.named_children():
@@ -51,17 +77,29 @@ class VSRegression(LightningModule):
         self.loss_fc = loss_fc
         self.transform = transform
         self.yhat_transform = yhat_transform
-        stats_dir = Path(stats_dir).expanduser()
-        self.lat_mean = np.loadtxt(stats_dir / 'lat_mean_filtered.txt')
-        self.lat_std = np.loadtxt(stats_dir / 'lat_std_filtered.txt')
-        self.lon_sin_mean = np.loadtxt(stats_dir / 'lon_sin_mean_filtered.txt')
-        self.lon_sin_std = np.loadtxt(stats_dir / 'lon_sin_std_filtered.txt')
-        self.lon_cos_mean = np.loadtxt(stats_dir / 'lon_cos_mean_filtered.txt')
-        self.lon_cos_std = np.loadtxt(stats_dir / 'lon_cos_std_filtered.txt')
-        self.slope_mean = np.loadtxt(stats_dir / 'slope_mean_filtered.txt')
-        self.slope_std = np.loadtxt(stats_dir / 'slope_std_filtered.txt')
-        self.s2_mean = np.loadtxt(stats_dir / 's2_mean_filtered.txt')
-        self.s2_std = np.loadtxt(stats_dir / 's2_std_filtered.txt')
+        if load_from_file:
+            stats_dir = Path(stats_dir).expanduser()
+            self.lat_mean = np.loadtxt(stats_dir / 'lat_mean_filtered.txt')
+            self.lat_std = np.loadtxt(stats_dir / 'lat_std_filtered.txt')
+            self.lon_sin_mean = np.loadtxt(stats_dir / 'lon_sin_mean_filtered.txt')
+            self.lon_sin_std = np.loadtxt(stats_dir / 'lon_sin_std_filtered.txt')
+            self.lon_cos_mean = np.loadtxt(stats_dir / 'lon_cos_mean_filtered.txt')
+            self.lon_cos_std = np.loadtxt(stats_dir / 'lon_cos_std_filtered.txt')
+            self.slope_mean = np.loadtxt(stats_dir / 'slope_mean_filtered.txt')
+            self.slope_std = np.loadtxt(stats_dir / 'slope_std_filtered.txt')
+            self.s2_mean = np.loadtxt(stats_dir / 's2_mean_filtered.txt')
+            self.s2_std = np.loadtxt(stats_dir / 's2_std_filtered.txt')
+        else:
+            self.lat_mean = LAT_MEAN
+            self.lat_std = LAT_STD
+            self.lon_sin_mean = LON_SIN_MEAN
+            self.lon_sin_std = LON_SIN_STD
+            self.lon_cos_mean = LON_COS_MEAN
+            self.lon_cos_std = LON_COS_STD
+            self.slope_mean = SLOPE_MEAN
+            self.slope_std = SLOPE_STD
+            self.s2_mean = S2_MEAN
+            self.s2_std = S2_STD
         self.train_metrics = torchmetrics.MetricCollection(
             {
                 'MAE/': MAE(),
@@ -106,7 +144,7 @@ class VSRegression(LightningModule):
         else:
             slope = torch.nan_to_num(slope_arr, nan=0)
         slope = torch.nan_to_num(slope_arr, nan=0)
-        slope = (slope - SLOPE_MEAN) / SLOPE_STD
+        slope = (slope - self.slope_mean) / self.slope_std
         return torch.cat([x, slope.unsqueeze(1)], dim=1)
 
     def _process_latlon(self, x, lon, lat):
@@ -115,9 +153,9 @@ class VSRegression(LightningModule):
         lat = lat.unsqueeze(2).repeat(1, 1, patch_size)
         sin_lon = torch.sin(lon * torch.pi / 180)
         cos_lon = torch.cos(lon * torch.pi / 180)
-        lat = (lat - LAT_MEAN) / LAT_STD
-        sin_lon = (sin_lon - LON_SIN_MEAN) / LON_SIN_STD
-        cos_lon = (cos_lon - LON_COS_MEAN) / LON_COS_STD
+        lat = (lat - self.lat_mean) / self.lat_std
+        sin_lon = (sin_lon - self.lon_sin_mean) / self.lon_sin_std
+        cos_lon = (cos_lon - self.lon_cos_mean) / self.lon_cos_std
         return torch.cat([x, lat.unsqueeze(1), sin_lon.unsqueeze(1), cos_lon.unsqueeze(1)], dim=1)
 
     def _process_nonveg(self, rhs, veg_mask):
@@ -133,6 +171,19 @@ class VSRegression(LightningModule):
     #     import ipdb; ipdb.set_trace()
     #     return super().on_fit_start()
     
+    def on_train_start(self):
+        self.s2_mean = torch.tensor(self.s2_mean).to(self.device)
+        self.s2_std = torch.tensor(self.s2_std).to(self.device)
+        self.lat_mean = torch.tensor(self.lat_mean).to(self.device)
+        self.lat_std = torch.tensor(self.lat_std).to(self.device)
+        self.lon_sin_mean = torch.tensor(self.lon_sin_mean).to(self.device)
+        self.lon_sin_std = torch.tensor(self.lon_sin_std).to(self.device)
+        self.lon_cos_mean = torch.tensor(self.lon_cos_mean).to(self.device)
+        self.lon_cos_std = torch.tensor(self.lon_cos_std).to(self.device)
+        self.slope_mean = torch.tensor(self.slope_mean).to(self.device)
+        self.slope_std = torch.tensor(self.slope_std).to(self.device)
+        return super().on_train_start()
+    
     def on_train_epoch_start(self):
         self.train_metrics.reset()
         self.val_metrics.reset()
@@ -144,8 +195,8 @@ class VSRegression(LightningModule):
     
     
     def training_step(self, sample, batch_idx):
-        x = self.augment(sample[0])
-        x = normalize(x.float(), self.s2_mean, self.s2_std)
+        x = self.augment(sample[0].float())
+        x = normalize(x, self.s2_mean, self.s2_std)
         # x = self.transform(x)
         rhs = sample[1]
         slope_mask = self.get_slope_mask(sample[3][..., 7, 7])
@@ -241,7 +292,7 @@ class VSRegression(LightningModule):
         '''
         For sparse evaluation
         '''
-        x = self.transform(sample[0])
+        x = normalize(sample[0], self.s2_mean, self.s2_std)
         slope_mask = self.get_slope_mask(sample[3][..., 7, 7])
         veg_mask = get_veg_mask(sample[2].long())
         if self.feed_latlon:
@@ -249,9 +300,9 @@ class VSRegression(LightningModule):
             lat = sample[5].unsqueeze(2).repeat(1, 1, 15)
             sin_lon = torch.sin(lon*torch.pi/180)
             cos_lon = torch.cos(lon*torch.pi/180)
-            lat = (lat - LAT_MEAN) / LAT_STD # TODO
-            sin_lon = (sin_lon - LON_SIN_MEAN) / LON_SIN_STD
-            cos_lon = (cos_lon - LON_COS_MEAN) / LON_COS_STD
+            lat = (lat - self.lat_mean) / self.lat_std
+            sin_lon = (sin_lon - self.lon_sin_mean) / self.lon_sin_std
+            cos_lon = (cos_lon - self.lon_cos_mean) / self.lon_cos_std
             x = torch.cat([x, lat.unsqueeze(1), sin_lon.unsqueeze(1), cos_lon.unsqueeze(1)], dim=1)
         y_hat = self.forward(x.float())
         y_hat = y_hat[:, :303, 7, 7]#.reshape(-1, 101, 3)
@@ -273,10 +324,10 @@ class VSRegression(LightningModule):
     def _predict_step_for_large_tile(self, sample, batch_idx):
         # y_topleft, x_topleft = self.trainer.datamodule.pred_dataset.patch_coords_dict[batch_idx][1]
         if self.feed_latlon:
-            x = self.transform(sample[0])
+            x = normalize(sample[0].float(), self.s2_mean, self.s2_std)
             x = torch.cat([x, sample[-1]], dim=1)
         else:
-            x = self.transform(sample[0])
+            x = normalize(sample[0].float(), self.s2_mean, self.s2_std)
         # y_hat = self.forward(x.half())
         y_hat = self.forward(x.float())
         self.trainer.datamodule.pred_dataset.write_patch_predictions(y_hat, sample[1], batch_idx)
@@ -285,7 +336,7 @@ class VSRegression(LightningModule):
     @torch.no_grad()
     def _predict_step_for_small_patch(self, sample, batch_idx):
         # NOTE: for downstream task
-        x = self.transform(sample[0])
+        x = normalize(sample[0].float(), self.s2_mean, self.s2_std)
         x = self.process_latlon(x, sample[3], sample[4])
         if x.isnan().any():
             raise ValueError('x contains nan')

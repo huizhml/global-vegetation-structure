@@ -37,6 +37,12 @@ model:
     slope_th: 20
     zero_out_nonveg: False
     filter_out_nonveg: True
+    stats_dir: ~/data/gvs/train_data_stats
+    augment: 
+      class_path: kornia.augmentation.RandomBrightness
+      init_args:
+        brightness: [0.5, 1.5]
+        p: 0.5
     feed_latlon: ${data.init_args.input_lat_lon}
     evaluate_high_slope: False
     loss_fc: models.losses.quantile_ce_loss.QuantileCELoss
@@ -47,7 +53,7 @@ model:
 
 trainer:
   accelerator: gpu
-  strategy: ddp
+  # strategy: ddp
     # class_path: lightning.pytorch.strategies.DDPStrategy
     # init_args:
     #   process_group_backend: gloo
