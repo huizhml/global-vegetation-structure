@@ -65,22 +65,35 @@ def check_duplicated_images():
         print(f'Total duplicated tiles in year {year}: {total_cnt}')
 
 def check_images_order():
-    for year in [2020, 2024]:
-        for part_idx in range(22):
-            not_ordered_tiles = []
+    '''
+    Get the list of predicted tiles with incorrect input images order (seleted least optimal 20 images from >20 iamges)
+    - predictions with {tile_id}_best_images_done are with correct input images order.
+    - only check predictions with inference flag {tile_id}_done
+    '''
+    for year in [2020]:
+        not_ordered_tiles = []
+        slurm_config_dir = Path(f'~/data/gvs/deploy/slurm_job_files_{year}').expanduser()
+        slurm_config_files = slurm_config_dir.glob(f'*_items_{year}_part*.parquet')
+        for s2_geoparq_file in slurm_config_files:
+            part_idx = int(s2_geoparq_file.stem.split('_')[-1][4:])
             print(f'Checking year {year} part {part_idx}')
-            s2_geoparq_file = Path(f'~/data/gvs/deploy/s2_deploy_items_{year}_part{part_idx}_unique_images.parquet').expanduser()
             s2_df = gpd.read_parquet(s2_geoparq_file)
             unique_tiles = s2_df['s2:mgrs_tile'].unique()
             for tile_id in unique_tiles:
-                tile_df = s2_df[s2_df['s2:mgrs_tile'] == tile_id]
-                if len(tile_df) > 20:
-                    nodata_percentage = tile_df['s2:nodata_pixel_percentage']
-                    if nodata_percentage.is_monotonic_increasing:
-                        not_ordered_tiles.append(tile_id)
+                done_flag = Path(f'~/data/gvs/deploy/inference_flags_{year}/{tile_id}_done').expanduser()
+                if done_flag.exists(): # prediction with {tile_id}_done flag was with incorrect input images order
+                    img_df = s2_df[s2_df['s2:mgrs_tile'] == tile_id]
+                    if len(img_df) > 20:
+                        img_df['s2:nodata_pixel_percentage'] = img_df['s2:nodata_pixel_percentage'].round()
+                        ordered_img_df = img_df.sort_values(['s2:nodata_pixel_percentage', 'eo:cloud_cover']).iloc[:20]
+                        should_use_imgs = ordered_img_df['id'].tolist()
+                        used_imgs = img_df['id'].iloc[:20].tolist()
+                        if set(should_use_imgs) != set(used_imgs):
+                            not_ordered_tiles.append([tile_id, part_idx])
             print(f'Total not ordered tiles in year {year} part {part_idx}: {len(not_ordered_tiles)}')
+        df = pd.DataFrame(not_ordered_tiles, columns=['Name', 'meta_file_idx_2020'])
+        df.to_csv(Path(f'~/data/gvs/deploy/predicted_not_ordered_tiles_{year}.txt').expanduser(), index=False)
         
-
 def check_n_images_per_tile():
     for year in [2020, 2024]:
         for part_idx in range(22):
@@ -245,6 +258,7 @@ class MyConfig:
     year: int = 2024
     tile_id: str = '20XNR'
     output_dir: str = '~/data/gvs/deploy/check_input_images_2024'
+    task: str = 'check_images_order'
     
 cs = ConfigStore.instance()
 cs.store(name="check_input_images", node=MyConfig)
@@ -252,14 +266,19 @@ cs.store(name="check_input_images", node=MyConfig)
 @hydra.main(config_name='check_input_images', version_base="1.2")
 def main(cfg: DictConfig):
     # check_duplicated_images()
-    # check_images_order()
-    tile_configs = {
-        '20LPP': (10000, 4, 900), 
-        '20LQP': (4, 4, 900),
-        '20LQQ': (4, 10006, 900),
-        '20LPQ': (10000, 10006, 900)}
-    check_image_statistics(tile_configs, 2020)
-    check_intermediate_preds(tile_configs, 2020)
+    if cfg.task == 'check_images_order':
+        check_images_order()
+    elif cfg.task == 'check_image_statistics':
+        check_image_statistics(cfg.tile_id, cfg.year)
+    elif cfg.task == 'check_intermediate_preds':
+        check_intermediate_preds(cfg.tile_id, cfg.year)
+    # tile_configs = {
+    #     '20LPP': (10000, 4, 900), 
+    #     '20LQP': (4, 4, 900),
+    #     '20LQQ': (4, 10006, 900),
+    #     '20LPQ': (10000, 10006, 900)}
+    # check_image_statistics(tile_configs, 2020)
+    # check_intermediate_preds(tile_configs, 2020)
 
 
 if __name__ == '__main__':
