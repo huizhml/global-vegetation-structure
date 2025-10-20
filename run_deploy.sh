@@ -42,7 +42,8 @@ mkdir -p $save_dir
 #              Predict one tile in one job
 # **************************************************************
 # tile_id_file=${HOME}/data/gvs/deploy/unfinished_tiles_${year}.txt
-tile_id_file=${HOME}/data/gvs/deploy/slurm_job_files_${year}/deploy_s2_items_${year}_part0.txt
+# tile_id_file=${HOME}/data/gvs/deploy/slurm_job_files_${year}/deploy_s2_items_${year}_part0.txt
+tile_id_file=${HOME}/data/gvs/deploy/predicted_not_ordered_tiles_${year}.txt
 line=$(sed -n "${line_num}p" $tile_id_file)
 IFS=',' read -r tile_id idx <<< "$line"
 echo "Line $line_num: Tile=$tile_id, idx=$idx"
@@ -57,11 +58,16 @@ fi
 echo "Processing tile ID: $tile_id, line $line_num from $tile_id_file"
 echo "meta_file: $meta_file"
 
-translate_flag="${HOME}/data/gvs/deploy/flags_translate_update_${year}/${tile_id}_done"
-translate_flag_new="${HOME}/data/gvs/deploy/flags_inference_update_${year}/${tile_id}_best_images_done"
-if [ -f "$translate_flag" ] || [ -f "$translate_flag_new" ]; then
-    echo "Translate flag file $translate_flag or $translate_flag_new exists. Skipping tile $tile_id"
-    continue
+# translate_flag="${HOME}/data/gvs/deploy/flags_translate_update_${year}/${tile_id}_done"
+# translate_flag_new="${HOME}/data/gvs/deploy/flags_inference_update_${year}/${tile_id}_best_images_done"
+# if [ -f "$translate_flag" ] || [ -f "$translate_flag_new" ]; then
+#     echo "Translate flag file $translate_flag or $translate_flag_new exists. Skipping tile $tile_id"
+#     continue
+# fi
+inference_flag="${HOME}/data/gvs/deploy/inference_flags_${year}/${tile_id}_best_images_done"
+if [ -f "$inference_flag" ]; then
+    echo "Inference flag file $inference_flag exists. Skipping tile $tile_id"
+    exit 0
 fi
 echo "Processing tile ID: $tile_id"
 echo "***************************** START INFERENCE *****************************"
@@ -92,7 +98,7 @@ if [ $exit_status -ne 0 ]; then
     rm -rf $save_dir/${tile_id}_GTiff
 else
     echo "Prediction command completed successfully"
-    touch ${translate_flag_new}
+    touch ${inference_flag}
 fi
 echo "***************************** END INFERENCE *****************************"
 
