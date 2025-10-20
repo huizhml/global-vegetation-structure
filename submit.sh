@@ -130,7 +130,7 @@ python -m deploy.schedule_tasks year=$year parquet_dir=~/data/gvs/deploy/slurm_j
 13)
 year=${2:-2020}
 ref_data_dir=${HOME}/data/gvs/GEDI_for_correction/partitions_${year}_v1
-sota_chm_dir=${HOME}/data/gvs/GEDI_for_correction/partitions_with_sota_chm_${year}_v1
+sota_chm_dir=${HOME}/data/gvs/GEDI_for_correction/partitions_with_sota_chm_${year}_v2
 save_dir=${HOME}/data/gvs/deploy/correction_${year}
 if [ ! -f ${save_dir}/tiles_${year}.txt ]; then
     echo "gather all tiles with GEDI reference data (for correction)"
@@ -138,7 +138,8 @@ if [ ! -f ${save_dir}/tiles_${year}.txt ]; then
     n=10
     echo "split tiles into $n parts, clean old parts if exist"
     rm -f ${save_dir}/tiles_${year}_part*.txt
-    split -n l/$n --numeric-suffixes=1 --suffix-length=1 --additional-suffix=.txt ${save_dir}/tiles_${year}.txt ${save_dir}/tiles_${year}_part
+    split -n l/$n --numeric-suffixes=1 --suffix-length=2 --additional-suffix=.txt ${save_dir}/tiles_${year}.txt ${save_dir}/tiles_${year}_part
+    rm ${save_dir}/tiles_stats/*
 fi
 ID=$(printf "%02d" ${SLURM_ARRAY_TASK_ID})
 echo ${save_dir}/tiles_${year}_part${ID}.txt
@@ -156,7 +157,7 @@ python -m postprocess.handle_border_artifacts year=$year \
 echo download sota chm data for correction set 2020;
 python -m download._7_download_sota_chm \
         location_files="${HOME}/data/gvs/GEDI_for_correction/partitions_2020_v1/*.parquet" \
-        output_dir="${HOME}/data/gvs/GEDI_for_correction/partitions_with_sota_chm_2020_v1"
+        output_dir="${HOME}/data/gvs/GEDI_for_correction/partitions_with_sota_chm_2020_v2"
 ;;
 *)
 echo runnning nothing ;;
