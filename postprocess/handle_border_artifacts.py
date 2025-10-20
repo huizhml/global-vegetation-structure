@@ -8,7 +8,6 @@ import glob
 import h5py
 import numpy as np
 import rasterio
-from rasterio.warp import transform
 import time
 import matplotlib.pyplot as plt
 import dask
