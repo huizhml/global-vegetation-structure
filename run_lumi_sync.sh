@@ -10,6 +10,57 @@
 #SBATCH --error=./logs/%x-%A_%a.err
 
 year=2024
+
+case $1 in
+0)
+# =======================================
+#    SYNC TILES TO LUMI-O
+# =======================================
+module load lumio
+
+lumi_project=465001846
+remote=lumi-${lumi_project}-private:
+gtiff_dir=${HOME}/flash/data/GVS/Deploy/predictions_GTiff_${year}
+tiles=$(find $gtiff_dir -type d -name "*_GTiff" -exec basename {} \; | sed 's/_GTiff//')
+for tile_id in $tiles; do
+    # check if the local GTiff files are completed in writing, older than 2 hours
+    SRC=${gtiff_dir}/${tile_id}_GTiff
+    if [ $(find ${SRC} -type f -mmin -120 | wc -l) -gt 0 ]; then
+        echo "Tile ${tile_id} till has files newer than 2 hours, skipping..."
+        continue
+    else
+        echo "Tile ${tile_id} is completed in writing, syncing..."
+    fi
+    # check if there are 303 predictions for tile_id in the lumio bucket
+    zone=$(echo ${tile_id:0:3} | tr '[:upper:]' '[:lower:]')
+    bucket_name=${zone}-${year}
+    DST=${remote}${bucket_name}/predictions_GTiff_${year}/${tile_id}
+    if rclone lsd ${remote} | grep "^.*${bucket_name}.*"; then
+        echo "Bucket ${bucket_name} exists"
+    else
+        echo "Bucket ${bucket_name} does not exist, creating..."
+        rclone mkdir ${remote}${bucket_name}
+    fi
+
+    while true; do
+        count=$(rclone ls "${DST}" | wc -l)
+        if [ $count -lt 303 ]; then
+            echo "Tile ${tile_id} has $count predictions, syncing..."
+            rclone sync "$SRC" "$DST"  --modify-window 2h
+        else
+            echo "Tile ${tile_id} has $count predictions, done, removing local GTiff..."
+            rm -rf ${SRC}
+            break
+        fi
+        sleep 10
+    done
+done
+;;
+1)
+# =======================================
+#    SYNC TILES TO ERDA
+# =======================================
+
 input_dir=${HOME}/data/GVS/deploy/predictions_${year}
 
 MAX_ERDA_SESSIONS=10
@@ -87,6 +138,5 @@ while true; do
     wait
     sleep 5
 done
-
-
-
+;;
+esac
