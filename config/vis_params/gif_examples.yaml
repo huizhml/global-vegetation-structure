@@ -69,3 +69,22 @@ gif:
       tile_id: "49MFT"
       col_off: 900
       row_off: 5800
+
+s2_rh_subplots:
+  pred_path: "~/data/gvs/deploy/predictions_GTiff_2020"
+  width: 200 #${width}
+  height: 200 #${height}
+  rh_idxs: [25, 98]
+  tiles:
+    - name: ""
+      tile_id: "31TDN"
+      time_idx: 15
+      col_off: 7720
+      row_off: 7968
+    - name: ""
+      tile_id: "31TDN"
+      time_idx: 15
+      col_off: 0
+      row_off: 0
+      width: 10980
+      height: 10980
