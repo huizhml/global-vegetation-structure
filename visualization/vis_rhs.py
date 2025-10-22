@@ -14,14 +14,17 @@ from typing import Optional
 from hydra.core.config_store import ConfigStore
 import hydra
 from omegaconf import OmegaConf
-
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+from matplotlib import gridspec
     
 class VisRHS:
     def __init__(self, year:int, rh_vis_param_path:str=None,
             prediction_dir:str=None,
             root_save_dir:str=None,
             tiles_info_path:str=None,
+            project_folder:str=None,
             **kwargs):
+        self.project_folder = Path(project_folder).expanduser()
         self.prediction_dir = Path(prediction_dir).expanduser()
         self.root_save_dir = Path(root_save_dir).expanduser()
         self.root_save_dir.mkdir(exist_ok=True)
@@ -84,6 +87,13 @@ class VisRHS:
             plt.close()
         
     def vis_rhs(self):
+        '''
+        Visualize the RHs as 2D images for given RH indices of given tiles
+        Args:
+            rh_idxs: list of RH indices to visualize
+        Returns:
+            None
+        '''
         save_dir = self.root_save_dir / f'rhs_2d_pngs'
         save_dir.mkdir(exist_ok=True)
         cfg = self.tiles_info['rhs']
@@ -98,7 +108,7 @@ class VisRHS:
             print(f'rh{rh_idx}', vmin, vmax)
             plt.figure(figsize=(8, 4))
             rh[rh == nodata] = 0
-            plt.imshow(rh, cmap='magma', vmin=vmin, vmax=vmax)
+            plt.imshow(rh, cmap='inferno', vmin=vmin, vmax=vmax)
             plt.xticks([])
             plt.yticks([])
             cbar = plt.colorbar(shrink=1, aspect=20)
@@ -180,13 +190,100 @@ class VisRHS:
         fig.write_image(gif_png_dir / f"{tile}_{name}.png")
         return fig
     
+    def make_s2_rh_subplots(self):
+        '''
+        Make subplots of S2 and RHs for given RH indices of given tiles, mainly for comparison of different RH products
+        Args:
+            rh_idxs: list of RH indices to visualize
+        Returns:
+            None
+        '''
+        save_dir = self.project_folder / 'vsm_examples' / f's2_rh_subplots'
+        save_dir.mkdir(exist_ok=True, parents=True)
+        zarr_path = self.project_folder / 'deploy' / f'inference_{self.year}.zarr'
+        cfg = self.tiles_info['s2_rh_subplots']
+        pred_path = Path(cfg['pred_path']).expanduser() # the parent directory of the prediction files (e.g. ~/data/gvs/deploy/predictions_GTiff_2020)
+        for tile_info in cfg['tiles']: 
+            cols = len(cfg['rh_idxs']) + 1
+            rows = 1
+            fig, axes = plt.subplots(rows, cols, figsize=(12, 4))
+
+            # Pattern: [image, image, cbar, image, cbar]
+            ncols = 2 * cols - 1
+            widths = []
+            for j in range(cols):
+                widths.append(1.0)               # image column
+                if j > 0:
+                    widths.append(0.05)          # cbar column right after each image (except first)
+
+            fig = plt.figure(figsize=(10, 4))
+            gs = gridspec.GridSpec(
+                nrows=1,
+                ncols=ncols,
+                width_ratios=widths,
+                wspace=0.2,  # spacing between image and colorbar columns
+            )
+
+            axes_main = []
+            caxes = []
+
+            # Create axes: main image axes at even columns; colorbar axes at odd columns
+            ax = fig.add_subplot(gs[0, 0])
+            axes_main.append(ax)
+            for j in range(1, cols):
+                ax = fig.add_subplot(gs[0, 2*j-1])
+                axes_main.append(ax)
+                cax = fig.add_subplot(gs[0, 2*j])
+                caxes.append(cax)
+            width = tile_info.get('width', cfg['width'])
+            height = tile_info.get('height', cfg['height'])
+            window = rio.windows.Window(col_off=tile_info['col_off'], row_off=tile_info['row_off'], width=width, height=height)
+            img_ds = xr.open_zarr(zarr_path, group=tile_info['tile_id'], consolidated=False, chunks='auto')
+            max_val = cfg.get('max_val', 2000)
+            x_slice = slice(tile_info['col_off'], tile_info['col_off']+width)
+            y_slice = slice(tile_info['row_off'], tile_info['row_off']+height)
+            rgb = img_ds.s2.sel(band=['B04', 'B03', 'B02']).isel(time=tile_info['time_idx'], x=x_slice, y=y_slice)
+            rgb = rgb.clip(0, max_val) / max_val
+            rgb.plot.imshow(x='x', y='y', rgb='band',  ax=axes_main[0], add_colorbar=False)
+            axes_main[0].set(title=f'S2', xticks=[], yticks=[], aspect='equal', xlabel='', ylabel='')
+            
+            
+            for i, rh_idx in enumerate(cfg['rh_idxs']):
+                if 'GTiff' in pred_path.stem:
+                    rh_file_path = pred_path / f'{tile_info['tile_id']}_GTiff/RH{rh_idx}_Q1_uncompressed.tif'
+                else:
+                    rh_file_path = pred_path / f'{tile_info['tile_id']}_cog/RH{rh_idx}_Q1.cog.tif'
+                with rio.open(rh_file_path) as src:
+                    rh = src.read(1, window=window)
+                    nodata = src.nodata
+                vmin = self.rh_vis_param[f'rh{rh_idx}']['cmin']
+                vmax = self.rh_vis_param[f'rh{rh_idx}']['cmax']
+                rh[rh == nodata] = 0
+                im = axes_main[i+1].imshow(rh, cmap='inferno', vmin=vmin, vmax=vmax)
+                axes_main[i+1].set(title=f'RH{rh_idx} [m]', xticks=[], yticks=[], aspect='equal', xlabel='', ylabel='')
+                # Colorbar goes to the dedicated cax for this panel (the slot right of it)
+                cax = caxes[i]  # note: i maps to panel i+1
+                if cax is not None:
+                    pos = cax.get_position()
+                    # shrink to 80% height and center vertically
+                    cax.set_position([pos.x0, pos.y0 + pos.height*0.15, pos.width, pos.height*0.7])
+                    cb = fig.colorbar(im, cax=cax)
+                    cb.set_ticks(np.linspace(vmin, vmax, 4))
+                    cb.set_ticklabels([f'{int(t/10)}' for t in np.linspace(vmin, vmax, 4)])
+            plt.tight_layout()
+            rh_idxs_str = '_'.join([str(rh_idx) for rh_idx in cfg['rh_idxs']])
+            plt.savefig(save_dir / f"exp_{tile_info['tile_id']}_time{tile_info['time_idx']}_RH{rh_idxs_str}_{width}x{height}.pdf", bbox_inches='tight')
+            plt.close()
+    
 @dataclass
 class Config:
     year: int = 2020
     prediction_dir: str = '~/data/gvs/deploy/predictions_2020'
+    project_folder: str = '~/data/gvs'
     root_save_dir: str = '~/data/gvs/deploy/eu_results'
     tiles_info_path: str = 'config/vis_params/gif_examples.yaml'
     rh_vis_param_path: str = 'config/vis_params/rh_vis_param.yaml'
+    task: str = 'vis_rhs'
 
 cs = ConfigStore.instance()
 cs.store(name='vis_rhs', node=Config)
@@ -197,7 +294,15 @@ def main(cfg):
     vis = VisRHS(**cfg)
     # vis.vis_rhs()
     # vis.vis_rgb()
-    vis.make_gif()
+    # vis.make_gif()
+    if cfg.task == 'vis_rhs':
+        vis.vis_rhs()
+    elif cfg.task == 'vis_rgb':
+        vis.vis_rgb()
+    elif cfg.task == 'make_gif':
+        vis.make_gif()
+    elif cfg.task == 'make_s2_rh_subplots':
+        vis.make_s2_rh_subplots()
     
 if __name__ == '__main__':
     main()
