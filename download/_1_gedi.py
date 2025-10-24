@@ -271,7 +271,7 @@ class GEDI(DaskDownloader):
         if file.exists() and not self.rewrite and is_parquet_ok(file):
             print(f'{file} exists and is ok')
             return
-        orbits_intersects_tile = self.gedi_table_index[self.gedi_table_index.intersects(s2_tile['geometry'])]
+        orbits_intersects_tile = self.gedi_table_index[self.gedi_table_index.intersects(s2_tile['geometry'])]#!!!! inside intersects it has to be a geometry object, otherwise it will try to match the index!!!
         if len(orbits_intersects_tile) == 0:
             return
         growing_months = s2_tile['growing_months']
@@ -378,21 +378,26 @@ class GEDI(DaskDownloader):
         gdf_.groupby('Name').apply(lambda x: x.to_parquet(temp_dir / f'{x.Name.iloc[0]}_{split_name}.parquet'))
         return df
 
-    def plotHistogram(self):  # TODO:needs update
-        ddf = dd.read_csv(self.dataFolder / f'*/*.csv', usecols=['rh98', 'pft_class', '.geo'], blocksize=64e6)
-        h, bins = da.histogram(ddf['rh98'], bins=100).compute()
-        plt.stairs(h, bins)
-        plt.savefig('rh98.png')
-        logger.info('plot saved')
-
-    def getSampleTable(self, plot=False):  # TODO:needs update
-        pass
-
-    def visualize(self):
-        """
-        Visualizes the GEDI data.
-        """
-        pass
+    def get_tiles_covered_by_gedi(self, s2_tiles_file: str, gedi_table_index_file: str = None, save_dir: str = None):
+        '''
+        Get the tiles covered by GEDI
+        
+        Args:
+            * s2_tiles_file: the path to the S2 tiles file, should have columns: Name, geometry
+            * gedi_table_index_file: the path to the GEDI table index file, should have columns: system:index, table_id, start_time, end_time, geometry
+            * save_dir: the path to save the tiles covered by GEDI
+        
+        Output:
+            * tiles_covered_by_gedi.txt: a text file with the tile names in the GEDI range
+            Each line is a tile name
+        '''
+        s2_tiles_file = Path(s2_tiles_file).expanduser()
+        s2_tiles = gpd.read_parquet(s2_tiles_file)
+        gedi_table_index_file = Path(gedi_table_index_file).expanduser()
+        gedi_table_index = gpd.read_parquet(gedi_table_index_file)
+        
+        tiles_covered_by_gedi = s2_tiles[s2_tiles.intersects(gedi_table_index['geometry'])]['Name'].unique()
+        tiles_covered_by_gedi.to_csv(save_dir / 's2_tiles_covered_by_gedi.txt', header=None, index=None, sep=' ', mode='w')
 
 
 @dataclass
@@ -430,9 +435,6 @@ def main(cfg):
     if cfg.task == 'download':
         # gedi.download()
         gedi.sup_download(cfg.mgrs_stats_file, cfg.old_gedi_dir, cfg.new_gedi_dir, flag_dir='~/data/gvs/GEDI_sup_flags')
-
-    elif cfg.task == 'visualize':
-        gedi.getSampleTable(plot=True)
     elif cfg.task == 'download_gedi_for_gvs_correction':
         gedi.get_orbit_for_s2_tiles(
             '~/data/gvs/s2_tiles_with_growing_months.parquet', save_dir=cfg.save_dir,
@@ -441,6 +443,10 @@ def main(cfg):
     elif cfg.task == 'get_used_gedi_points':
         gedi.get_used_gedi_points('~/data/gvs/s2_tiles_with_growing_months.parquet',
                                   '~/data/gvs/train_subsets', save_dir=cfg.used_gedi_points_dir)
+    elif cfg.task == 'get_tiles_covered_by_gedi':
+        gedi.get_tiles_covered_by_gedi(s2_tiles_file='~/data/gvs/s2_tiles_with_growing_months.parquet',
+                                       gedi_table_index_file=f'~/data/gvs/GEDI_for_correction/l2a_table_index_{cfg.year}.parquet',
+                                       save_dir=f'~/data/gvs/deploy/correction_${cfg.year}')
     else:
         logger.error(f'Task not recognized.\nreceived: {cfg.task} \nexpected: download or visualize')
 
