@@ -126,6 +126,8 @@ class BaseDeployDataset(Dataset):
                 self.metadata_file = Path(metadata_file).expanduser()
                 df = pd.read_parquet(self.metadata_file, columns=['id', 'eo:cloud_cover', 's2:mgrs_tile', 's2:nodata_pixel_percentage', 'orbit'])
                 df = df[df['s2:mgrs_tile'] == self.tile_id]
+                if len(df) == 0:
+                    raise RuntimeError(f'No images found for tile {self.tile_id} in metadata file {self.metadata_file}')
                 ids_from_zarr = self.store[f'{self.key}id'][:]
                 df = df[df['id'].isin(ids_from_zarr)]
                 df = df.reset_index(drop=True)
@@ -714,9 +716,10 @@ class S2DatasetStream(BaseDeployDataset):
         api = pystac_client.Client.open(stac_endpoint, modifier=planetary_computer.sign_inplace, stac_io=stac_api_io)
         datetime = f'{self.year}-01-01/{self.year}-12-31'
         s2_df = gpd.read_parquet(self.s2_grid_file)
-        row = s2_df[s2_df['Name'] == self.tile_id].iloc[0]
+        row = s2_df[s2_df['Name'] == self.tile_id]#.iloc[0]
+        bbox = row.geometry.total_bounds
+        row = row.iloc[0]
         tile = row['Name']
-        bbox = row.geometry.bounds
         bbox = [bbox[0], bbox[1], min(bbox[2], 180), bbox[3]]
         search = api.search(collections=collection_id, bbox=bbox, datetime=datetime, 
                             query={'eo:cloud_cover': {'lt': max_cloud_cover},
@@ -725,11 +728,16 @@ class S2DatasetStream(BaseDeployDataset):
         items = search.item_collection()
         if len(items) == 0:
             print(f'{tile} has no images, bbox={bbox}, skipping...')
-            return
+            self.h5_file.with_name(f'{tile}_no_images').touch()
+            raise RuntimeError(f'{tile} has no images, bbox={bbox}, skipping...')
         df = gpd.GeoDataFrame.from_features(items.to_dict(), crs='epsg:4326')
         df['id'] = df['s2:product_uri'].str.replace(r'_[A-Z]\d{4}', '', regex=True).str.replace('.SAFE', '')
         month = pd.to_datetime(df['datetime']).dt.month
         df = df[month.isin(row.growing_months)]
+        if len(df) == 0:
+            print(f'{tile} has no images, bbox={bbox}, skipping...')
+            self.h5_file.with_name(f'{tile}_no_images_in_growing_months').touch()
+            raise RuntimeError(f'{tile} has no images in growing months, bbox={bbox}, skipping...')
         # get top 30 images, 10 from the best orbits and 20 from the rest
         if (df['s2:nodata_pixel_percentage']==0).sum() > 0:
             best_orbits = df[df['s2:nodata_pixel_percentage']==0]['sat:relative_orbit'].unique()
