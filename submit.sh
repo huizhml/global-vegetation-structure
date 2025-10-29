@@ -161,9 +161,13 @@ python -m download._7_download_sota_chm \
 ;;
 
 15)
-echo create global mosaic;
+echo create global mosaic for 2020;
 rh_idx=(98 100)
 python -m visualization.create_global_view year=2020 rh_idx="${rh_idx[*]}" task=run_mosaic_for_key_rhs
+;;
+16)
+echo create global mosaic for 2024;
+python -m visualization.create_global_view year=2024 task=run_mosaic_for_all_rhs countries=''
 ;;
 *)
 echo runnning nothing ;;

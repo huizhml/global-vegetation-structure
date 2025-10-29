@@ -8,6 +8,7 @@ from hydra.core.config_store import ConfigStore
 from dataclasses import dataclass, field
 import hydra
 import dask
+import subprocess
 try:
     import resource  # Posix: bump soft limit for open files if possible
     soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
@@ -73,12 +74,7 @@ def get_tiles_in_countries(countries_file: Path, s2_grid_file: str):
     return tiles, regions
 
 
-def resample_and_mosaic(year = 2020, rh_idx = 98, q_idx = 1, countries: str = None, s2_grid_file: str = None):
-    
-    dst_srs = "EPSG:4326"         
-    resampling = "average"         
-    src_nodata = None                 # trust per-tile nodata if present
-    dst_nodata = 32767
+def resample_and_mosaic(year = 2020, rh_idx = 98, q_idx = 1, countries: str = '', s2_grid_file: str = None):
     
     pred_dir = f"~/data/gvs/deploy/predictions_{year}"
     pred_dir = Path(pred_dir).expanduser()
@@ -94,14 +90,21 @@ def resample_and_mosaic(year = 2020, rh_idx = 98, q_idx = 1, countries: str = No
         inputs = [f'{pred_dir}/{t}_cog/RH{rh_idx}_Q{q_idx}.cog.tif' for t in tiles]
         save_dir = countries.parent
     else:
-        tiles = pred_dir.iterdir()
         inputs = []
-        for tile in tiles:
-            tile_id = tile.stem.split('_')[0]
-            if (pred_gtif_dir / f'{tile_id}_GTiff/RH{rh_idx}_Q{q_idx}_uncompressed.tif').exists():
+        if year == 2024: # data on lumi-o
+            flag_dir = f"~/data/gvs/deploy/flags_inference_{year}"
+            flag_dir = Path(flag_dir).expanduser()
+            for flag_file in flag_dir.glob(f'*_best_images_done'):
+                tile_id = flag_file.stem.split('_')[0]
                 inputs.append(pred_gtif_dir / f'{tile_id}_GTiff/RH{rh_idx}_Q{q_idx}_uncompressed.tif')
-            else:
-                inputs.append(tile / f'RH{rh_idx}_Q{q_idx}.cog.tif') #COGs
+        else:
+            tiles = pred_dir.iterdir()
+            for tile in tiles:
+                tile_id = tile.stem.split('_')[0]
+                if (pred_gtif_dir / f'{tile_id}_GTiff/RH{rh_idx}_Q{q_idx}_uncompressed.tif').exists():
+                    inputs.append(pred_gtif_dir / f'{tile_id}_GTiff/RH{rh_idx}_Q{q_idx}_uncompressed.tif')
+                else:
+                    inputs.append(tile / f'RH{rh_idx}_Q{q_idx}.cog.tif') #COGs
         save_dir = pred_dir.parent / f"global_mosaic_{year}"
     print(f"Found {len(inputs)} input files")
     if len(inputs) == 0:
@@ -120,6 +123,16 @@ def resample_and_mosaic(year = 2020, rh_idx = 98, q_idx = 1, countries: str = No
     
         
     def warp_tile(src_path:Path, dst_dir:Path, dst_srs="EPSG:4326", xRes=0.01, yRes=0.01, dst_nodata=32767, resampleAlg="average"):
+        if year == 2024 and (not src_path.exists()):
+            # sync data from lumi-o
+            tile_id = src_path.parent.stem.split('_')[0]
+            zone = tile_id[:3].lower()
+            bucket_name = f"{zone}-{year}"
+            remote = f"lumi-465001846-private:{bucket_name}/predictions_GTiff_{year}/{tile_id}/RH{rh_idx}_Q{q_idx}_uncompressed.tif"
+            task = subprocess.run(f"rclone copy {remote} {src_path.parent} --transfers=16 --checkers=16 --multi-thread-streams=4", shell=True)
+            if task.returncode != 0:
+                raise RuntimeError(f"Failed to sync data from lumi-o for tile {tile_id}")
+            
         dst_path = dst_dir / f'{src_path.parent.stem}_resampled.tif'
         warp_opts = gdal.WarpOptions(
             dstSRS=dst_srs,
@@ -175,7 +188,7 @@ class MosaicConfig:
     q_idx: int = 1
     countries: str = ''
     s2_grid_file: str = '~/data/gvs/s2_tiles_with_growing_months.parquet'
-    task: str = 'create_global_view'
+    task: str = 'run_mosaic_for_key_rhs'
     
 cs = ConfigStore.instance()
 cs.store(name='mosaic', node=MosaicConfig)
