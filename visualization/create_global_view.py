@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 import hydra
 import dask
 import subprocess
+from rio_cogeo.cogeo import cog_translate
+from rio_cogeo.profiles import cog_profiles
 try:
     import resource  # Posix: bump soft limit for open files if possible
     soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
@@ -154,12 +156,15 @@ def resample_and_mosaic(year = 2020, rh_idx = 98, q_idx = 1, countries: str = ''
     tasks = [dask.delayed(warp_tile)(p, temp_dir) for p in inputs]
     warped_paths = dask.compute(*tasks, scheduler="processes", num_workers=8)
     
+    land_shp = Path("~/data/gvs/ne_10m_admin_0_countries/ne_10m_admin_0_countries.shp").expanduser()
     warp_opts_mosaic = gdal.WarpOptions(
         dstSRS="EPSG:4326",
         resampleAlg="average",
         dstNodata=32767,
         creationOptions=["COMPRESS=LERC_ZSTD", "TILED=YES"],
-        warpOptions=["WRAP_DATELINE=YES"]
+        warpOptions=["WRAP_DATELINE=YES", "INIT_DEST=NO_DATA"],
+        cutlineDSName=str(land_shp),
+        cropToCutline=False  # keep global extent; water becomes NODATA
     )
 
     gdal.Warp(
@@ -167,7 +172,24 @@ def resample_and_mosaic(year = 2020, rh_idx = 98, q_idx = 1, countries: str = ''
         srcDSOrSrcDSTab=list(warped_paths),
         options=warp_opts_mosaic
     )
-    print(f"✅ Global mosaic written to {thumb_path}")
+    # translate to cog
+    cog_path = thumb_path.with_suffix('.cog.tif')
+    output_profile = cog_profiles.get("LERC_ZSTD")
+    output_profile.update(dict(
+        BIGTIFF="IF_SAFER",
+        ZSTD_LEVEL=1,
+        PREDICTOR=2,
+        BLOCKYSIZE=1024,
+        BLOCKXSIZE=1024,
+        MAX_Z_ERROR=0
+    ))
+    config = dict(
+        GDAL_NUM_THREADS="ALL_CPUS",
+        GDAL_TIFF_INTERNAL_MASK=True,
+        GDAL_TIFF_OVR_BLOCKSIZE="128",
+    )
+    cog_translate(thumb_path, cog_path, output_profile, config=config, in_memory=False,quiet=True, use_cog_driver=True)
+    print(f"✅ Global mosaic written to {cog_path}")
     
 
 def run_mosaic_for_key_rhs(year = 2020, rh_idx: str = '98', q_idx = 1, countries: str = None, s2_grid_file: str = None):
