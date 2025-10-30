@@ -159,15 +159,20 @@ python -m download._7_download_sota_chm \
         location_files="${HOME}/data/gvs/GEDI_for_correction/partitions_2020_v1/*.parquet" \
         output_dir="${HOME}/data/gvs/GEDI_for_correction/partitions_with_sota_chm_2020_v2"
 ;;
-
 15)
-echo create global mosaic for 2020;
+year=${2:-2020}
 rh_idx=(98 100)
-python -m visualization.create_global_view year=2020 rh_idx="${rh_idx[*]}" task=run_mosaic_for_key_rhs
-;;
-16)
-echo create global mosaic for 2024;
-python -m visualization.create_global_view year=2024 task=run_mosaic_for_all_rhs countries=''
+echo create global mosaic for $year;
+python -m visualization.create_global_view year=$year rh_idx="${rh_idx[*]}" task=run_mosaic_for_key_rhs countries=''
+upload_to_erda=${2:-False}
+if [ $upload_to_erda = "True" ]; then
+    echo "Uploading global mosaic to ERDA"
+    sftp -q ucph-erda <<EOF
+mkdir GVS/global_mosaic_$year
+cd GVS/global_mosaic_$year
+put -r ~/data/gvs/deploy/global_mosaic_$year/*.cog.tif
+EOF
+fi
 ;;
 *)
 echo runnning nothing ;;
