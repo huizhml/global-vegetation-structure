@@ -174,6 +174,26 @@ put -r ~/data/gvs/deploy/global_mosaic_$year/*.cog.tif
 EOF
 fi
 ;;
+16)
+# =======================================
+#    MASK SNOW AND WATER PREDICTIONS
+# =======================================
+echo masking snow and water predictions;
+line_num=${SLURM_ARRAY_TASK_ID:-2}
+year=${2:-2020}
+tile_id_file=${HOME}/data/gvs/deploy/arctic_regions_tiles.txt # No header
+line=$(sed -n "${line_num}p" $tile_id_file)
+IFS=',' read -r tile_id idx <<< "$line"
+echo "Line $line_num: Tile=$tile_id"
+tif_dir=${HOME}/data/gvs/deploy/predictions_gtiff_masked_${year}/${tile_id}
+count=$(ls -1 ${tif_dir}/*.tif | wc -l)
+if [ $count -ge 303 ]; then
+    echo "Tile ${tile_id} already masked, skipping"
+    exit 0
+fi
+python -m postprocess.mask_snow_water_preds year=$year tile_id=$tile_id save_dir=~/data/gvs/deploy/predictions_gtiff_masked_$year
+;;
+
 *)
 echo runnning nothing ;;
 esac
