@@ -27,6 +27,8 @@ echo "********************************************************************"
 
 line_num=${SLURM_ARRAY_TASK_ID:-2}
 year=${1:-2020}
+stream_input=${2:-False}
+repredict_tiles=${3:-False}
 save_dir=~/data/gvs/deploy/predictions_GTiff_${year}
 mkdir -p $save_dir
 # hostname=$(hostname)
@@ -43,7 +45,8 @@ mkdir -p $save_dir
 # **************************************************************
 # tile_id_file=${HOME}/data/gvs/deploy/unfinished_tiles_${year}.txt
 # tile_id_file=${HOME}/data/gvs/deploy/slurm_job_files_${year}/deploy_s2_items_${year}_part0.txt
-tile_id_file=${HOME}/data/gvs/deploy/predicted_not_ordered_tiles_${year}.txt
+# tile_id_file=${HOME}/data/gvs/deploy/predicted_not_ordered_tiles_${year}.txt
+tile_id_file=${HOME}/data/gvs/deploy/slurm_job_files_${year}/deploy_s2_items_${year}_corrupted_predictions.txt
 line=$(sed -n "${line_num}p" $tile_id_file)
 IFS=',' read -r tile_id idx <<< "$line"
 echo "Line $line_num: Tile=$tile_id, idx=$idx"
@@ -65,6 +68,10 @@ echo "meta_file: $meta_file"
 #     continue
 # fi
 inference_flag="${HOME}/data/gvs/deploy/inference_flags_${year}/${tile_id}_best_images_done"
+if [ "$repredict_tiles" == "True" ]; then
+# remove inference flag instead of skip checking, since the inference may fail
+    rm -f $inference_flag
+fi    
 if [ -f "$inference_flag" ]; then
     echo "Inference flag file $inference_flag exists. Skipping tile $tile_id"
     exit 0
@@ -73,24 +80,43 @@ echo "Processing tile ID: $tile_id"
 echo "***************************** START INFERENCE *****************************"
 run_id=cg11fpjr
 echo run prediction for model $run_id for tile $tile_id;
-python run.py predict -c config/predict.yaml --model.backbone config/model/xception_mix_order.yaml \
-        --data.init_args.input_lat_lon True \
-        --data.init_args.num_workers 4 \
-        --data.init_args.tile_id $tile_id \
-        --data.init_args.metadata_file $meta_file \
-        --data.init_args.pred_fp ~/data/gvs/deploy/inference_${year}.zarr \
-        --data.init_args.prediction_dir $save_dir/${tile_id}_GTiff \
-        --data.init_args.year $year \
-        --correct_bias True \
-        --data.init_args.patch_size 544 \
-        --data.init_args.chunk_size 512 \
-        --data.init_args.debug False \
-        --data.init_args.predict_full_profile True \
-        --data.init_args.output_format gtiff \
-        --trainer.logger.init_args.resume False \
-        --trainer.logger.init_args.offline True \
-        --trainer.logger.init_args.id $run_id 
-
+if [ "$stream_input" == "True" ]; then
+    echo "Stream input"
+    python run.py predict -c config/predict.yaml --model.backbone config/model/xception_mix_order.yaml \
+            --data.init_args.tile_id $tile_id \
+            --data.init_args.metadata_file $meta_file \
+            --data.init_args.s2_grid_file ${HOME}/data/gvs/s2_tiles_with_growing_months.parquet \
+            --data.init_args.pred_fp ${HOME}/data/gvs/deploy/inference_${year} \
+            --data.init_args.prediction_dir ${save_dir}/${tile_id}_GTiff \
+            --data.init_args.year $year \
+            --data.init_args.batch_size 1 \
+            --data.init_args.cache_predictions False \
+            --data.init_args.stream_input True \
+            --data.init_args.download_data True \
+            --data.init_args.debug False \
+            --trainer.logger.init_args.resume False \
+            --trainer.logger.init_args.offline True \
+            --trainer.logger.init_args.save_dir /tmp \
+            --trainer.logger.init_args.id $run_id 
+else
+    python run.py predict -c config/predict.yaml --model.backbone config/model/xception_mix_order.yaml \
+            --data.init_args.input_lat_lon True \
+            --data.init_args.num_workers 4 \
+            --data.init_args.tile_id $tile_id \
+            --data.init_args.metadata_file $meta_file \
+            --data.init_args.pred_fp ~/data/gvs/deploy/inference_${year}.zarr \
+            --data.init_args.prediction_dir $save_dir/${tile_id}_GTiff \
+            --data.init_args.year $year \
+            --correct_bias True \
+            --data.init_args.patch_size 544 \
+            --data.init_args.chunk_size 512 \
+            --data.init_args.debug False \
+            --data.init_args.predict_full_profile True \
+            --data.init_args.output_format gtiff \
+            --trainer.logger.init_args.resume False \
+            --trainer.logger.init_args.offline True \
+            --trainer.logger.init_args.id $run_id 
+fi
 # Capture the exit status of the command
 exit_status=$?
 if [ $exit_status -ne 0 ]; then
