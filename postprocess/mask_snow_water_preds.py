@@ -1,4 +1,6 @@
 import geopandas as gpd
+from shapely.geometry import box
+from shapely.ops import unary_union
 from pathlib import Path
 from dataclasses import dataclass
 import hydra
@@ -35,6 +37,31 @@ def get_tiles_in_arctic_regions(arctic_regions_file: str, s2_grid_file: str):
         for tile in tiles['Name'].unique():
             f.write(tile + '\n')
     return tiles
+
+def get_land_sea_boundary_tiles(s2_grid_file: str, countries_file: str, ocean_file: str):
+    # Load datasets
+    s2_grid_file = Path(s2_grid_file).expanduser()
+    s2_grid = gpd.read_parquet(s2_grid_file)
+    tiles = s2_grid.to_crs(4326)
+    countries = gpd.read_file(countries_file).to_crs(4326)
+    land = gpd.read_file(ocean_file).to_crs(4326)
+
+    # Create a global ocean polygon
+    world_bbox = box(-180, -90, 180, 90)
+    land_union = unary_union(land.geometry)
+    ocean = gpd.GeoDataFrame(geometry=[world_bbox.difference(land_union)], crs=4326)
+
+    # Intersect tiles with land and ocean
+    tiles_land = tiles[tiles.intersects(land_union)]
+    tiles_ocean = tiles[tiles.intersects(ocean.iloc[0].geometry)]
+
+    # Tiles that intersect both land and ocean
+    coastal_tiles = tiles_land[tiles_land["Name"].isin(tiles_ocean["Name"])]
+    coastal_tiles_file = Path('~/data/gvs/deploy/coastal_tiles.txt').expanduser()
+    with open(coastal_tiles_file, 'w') as f:
+        for tile in coastal_tiles['Name'].unique():
+            f.write(tile + '\n')
+    return coastal_tiles
 
 def mask_snow_water_preds(year: int = 2020, tile_id: str = None, s2_grid_file: str = None, save_dir: str = None, translate: bool = False):
     save_dir = Path(save_dir).expanduser()
@@ -98,6 +125,9 @@ class MaskConfig:
     year: int = 2020
     save_dir: str = f'~/data/gvs/deploy/predictions_gtiff_masked_{year}'
     tile_id: str = '11XMG'
+    countries_file: str = '~/data/gvs/ne_10m_admin_0_countries/ne_10m_admin_0_countries.shp'
+    ocean_file: str = '~/data/gvs/ne_10m_ocean/ne_10m_ocean.shp'
+    task: str = 'mask_snow_water_preds'
 
     
 
@@ -108,8 +138,13 @@ cs.store(name='mask', node=MaskConfig)
 def main(cfg):
     print(cfg)
     t0 = time.time()
-    mask_snow_water_preds(cfg.year, cfg.tile_id, cfg.s2_grid_file, cfg.save_dir)
-    print(f'Time taken to mask {cfg.tile_id} for {cfg.year}: {time.time() - t0:.2f} seconds')
-    
+    if cfg.task == 'mask_snow_water_preds':
+        mask_snow_water_preds(cfg.year, cfg.tile_id, cfg.s2_grid_file, cfg.save_dir)
+        print(f'Time taken to mask {cfg.tile_id} for {cfg.year}: {time.time() - t0:.2f} seconds')
+    elif cfg.task == 'get_land_sea_boundary_tiles':
+        land_sea_boundary_tiles = get_land_sea_boundary_tiles(cfg.s2_grid_file, cfg.countries_file, cfg.ocean_file)
+        print(f'Time taken to get land sea boundary tiles: {time.time() - t0:.2f} seconds')
+        
+        
 if __name__ == '__main__':
     main()
