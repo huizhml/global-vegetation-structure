@@ -193,13 +193,50 @@ def get_unfinished_tiles(deploy_status_file: str):
         unfinished_tiles[['Name', f'meta_file_idx_{year}']].to_csv(f'~/data/gvs/deploy/unfinished_tiles_{year}.txt', index=False)
 
 
+def get_tiles_covered_by_gedi(s2_grid_file: str, save_dir: str = None):
+    '''
+    Get the tiles covered by GEDI
+
+    Args:
+        * s2_grid_file: the path to the S2 tiles file, should have columns: Name, geometry
+        * gedi_table_index_file: the path to the GEDI table index file, should have columns: system:index, table_id, start_time, end_time, geometry
+
+    Output:
+        * tiles_covered_by_gedi.txt: a text file with the tile names in the GEDI range
+        Each line is a tile name
+    '''
+    save_dir = Path(save_dir).expanduser()
+    s2_grid_file = Path(s2_grid_file).expanduser()
+    s2_tiles = gpd.read_parquet(s2_grid_file)
+    # no_images_tiles_24 = ['16XET',  '18XWT',  '20XNT',  '23XNN',  '24XWT',  '25XEN', '17XNN',  '19XEN',  '22XET',  '23XNP',  '24XWU',  '26XNT']
+    for year in [2020, 2024]:
+        gedi_tiles_file = save_dir / f's2_tiles_covered_by_gedi_{year}.txt'
+        if gedi_tiles_file.exists():
+            tiles_covered_by_gedi = np.loadtxt(gedi_tiles_file, dtype=str)
+        else:
+            gedi_table_index_file = Path(f'~/data/gvs/GEDI_for_correction/l2a_table_index_{year}.parquet').expanduser()
+            gedi_table_index = gpd.read_parquet(gedi_table_index_file)
+            tiles_covered_by_gedi = s2_tiles[s2_tiles.intersects(gedi_table_index['geometry'].union_all())]['Name'].unique()
+            np.savetxt(gedi_tiles_file, tiles_covered_by_gedi, fmt='%s')
+        predicted_in_gedi_range =[]
+        if year == 2020:
+            pred_cog_dir = Path(f'~/data/gvs/deploy/predictions_{year}').expanduser()
+            pred_gtif_dir = Path(f'~/data/gvs/deploy/predictions_GTiff_{year}').expanduser()
+        else:
+            pred_gtif_dir = Path(f'~/data/gvs/deploy/predictions_GTiff_{year}').expanduser()
+            pred_cog_dir = Path(f'~/data/gvs/deploy/predictions_{year}').expanduser()
+        for tile in tiles_covered_by_gedi:
+            if len(list(pred_cog_dir.glob(f'{tile}_cog'))) > 0 or len(list(pred_gtif_dir.glob(f'{tile}_GTiff'))) > 0:
+                predicted_in_gedi_range.append(tile)
+        np.savetxt(save_dir / f's2_tiles_predicted_in_gedi_range_{year}.txt', predicted_in_gedi_range, fmt='%s')
+
 
 @dataclass
 class MyConfig:
     s2_grid_file: str = '~/data/gvs/s2_tiles_with_growing_months.parquet'
     flag_dir: str = '~/data/gvs/deploy/translate_flags'
     prediction_dir: str = '~/data/gvs/deploy/predictions'
-    save_dir: str = '~/data/gvs/'
+    save_dir: str = '~/data/gvs/deploy'
     task: str = 'check_prediction_status'
     
 cs = ConfigStore.instance()
@@ -210,13 +247,15 @@ def main(cfg):
     if cfg.task == 'check_prediction_status':
         check_prediction_status(cfg.s2_grid_file, cfg.flag_dir, cfg.prediction_dir, cfg.save_dir)
     elif cfg.task == 'update_deploy_status':
-        update_deploy_status(f'{cfg.save_dir}/deploy/deploy_status.parquet')
+        update_deploy_status(f'{cfg.save_dir}/deploy_status.parquet')
     # check_input_images_availability(cfg.s2_grid_file)
     elif cfg.task == 'get_unfinished_tiles':
-        get_unfinished_tiles(f'{cfg.save_dir}/deploy/deploy_status.parquet')
+        get_unfinished_tiles(f'{cfg.save_dir}/deploy_status.parquet')
     elif cfg.task == 'add_gedi_correction_count':
         gedi_correction_dir = cfg.get('gedi_correction_dir', '~/data/gvs/GEDI_for_correction')
         add_gedi_correction_count(cfg.s2_grid_file, gedi_correction_dir)
+    elif cfg.task == 'get_tiles_covered_by_gedi':
+        get_tiles_covered_by_gedi(cfg.s2_grid_file, cfg.save_dir)
 
 if __name__ == '__main__':
     main()
