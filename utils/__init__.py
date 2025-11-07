@@ -172,3 +172,10 @@ def get_geom_for_countries(countries_file: str, world_countries_shp: str=None):
         countries = [line.strip() for line in file]
     countries_df = world_countries_df[world_countries_df['ADMIN'].isin(countries)]
     return countries_df
+
+def get_epsg_from_tile(tile_name):
+    zone = int(tile_name[:2])
+    band = tile_name[2]
+    hemisphere = 'south' if band <= 'M' else 'north'
+    epsg = 32700 + zone if hemisphere == 'south' else 32600 + zone
+    return epsg

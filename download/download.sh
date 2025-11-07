@@ -140,7 +140,7 @@ case $1 in
     python -m download._1_gedi task=download_gedi_for_gvs_correction \
             correction_number_per_tile=4000 \
             year=2024 \
-            save_dir=${HOME}/data/GVS/GEDI_for_correction/partitions_2024_v1 \
+            save_dir=${HOME}/data/gvs/GEDI_for_correction/partitions_2024_v1 \
             exclude_used_gedi_points=True \
             used_gedi_points_dir=${HOME}/data/GVS/fitting_data_coord_partitions
     ;;
@@ -151,7 +151,7 @@ case $1 in
                 year=2020 \
                 exclude_used_gedi_points=True \
                 used_gedi_points_dir=${HOME}/data/GVS/fitting_data_coord_partitions \
-                save_dir=${HOME}/data/GVS/GEDI_for_correction/partitions_2020_v1
+                save_dir=${HOME}/data/gvs/GEDI_for_correction/partitions_2020_v1
     ;;
 
 esac

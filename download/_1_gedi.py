@@ -397,7 +397,7 @@ class GEDI(DaskDownloader):
         gedi_table_index = gpd.read_parquet(gedi_table_index_file)
         
         tiles_covered_by_gedi = s2_tiles[s2_tiles.intersects(gedi_table_index['geometry'])]['Name'].unique()
-        tiles_covered_by_gedi.to_csv(save_dir / 's2_tiles_covered_by_gedi.txt', header=None, index=None, sep=' ', mode='w')
+        tiles_covered_by_gedi.to_csv(save_dir / 'tiles_covered_by_gedi.txt', header=None, index=None, sep=' ', mode='w')
 
 
 @dataclass

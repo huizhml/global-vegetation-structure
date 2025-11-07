@@ -84,7 +84,7 @@ def add_gedi_correction_count(s2_grid_file: str, geidi_correction_dir: str):
     s2_grid_file = Path(s2_grid_file).expanduser()
     geidi_correction_dir = Path(geidi_correction_dir).expanduser()
     df = gpd.read_parquet(s2_grid_file)
-    s2_tiles_cover_gedi = np.loadtxt(Path.home() / 'data/gvs/deploy/s2_tiles_covered_by_gedi.txt', dtype=str)
+    s2_tiles_cover_gedi = np.loadtxt(Path.home() / 'data/gvs/deploy/tiles_covered_by_gedi.txt', dtype=str)
     df['covered_by_gedi'] = False
     df.loc[df['Name'].isin(s2_tiles_cover_gedi), 'covered_by_gedi'] = True
     for year in [2020, 2024]:
@@ -122,7 +122,7 @@ def update_deploy_status(deploy_status_file: str):
     gtiff_dir = Path(f'~/data/gvs/deploy/predictions_GTiff_2020').expanduser()
     df['type_2020'] = 'cog'
     predicted_wrong_tiles = pd.read_csv(f'~/data/gvs/deploy/predicted_not_ordered_tiles_2020.txt')
-    duplicate_tiles = pd.read_csv(f'~/data/gvs/deploy/duplicated_s2_tiles.txt')
+    duplicate_tiles = pd.read_csv(f'~/data/gvs/deploy/tiles_duplicated.txt')
     for tile in df['Name']:
         # check for 2020
         if tile in predicted_wrong_tiles['Name'].values:
@@ -210,7 +210,7 @@ def get_tiles_covered_by_gedi(s2_grid_file: str, save_dir: str = None):
     s2_tiles = gpd.read_parquet(s2_grid_file)
     # no_images_tiles_24 = ['16XET',  '18XWT',  '20XNT',  '23XNN',  '24XWT',  '25XEN', '17XNN',  '19XEN',  '22XET',  '23XNP',  '24XWU',  '26XNT']
     for year in [2020, 2024]:
-        gedi_tiles_file = save_dir / f's2_tiles_covered_by_gedi_{year}.txt'
+        gedi_tiles_file = save_dir / f'tiles_covered_by_gedi_{year}.txt'
         if gedi_tiles_file.exists():
             tiles_covered_by_gedi = np.loadtxt(gedi_tiles_file, dtype=str)
         else:
@@ -228,7 +228,7 @@ def get_tiles_covered_by_gedi(s2_grid_file: str, save_dir: str = None):
         for tile in tiles_covered_by_gedi:
             if len(list(pred_cog_dir.glob(f'{tile}_cog'))) > 0 or len(list(pred_gtif_dir.glob(f'{tile}_GTiff'))) > 0:
                 predicted_in_gedi_range.append(tile)
-        np.savetxt(save_dir / f's2_tiles_predicted_in_gedi_range_{year}.txt', predicted_in_gedi_range, fmt='%s')
+        np.savetxt(save_dir / f'tiles_predicted_in_gedi_range_{year}.txt', predicted_in_gedi_range, fmt='%s')
 
 
 @dataclass

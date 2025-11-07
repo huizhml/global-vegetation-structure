@@ -65,11 +65,6 @@ def check_duplicated_images():
         print(f'Total duplicated tiles in year {year}: {total_cnt}')
 
 def check_images_order():
-    '''
-    Get the list of predicted tiles with incorrect input images order (seleted least optimal 20 images from >20 iamges)
-    - predictions with {tile_id}_best_images_done are with correct input images order.
-    - only check predictions with inference flag {tile_id}_done
-    '''
     for year in [2020]:
         not_ordered_tiles = []
         slurm_config_dir = Path(f'~/data/gvs/deploy/slurm_job_files_{year}').expanduser()
