@@ -154,14 +154,15 @@ python -m postprocess.handle_border_artifacts year=$year \
 ;;
 
 14)
-echo download sota chm data for correction set 2020;
+year=${2:-2024}
+echo download sota chm data for correction set $year;
 python -m download._7_download_sota_chm \
-        location_files="${HOME}/data/gvs/GEDI_for_correction/partitions_2020_v1/*.parquet" \
-        output_dir="${HOME}/data/gvs/GEDI_for_correction/partitions_with_sota_chm_2020_v2"
+        location_files="${HOME}/data/gvs/GEDI_for_correction/partitions_${year}_v1/*.parquet" \
+        output_dir="${HOME}/data/gvs/GEDI_for_correction/partitions_with_sota_chm_${year}_v1"
 ;;
 15)
 year=${2:-2020}
-rh_idx=(98 100)
+rh_idx=($(seq 4 97))
 echo create global mosaic for $year;
 python -m visualization.create_global_view year=$year rh_idx="${rh_idx[*]}" task=run_mosaic_for_key_rhs countries=''
 upload_to_erda=${2:-False}
@@ -194,6 +195,14 @@ fi
 python -m postprocess.mask_snow_water_preds year=$year tile_id=$tile_id save_dir=~/data/gvs/deploy/predictions_gtiff_masked_$year
 ;;
 
+17)
+# =======================================
+#    CREATE STAC CATALOG FROM ERDA
+# =======================================
+echo create stac catalog;
+conda activate py3;
+python -m postprocess.stac_collection task=create_catalog
+;;
 *)
 echo runnning nothing ;;
 esac
