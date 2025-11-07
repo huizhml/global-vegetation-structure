@@ -37,7 +37,7 @@ def authenticate():
 
     """
     key_file = os.environ.get('KEY_FILE')
-    key_file = key_file or 'keys/nrt-key.json'
+    key_file = key_file or 'keys/private-key.json'
     print('Authenticating from', key_file)
     key = json.load(open(key_file))
     credentials = ee.ServiceAccountCredentials(key['client_email'], key_file)
