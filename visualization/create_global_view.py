@@ -1,5 +1,6 @@
 from osgeo import gdal
 from osgeo import osr
+from osgeo import ogr
 from glob import glob
 from pathlib import Path
 from typing import List, Union
@@ -80,8 +81,10 @@ def resample_and_mosaic(year = 2020, rh_idx = 98, q_idx = 1, countries: str = ''
     
     pred_dir = f"~/data/gvs/deploy/predictions_{year}"
     pred_dir = Path(pred_dir).expanduser()
-    pred_gtif_dir = f'~/data/gvs/deploy/predictions_GTiff_{year}'
+    pred_gtif_dir = f'~/data/gvs/deploy/predictions_gtiff_{year}'
     pred_gtif_dir = Path(pred_gtif_dir).expanduser()
+    masked_pred_dir = f'~/data/gvs/deploy/predictions_gtiff_masked_{year}'
+    masked_pred_dir = Path(masked_pred_dir).expanduser()
     
     if len(countries) > 0:
         countries = Path(countries).expanduser()
@@ -89,7 +92,7 @@ def resample_and_mosaic(year = 2020, rh_idx = 98, q_idx = 1, countries: str = ''
         regions_gpkg = countries.parent / f"countries.gpkg"
         if not regions_gpkg.exists():
             regions.to_file(regions_gpkg, driver='GPKG')
-        inputs = [f'{pred_dir}/{t}_cog/RH{rh_idx}_Q{q_idx}.cog.tif' for t in tiles]
+        inputs = [f'{pred_dir}/{t}_cog/RH{rh_idx}_Q{q_idx}.tif' for t in tiles]
         save_dir = countries.parent
     else:
         inputs = []
@@ -98,15 +101,17 @@ def resample_and_mosaic(year = 2020, rh_idx = 98, q_idx = 1, countries: str = ''
             flag_dir = Path(flag_dir).expanduser()
             for flag_file in flag_dir.glob(f'*_best_images_done'):
                 tile_id = flag_file.stem.split('_')[0]
-                inputs.append(pred_gtif_dir / f'{tile_id}_GTiff/RH{rh_idx}_Q{q_idx}_uncompressed.tif')
+                inputs.append(pred_gtif_dir / f'{tile_id}/RH{rh_idx}_Q{q_idx}.tif')
         else:
             tiles = pred_dir.iterdir()
             for tile in tiles:
                 tile_id = tile.stem.split('_')[0]
-                if (pred_gtif_dir / f'{tile_id}_GTiff/RH{rh_idx}_Q{q_idx}_uncompressed.tif').exists():
-                    inputs.append(pred_gtif_dir / f'{tile_id}_GTiff/RH{rh_idx}_Q{q_idx}_uncompressed.tif')
+                if (masked_pred_dir / f'{tile_id}/RH{rh_idx}_Q{q_idx}.tif').exists():
+                    inputs.append(masked_pred_dir / f'{tile_id}/RH{rh_idx}_Q{q_idx}.tif')
+                elif (pred_gtif_dir / f'{tile_id}/RH{rh_idx}_Q{q_idx}.tif').exists():
+                    inputs.append(pred_gtif_dir / f'{tile_id}/RH{rh_idx}_Q{q_idx}.tif')
                 else:
-                    inputs.append(tile / f'RH{rh_idx}_Q{q_idx}.cog.tif') #COGs
+                    inputs.append(tile / f'RH{rh_idx}_Q{q_idx}.tif') #COGs
         save_dir = pred_dir.parent / f"global_mosaic_{year}"
     print(f"Found {len(inputs)} input files")
     if len(inputs) == 0:
@@ -134,8 +139,12 @@ def resample_and_mosaic(year = 2020, rh_idx = 98, q_idx = 1, countries: str = ''
             task = subprocess.run(f"rclone copy {remote} {src_path.parent} --transfers=16 --checkers=16 --multi-thread-streams=4", shell=True)
             if task.returncode != 0:
                 raise RuntimeError(f"Failed to sync data from lumi-o for tile {tile_id}")
+            # rename the file
+            (src_path.parent / f'RH{rh_idx}_Q{q_idx}_uncompressed.tif').rename(src_path)
             
         dst_path = dst_dir / f'{src_path.parent.stem}_resampled.tif'
+        # if dst_path.exists():
+        #     return str(dst_path)
         warp_opts = gdal.WarpOptions(
             dstSRS=dst_srs,
             xRes=xRes,
@@ -148,23 +157,19 @@ def resample_and_mosaic(year = 2020, rh_idx = 98, q_idx = 1, countries: str = ''
         gdal.Warp(destNameOrDestDS=str(dst_path), srcDSOrSrcDSTab=str(src_path), options=warp_opts)
         return str(dst_path)
     
-    temp_dir = Path(f"~/data/gvs/deploy/global_mosaic_{year}/global_warp")
+    temp_dir = Path(f"~/data/gvs/deploy/global_mosaic_{year}/global_warp_RH{rh_idx}")
     temp_dir = Path(temp_dir).expanduser()
     temp_dir.mkdir(parents=True, exist_ok=True)
     # for input in inputs:
     #     warp_tile(input, temp_dir)
     tasks = [dask.delayed(warp_tile)(p, temp_dir) for p in inputs]
     warped_paths = dask.compute(*tasks, scheduler="processes", num_workers=8)
-    
-    land_shp = Path("~/data/gvs/ne_10m_admin_0_countries/ne_10m_admin_0_countries.shp").expanduser()
     warp_opts_mosaic = gdal.WarpOptions(
         dstSRS="EPSG:4326",
         resampleAlg="average",
         dstNodata=32767,
         creationOptions=["COMPRESS=LERC_ZSTD", "TILED=YES"],
         warpOptions=["WRAP_DATELINE=YES", "INIT_DEST=NO_DATA"],
-        cutlineDSName=str(land_shp),
-        cropToCutline=False  # keep global extent; water becomes NODATA
     )
 
     gdal.Warp(
