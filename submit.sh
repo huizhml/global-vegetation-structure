@@ -2,7 +2,7 @@
 ##SBATCH --account=project_465000894
 #SBATCH --partition=ml4good
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=64GB
+#SBATCH --mem=32GB
 #SBATCH --time=4-00:00:00
 #SBATCH --job-name=submit
 #SBATCH --output=./logs/%x-%A_%a.out
@@ -156,13 +156,15 @@ python -m postprocess.handle_border_artifacts year=$year \
 14)
 year=${2:-2024}
 echo download sota chm data for correction set $year;
+conda activate inference;
 python -m download._7_download_sota_chm \
         location_files="${HOME}/data/gvs/GEDI_for_correction/partitions_${year}_v1/*.parquet" \
         output_dir="${HOME}/data/gvs/GEDI_for_correction/partitions_with_sota_chm_${year}_v1"
 ;;
 15)
 year=${2:-2020}
-rh_idx=($(seq 4 97))
+# rh_idx=($(seq 4 97))
+rh_idx=(${SLURM_ARRAY_TASK_ID:-8})
 echo create global mosaic for $year;
 python -m visualization.create_global_view year=$year rh_idx="${rh_idx[*]}" task=run_mosaic_for_key_rhs countries=''
 upload_to_erda=${2:-False}
@@ -202,6 +204,13 @@ python -m postprocess.mask_snow_water_preds year=$year tile_id=$tile_id save_dir
 echo create stac catalog;
 conda activate py3;
 python -m postprocess.stac_collection task=create_catalog
+;;
+18)
+# =======================================
+#    CREATE DISTANCE MAPS
+# =======================================
+echo create distance maps;
+python -m postprocess.blending task=create_distance_maps save_dir=${HOME}/data/gvs/deploy/blending/distance_maps
 ;;
 *)
 echo runnning nothing ;;
