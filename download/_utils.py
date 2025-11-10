@@ -331,8 +331,10 @@ def check_unfinished_files(input_files: Path, output_dir: Path, check_exists=Tru
         input_files = sorted(input_files, key=natural_sort_key)
         input_files = [Path(f) for f in input_files]
         
+    unfinished_files = []
     for file in input_files:
-        output_file = output_dir / f'{file.name}.{output_format}'
+        output_file = output_dir / f'{file.stem}.{output_format}'
         if check_exists and output_file.exists():
-            input_files.remove(file)
-    return input_files
+            continue
+        unfinished_files.append(file)
+    return unfinished_files

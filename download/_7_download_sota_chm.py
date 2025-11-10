@@ -59,9 +59,10 @@ class SOTAChmDownloader(DaskDownloader):
         tasks = []
         for file in self.location_files:
             tasks.append(self.download_file(file))
+        import ipdb; ipdb.set_trace()
         self.schedule_tasks(delayed_tasks=tasks)
 
-    @dask.delayed
+    # @dask.delayed
     @retry(requests.HTTPError, tries=10, delay=1)
     def download_file(self, file: Path):
         output_file = self.output_dir / f'{file.stem}.parquet'
@@ -131,6 +132,7 @@ class SOTAChmDownloader(DaskDownloader):
             partition_dfs['um'].append(dfs[1])
             partition_dfs['meta'].append(dfs[2])
         if len(partition_dfs['eth_umd']) == 0 or len(partition_dfs['um']) == 0 or len(partition_dfs['meta']) == 0:
+            print(f'No data downloaded for {file.stem}')
             return
         df1s = pd.concat(partition_dfs['eth_umd'])
         df2s = pd.concat(partition_dfs['um'])
