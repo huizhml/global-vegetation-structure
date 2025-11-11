@@ -1,0 +1,4 @@
+- {rh_idx: 10, cmin: -20, cmax: 20}
+- {rh_idx: 25, cmin: -10, cmax: 60}
+- {rh_idx: 50, cmin: 0, cmax: 100}
+- {rh_idx: 98, cmin: 0, cmax: 500}

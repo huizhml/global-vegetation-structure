@@ -88,3 +88,15 @@ s2_rh_subplots:
       row_off: 0
       width: 10980
       height: 10980
+
+density:
+  examples:
+    - points:
+        - [-1.700492, 103.385077] # oil palm
+        - [-1.703650, 103.384743] # oil palm
+        - [-1.701612, 103.383485] # other
+        - [-1.698744, 103.388125] # looks like gaps in oil palm plantation
+        - [-1.702604, 103.383226] # oil palm in early stage?
+      buffer_m: 100
+      best_image_time: 2020-04-20
+      name: "density_example"

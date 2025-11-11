@@ -16,15 +16,16 @@ year=2024
 config_dir="${HOME}/data/GVS/Deploy/slurm_job_files_${year}"
 # FILE_START=0
 # FILE_END=46
-FILE_LIST=($(seq 1 88))
-# FILE_LIST=(59 60 61 65 69 70 85 87)
+# FILE_LIST=($(seq 1 88))
+
+FILE_LIST=(666)
 # FILE_LIST_1=($(seq 21 46))
 # FILE_LIST_2=(59 60 61 65 69 70 85 87)
 # FILE_LIST=("${FILE_LIST_1[@]}" "${FILE_LIST_2[@]}")
 use_flash=True
 
 # Target active inference jobs (pending + running)
-TARGET_ACTIVE=180
+TARGET_ACTIVE=200
 # How many inference tasks to submit per top-up
 CHUNK_SIZE=10
 # Re-check interval when at capacity (seconds)
@@ -60,8 +61,11 @@ count_jobs() {
 for file_num in "${FILE_LIST[@]}"; do
   echo "Launching jobs for file $file_num, use_flash=$use_flash"
   
-  tile_id_file="${config_dir}/deploy_s2_items_${year}_part${file_num}.txt"
+  # tile_id_file="${config_dir}/deploy_s2_items_${year}_part${file_num}.txt"
+  # tile_id_file="${HOME}/data/GVS/Deploy/predicted_not_ordered_tiles_${year}.txt"
+  tile_id_file="/users/zhanghui/flash/data/GVS/Deploy/slurm_job_files_2024/deploy_s2_items_2024_without_images.txt"
   mapfile -t tile_array < <(cut -d, -f1 "$tile_id_file" | tail -n +2)  # read only the first item of each line into array, skipping header
+  echo "Num tiles: ${#tile_array[@]}"
   unfinished_tiles=$(check_unfinished_tiles "${tile_array[@]}")
   
   echo "Unfinished tiles: $unfinished_tiles"
@@ -79,7 +83,7 @@ for file_num in "${FILE_LIST[@]}"; do
   echo "Need to submit $num_tiles tasks for file $file_num"
 
   # Submit in chunks while keeping ~TARGET_ACTIVE active tasks
-  start_index=2 # start from line 2 because line 1 is the header
+  start_index=1
   end_index=0
   while [ $end_index -lt $num_tiles ]; do
     # Wait until we have room to submit more

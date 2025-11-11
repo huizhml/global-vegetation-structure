@@ -253,7 +253,7 @@ class Config:
     
     linear_correct: bool = False
     small_area: bool = False
-    task: str = 'create_distance_map'
+    task: str = 'create_distance_maps'
 
 
 cs = ConfigStore.instance()
@@ -265,7 +265,7 @@ def main(cfg):
     print(cfg)
     blending = Blending(**cfg)
     t0 = time.time()
-    if cfg.task == 'create_distance_map':
+    if cfg.task == 'create_distance_maps':
         blending.create_distance_maps()
     print(f'Time taken: {time.time() - t0} seconds')
 if __name__ == '__main__':

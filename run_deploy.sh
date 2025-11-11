@@ -27,8 +27,8 @@ echo "********************************************************************"
 
 line_num=${SLURM_ARRAY_TASK_ID:-2}
 year=${1:-2020}
-stream_input=${2:-False}
-repredict_tiles=${3:-False}
+stream_input=${2:-True}
+repredict_tiles=${3:-True}
 save_dir=~/data/gvs/deploy/predictions_GTiff_${year}
 mkdir -p $save_dir
 # hostname=$(hostname)

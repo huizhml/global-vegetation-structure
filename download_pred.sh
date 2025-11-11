@@ -27,7 +27,7 @@ rsync -avz --progress "$host:$src_dir/RH*_Q${q_idx}.cog.tif" $dst_dir/
 ;;
 10)
 # =======================================
-#    DOWNLOAD PREDICTIONS (uncompressed GTiffs) FROM Hendrix
+#    DOWNLOAD ONE RH PREDICTION (uncompressed GTiff) FROM Hendrix
 # =======================================
 dst_dir=${HOME}/GVS/predictions_${year}/${tile_id}_GTiff
 mkdir -p $dst_dir
@@ -35,4 +35,11 @@ src_dir=/home/ksb781/data/gvs/deploy/predictions_GTiff_${year}/${tile_id}_GTiff
 host=ksb781@hendrixgate02fl
 scp -r $host:$src_dir/RH${rh_idx}_Q${q_idx}_uncompressed.tif $dst_dir/
         ;;
+
+02)
+# =======================================
+#    DOWNLOAD ONE RH PREDICTIONS (uncompressed GTiffs) FROM LUMIO
+# =======================================
+dst_dir=${HOME}/GVS/predictions_${year}/${tile_id}_GTiff
+;;
 esac

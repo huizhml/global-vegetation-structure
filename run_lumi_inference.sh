@@ -5,7 +5,7 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=60G
 #SBATCH --gres=gpu:1
-#SBATCH --time=2:00:00
+#SBATCH --time=3:00:00
 #SBATCH --job-name=inference
 #SBATCH --output=/users/zhanghui/scratch/logs/%x-%A_%a.out
 #SBATCH --error=/users/zhanghui/scratch/logs/%x-%A_%a.err
@@ -79,6 +79,7 @@ echo "Processing tile ID: $tile_id, line $line_num from $tile_id_file"
 # fi
 # wait for input data being streamed for the first tile
 # Check if the h5 file is being used by another process
+tile_id=39VWL
 h5_file="${input_dir}/${tile_id}.h5"
 stream_flag="${HOME}/data/GVS/Deploy/flags_stream_${year}/${tile_id}_best_images_done"
 if [ ! -f "$stream_flag" ] && [ "$use_flash" == "False" ]; then
@@ -109,7 +110,7 @@ sync_to_lumi() {
     SRC=${save_dir}/${tile_id}_GTiff
     DST=${remote}${bucket_name}/predictions_GTiff_${year}/${tile_id}
     # e.g. remote="lumi-${lumi_project}-private:"  ← note the trailing colon
-    rclone sync "$SRC" "$DST" --local-no-check-updated
+    rclone sync "$SRC" "$DST" --transfers=16 --checkers=16 --multi-thread-streams=4
     # rclone sync ${HOME}/data/GVS/Deploy/predictions_${year}/${tile_id}_cog ${remote}${bucket_name}/predictions_${year}/${tile_id}_cog --local-no-check-updated
     count=$(rclone ls "${DST}" | wc -l)
     echo "Number of files in ${DST}: $count"
@@ -119,6 +120,7 @@ sync_to_lumi() {
         exit 1
     fi
         rm -rf ${save_dir}/${tile_id}_GTiff
+        touch ${HOME}/data/GVS/Deploy/flags_inference_${year}/${tile_id}_best_images_done
         echo "***************************** END SYNC DATA TO LUMI-O *****************************"
 }
 
@@ -128,7 +130,7 @@ echo run prediction for model $run_id for tile $tile_id;
 python run.py predict -c config/predict.yaml --model.backbone config/model/xception_mix_order.yaml \
         --data.init_args.tile_id $tile_id \
         --data.init_args.metadata_file $meta_file \
-        --data.init_args.s2_grid_file ${HOME}/flash/data/GVS/s2_tiles_with_growing_months.parquet \
+        --data.init_args.s2_grid_file ${HOME}14080629   \
         --data.init_args.pred_fp ${input_dir} \
         --data.init_args.prediction_dir ${save_dir}/${tile_id}_GTiff \
         --data.init_args.year $year \
@@ -153,7 +155,6 @@ if [ $exit_status -ne 0 ]; then
     fi
 else
     echo "Prediction command completed successfully"
-    touch ${HOME}/data/GVS/Deploy/flags_inference_${year}/${tile_id}_best_images_done
     echo "Delete input h5 file..."
     rm -f ${h5_file}
     sync_to_lumi

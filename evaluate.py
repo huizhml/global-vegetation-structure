@@ -1,6 +1,7 @@
 import wandb
 import os
 import ee
+import re
 import h5py
 import numpy as np
 import dask
@@ -67,10 +68,10 @@ def compare_with_sota_maps_eu(sota_chm_dir, pred_df_fp: str, countries_file: str
     pred_df[['lat', 'lon']] = pred_df[['lat', 'lon']].astype(float)
     pred_df = gpd.GeoDataFrame(pred_df, geometry=gpd.points_from_xy(pred_df.lon, pred_df.lat, crs="EPSG:4326"))
     pred_df = pred_df[pred_df.intersects(countries_df.union_all())]
+  
+    import ipdb; ipdb.set_trace()
+    test = gpd.sjoin_nearest(sota_chm_df, pred_df, how='left', distance_col='dist')
     
-    import ipdb; ipdb.set_trace()
-    pred_df = pred_df.sjoin(sota_chm_df, how='left', predicate='intersects')
-    import ipdb; ipdb.set_trace()
     comp_dfs = []
     for product, name in [('RH95_1', 'RH95_GEDI'), ('RH98_1', 'RH98_GEDI'), ('RH100_1', 'RH100_GEDI')]:
         rmse = ((pred_df[product] - pred_df[name])**2).mean()**0.5
@@ -121,53 +122,155 @@ def compare_with_sota_maps(sota_chm_df_fp, run_id, corrected=False):
 class Evaluation:
     """
     Evaluation class for comparing the performance of the model with the sota maps.
-    Parameters:
-        sota_chm_df_fp: Path to the sota maps dataframe
-        run_id: Run id of the model
-        corrected: Whether the model is corrected
     """
-    def __init__(self, sota_chm_df_fp, run_id, corrected):
-        self.sota_chm_df_fp = Path(sota_chm_df_fp).expanduser()
-        self.run_id = run_id
-        self.corrected = corrected
-        self.sota_chm_df = pd.read_parquet(self.sota_chm_df_fp)
-        self.ddf_ours = pd.read_parquet(f'output/canopy_height_predictions_{self.run_id}{self.corrected}.parquet')
-        self.ddf_ours = self.ddf_ours.rename(columns=lambda x: x+'_ours' if x.startswith('RH') and '_' not in x else x)
+    def __init__(self,prediction_dir: str, sota_chm_dir: str, gedi_ref_dir: str, **kwargs):
+        self.prediction_dir = Path(prediction_dir).expanduser()
+        self.sota_chm_dir = Path(sota_chm_dir).expanduser()
+        self.gedi_ref_dir = Path(gedi_ref_dir).expanduser()
+        self.year = self.prediction_dir.stem.split('_')[-1]
 
-    def extract_pred_from_big_tile(self, tile_id):
-        """
-        Extract the predictions from the big tile prediction.
-        Parameters:
-            tile_id: Tile id of the big tile
-        """
-        sota_chm_df = gpd.read_parquet(self.sota_chm_dir / f'{tile_id}.parquet')
+    def compare_with_sota_chms(self, sota_chm_and_ours_fp, countries_file: str=None):
+        '''
+        When we have our predictions, sota maps and GEDI referencesaved in the same dataframe.
+        Compare the performance of the model with the sota maps.
+        Args:
+            sota_chm_and_ours_fp: Path to the sota maps dataframe
+            countries_file (optional): Path to the countries file
+        '''
+        sota_chm_and_ours_df = dgp.read_parquet(sota_chm_and_ours_fp, gather_spatial_partitions=False)
+        sota_chm_and_ours_df = sota_chm_and_ours_df.compute()
+        sota_chm_and_ours_df = sota_chm_and_ours_df.dropna(subset=['RH95_UMD', 'RH95_META', 'RH98_ETH', 'RH100_UM'])
+        if countries_file is not None:
+            countries_df = get_geom_for_countries(countries_file)
+            sota_chm_and_ours_df = sota_chm_and_ours_df[sota_chm_and_ours_df.intersects(countries_df.union_all())]
+            postfix = '_eu'
+        else:
+            postfix = ''
+        
+        rmse, mae, me = [], [], []
+        products = [('RH95_UMD', 'rh95', 1), ('RH95_META', 'rh95', 1), ('RH98_ETH', 'rh98', 1), ('RH100_UM', 'rh100', 1),
+                    ('RH95_raw', 'rh95', 10), ('RH98_raw', 'rh98', 10), ('RH100_raw', 'rh100', 10),
+                    ('RH95_linear_corrected', 'rh95', 10), ('RH98_linear_corrected', 'rh98', 10), ('RH100_linear_corrected', 'rh100', 10),
+                    ('RH95_bias_corrected', 'rh95', 10), ('RH98_bias_corrected', 'rh98', 10), ('RH100_bias_corrected', 'rh100', 10)]
+        for product, name, scale in products:
+            rmse.append(((sota_chm_and_ours_df[product]/scale - sota_chm_and_ours_df[name])**2).mean()**0.5)
+            mae.append((sota_chm_and_ours_df[product]/scale - sota_chm_and_ours_df[name]).abs().mean())
+            me.append((sota_chm_and_ours_df[product]/scale - sota_chm_and_ours_df[name]).mean())
+        df = pd.DataFrame({'RMSE': rmse, 'MAE': mae, 'ME': me}, index=[name for name, _, _ in products])
+        df.to_csv(f'{Path(sota_chm_and_ours_fp).parent.parent}/correction_performance_2020_compared_with_sota_chm{postfix}.csv')
+
+    def evaluate_eu_test_tiles(self, countries_file: str, s2_grid_file: str, test_tiles_file: str):
+        countries_df = get_geom_for_countries(countries_file)
+        s2_grid = gpd.read_parquet(s2_grid_file)
+        tiles = s2_grid[s2_grid.intersects(countries_df.union_all())]['Name'].unique()
+        test_tiles = pd.read_csv(test_tiles_file, header=None, sep=' ')
+        test_tiles = test_tiles.loc[test_tiles[0].isin(tiles)][0].tolist()
+        suffix = self.gedi_ref_dir.stem.split('_')[-1]
+        self.save_dir = self.gedi_ref_dir.parent / f'extracted_raw_predictions_{self.year}_{suffix}'
+        self.save_dir.mkdir(exist_ok=True, parents=True)
+        
+        if len(list(self.save_dir.glob('*.parquet'))) == 0:
+            tasks = []
+            for tile in test_tiles:
+                tasks.append(self.extract_from_large_tile_prediction(tile))
+            with ProgressBar():
+                dask.compute(tasks)
+        common_tiles = list(self.save_dir.glob('*.parquet'))
+        common_tiles = [tile.stem for tile in common_tiles]
+        rh_cols = [f'RH{i}' for i in range(101)]
+        rh_cols_ref = [f'rh{i}' for i in range(101)]
+        
+        sota_comparison_dfs = []
+        residuals_vsm = []
+        for tile in common_tiles:
+            gedi_ref = gpd.read_parquet(self.gedi_ref_dir / f'{tile}.parquet')
+            sota_chm_df = gpd.read_parquet(self.sota_chm_dir / f'{tile}.parquet')
+            ours = gpd.read_parquet(self.save_dir / f'{tile}.parquet')
+            assert ours.index.equals(sota_chm_df.index)
+            sota_chm_df[['RH95_raw', 'RH98_raw', 'RH100_raw']] = ours[['RH95', 'RH98', 'RH100']].values
+            sota_comparison_dfs.append(sota_chm_df)
+            nan_rows = ours.isna().any(axis=1)
+            ours = ours[~nan_rows]
+            gedi_ref = gedi_ref[~nan_rows]
+            assert ours.index.equals(gedi_ref.index)
+            residuals_vsm_tile = ours[rh_cols].values/10 - gedi_ref[rh_cols_ref].values
+            residuals_vsm.append(residuals_vsm_tile)
+        residuals_vsm = np.concatenate(residuals_vsm, axis=0) #(n_points, 101)
+        sota_comparison_dfs = pd.concat(sota_comparison_dfs, axis=0)
+        
+
+        
+        #### compare with sota chm residuals distribution
+        sota_comparison_dfs = sota_comparison_dfs.dropna(subset=['RH95_UMD', 'RH95_META', 'RH98_ETH', 'RH100_UM', 'RH95_raw', 'RH98_raw', 'RH100_raw'])
+        
+        rmse, mae, me = [], [], []
+        products = [('RH95_UMD', 'rh95', 1), ('RH95_META', 'rh95', 1), ('RH98_ETH', 'rh98', 1), ('RH100_UM', 'rh100', 1),
+                    ('RH95_raw', 'rh95', 10), ('RH98_raw', 'rh98', 10), ('RH100_raw', 'rh100', 10)]
+        for product, name, scale in products:
+            rmse.append(((sota_comparison_dfs[product]/scale - sota_comparison_dfs[name])**2).mean()**0.5)
+            mae.append((sota_comparison_dfs[product]/scale - sota_comparison_dfs[name]).abs().mean())
+            me.append((sota_comparison_dfs[product]/scale - sota_comparison_dfs[name]).mean())
+        df = pd.DataFrame({'RMSE': rmse, 'MAE': mae, 'ME': me}, index=[name for name, _, _ in products])
+        df.to_csv(f'{self.save_dir.parent}/test_performance_2020_compared_with_sota_chm_eu.csv')
+        #### our vsm residuals distribution
+        plt.figure(figsize=(12, 2.5))
+        plt.axhline(y=0, color='black', linestyle='-', linewidth=1)
+        box_plot = plt.boxplot(residuals_vsm, vert=True, patch_artist=True, showfliers=False)
+        for patch in box_plot['boxes']:
+            patch.set_facecolor('#ccebc5')
+            patch.set_edgecolor('black')
+        
+        plt.xlabel('Relative Height (RH0-RH100)', fontsize=12)
+        plt.ylabel('Residuals [m]', fontsize=12)
+        plt.xticks(ticks=np.arange(1, 102, 10), labels=[f'{i}' for i in range(0, 101, 10)])
+        plt.tight_layout()
+        plt.grid(True, axis='y', linestyle='--', linewidth=0.5)
+        plt.savefig(f'{self.save_dir.parent}/vsm_residuals_distribution_boxplot_eu.pdf')
+
+    
+    
+    @dask.delayed
+    def extract_from_large_tile_prediction(self, tile_id: str):
+        file = self.gedi_ref_dir / f'{tile_id}.parquet'
+        if not file.exists() or (self.save_dir / f'{tile_id}.parquet').exists():
+            return
+        sota_chm_df = gpd.read_parquet(file)
         lon = sota_chm_df.geometry.x.values
         lat = sota_chm_df.geometry.y.values
         preds = []
-        for rh_idx in [95, 98, 100]:
-            pred_fp = Path(f'~/data/gvs/deploy/predictions_2020/{tile_id}_cog/RH{rh_idx}_Q1.cog.tif').expanduser()
+        for rh_idx in range(101):
+            pred_fp = self.prediction_dir / f'{tile_id}_cog/RH{rh_idx}_Q1.cog.tif'
             with rasterio.open(pred_fp) as src:
                 xs, ys = transform('EPSG:4326', src.crs, lon, lat)
                 coords = list(zip(xs, ys))
-                rhs = list(rasterio.sample.sample_gen(src, coords))
-                preds.append(np.concatenate(rhs, axis=0)[:, None])
                 nodata = src.nodata
-        preds = np.concatenate(preds, axis=1) # (n_points, 3)
-        
-        # add uncorrected predictions to sota_chm_df
-        sota_chm_df[['RH95_ours_raw', 'RH98_ours_raw', 'RH100_ours_raw']] = preds
-        
-        # add corrected predictions to sota_chm_df
+                pred = list(rasterio.sample.sample_gen(src, coords))
+                pred = np.concatenate(pred, axis=0).reshape(-1, 1) # (n_points, 1)
+                preds.append(pred)
+        preds = np.concatenate(preds, axis=1)
+        preds = np.where(preds == nodata, np.nan, preds)
+        assert preds.shape[0] == sota_chm_df.shape[0]
+        df = pd.DataFrame(preds, columns=[f'RH{i}' for i in range(101)])
+        df['geometry'] = sota_chm_df.geometry
+        df = gpd.GeoDataFrame(df, crs="EPSG:4326")
+        df.to_parquet(self.save_dir / f'{tile_id}.parquet')
+        print(f'{self.save_dir / f"{tile_id}.parquet"} saved')
 
 
 @dataclass
 class MyConfig:
     sota_chm_df_fp: str = '~/data/gvs/evaluation/sota_chm_val_with_gedi_biome.parquet'
+    prediction_dir: str = '~/data/gvs/deploy/predictions_2020'
+    gedi_ref_dir: str = '~/data/gvs/GEDI_for_correction/partitions_2020_v1'
+    sota_chm_dir: str = '~/data/gvs/GEDI_for_correction/partitions_with_sota_chm_2020_v2'
+    s2_grid_file: str = '~/data/gvs/s2_tiles_with_growing_months.parquet'
+    test_tiles_file: str = '~/data/gvs/split_test0.1_cal0.1_val0.1_seed42_v1/tiles_test.csv'
     run_id: str = ''
     data_name: str = 'test'
     output_dir: str = 'output'
     task: str = 'aggregate_gedi_by_biome'
     corrected: bool = False
+
 
 cs = ConfigStore.instance()
 cs.store(name="my_config", node=MyConfig)
@@ -175,51 +278,30 @@ cs.store(name="my_config", node=MyConfig)
 
 @hydra.main(config_name="my_config", version_base="1.2")
 def main(cfg):
-    if cfg.task == 'compare_result_precision':
-        compare_result_precision(cfg.run_id, cfg.corrected)
-    elif cfg.task == 'add_biome':
-        add_biome(val_df_fp=f'~/data/gvs/train_subsets/{cfg.data_name}_filtered_v1.parquet', cal_pred_fp=cal_pred_fp)
-    elif cfg.task == 'compare_with_sota_maps':
-        compare_with_sota_maps(cfg.sota_chm_df_fp, cfg.run_id, cfg.corrected)
-    elif cfg.task == 'compare_with_sota_maps_eu':
-        compare_with_sota_maps_eu(cfg.sota_chm_df_fp, cfg.pred_df_fp, cfg.countries_file)
+    evaluation = Evaluation(**cfg)
+    
+    # evaluation.compare_with_sota_chms(cfg.sota_chm_and_ours_fp, cfg.get('countries_file'))
+    countries_file = '~/data/gvs/deploy/eu_results/countries_list.txt'
+    evaluation.evaluate_eu_test_tiles(countries_file, cfg.s2_grid_file, cfg.test_tiles_file)
+    # if cfg.task == 'compare_result_precision':
+    #     compare_result_precision(cfg.run_id, cfg.corrected)
+    # elif cfg.task == 'add_biome':
+    #     add_biome(val_df_fp=f'~/data/gvs/train_subsets/{cfg.data_name}_filtered_v1.parquet', cal_pred_fp=cal_pred_fp)
+    # elif cfg.task == 'compare_with_sota_maps':
+    #     compare_with_sota_maps(cfg.sota_chm_df_fp, cfg.run_id, cfg.corrected)
+    # elif cfg.task == 'compare_with_sota_maps_eu':
+    #     compare_with_sota_maps_eu(cfg.sota_chm_df_fp, cfg.pred_df_fp, cfg.countries_file)
 
-    # add biome for sota maps
-    # add_biome(val_df_fp='~/data/gvs/train_subsets/val_filtered_v1.parquet', sota_chm_df_dir='~/data/gvs/evaluation/existing_canopy_height_pred_val_with_gedi')
-    # add biome for cal/test predictions
-    cal_pred_fp = f'~/data/gvs/uncertainty/canopy_height_predictions_{cfg.run_id}_corrected.parquet'
-    add_biome(val_df_fp=f'~/data/gvs/train_subsets/{cfg.data_name}_filtered_v1.parquet', cal_pred_fp=cal_pred_fp)
+    # # add biome for sota maps
+    # # add_biome(val_df_fp='~/data/gvs/train_subsets/val_filtered_v1.parquet', sota_chm_df_dir='~/data/gvs/evaluation/existing_canopy_height_pred_val_with_gedi')
+    # # add biome for cal/test predictions
+    # cal_pred_fp = f'~/data/gvs/uncertainty/canopy_height_predictions_{cfg.run_id}_corrected.parquet'
+    # add_biome(val_df_fp=f'~/data/gvs/train_subsets/{cfg.data_name}_filtered_v1.parquet', cal_pred_fp=cal_pred_fp)
 
 if __name__ == '__main__':
     # from dask.distributed import Client, LocalCluster
     # cluster = LocalCluster(n_workers=8, dashboard_address=':38787')
     # client = Client(cluster)
-
-    index_dir = '~/data/gvs/split_test0.1_cal0.1_val0.1_seed42_v1/index_table_test'
-    save_dir = '~/data/gvs/evaluation/existing_canopy_height_pred_test'
-    canopy_height_eth = ee.Image('users/nlang/ETH_GlobalCanopyHeight_2020_10m_v1').rename('RH98_ETH')
-    canopy_height_umd = ee.ImageCollection("users/potapovpeter/GEDI_V27")
-    canopy_height_meta = ee.ImageCollection("projects/meta-forest-monitoring-okw37/assets/CanopyHeight")
-    canopy_height_um = ee.ImageCollection('projects/worldwidemap/assets/canopyheight2020')
-
-    # sample_canopy_height_maps(index_dir, save_dir)
-    compare_with_sota_maps_eu(save_dir, '~/data/gvs/uncertainty/rh_predictions_test.parquet', '~/data/gvs/deploy/EU_results/countries_list.txt')
-    h5_dir = '~/data/gvs/split_test0.1_cal0.1_val0.1_seed42_v1/h5_partitions_val'
-    # get_gedi_rhs(h5_dir, save_dir)
-    # for file in Path('~/data/gvs/evaluation/existing_canopy_height_pred_val_with_gedi').expanduser().glob('*.parquet'):
-    #     df = pd.read_parquet(file)
-    #     zone = file.stem
-    #     if 'RH95_UMD' not in df.columns:
-    #         try:
-    #             file2 = Path(f'~/data/gvs/evaluation/existing_canopy_height_pred_val/{zone}.parquet').expanduser()
-    #             df_ = pd.read_parquet(file2)
-    #             df.loc[:, 'RH95_UMD'] = df_['RH95_UMD']
-    #             df.to_parquet(file)
-    #         except:
-    #             print(f'Failed to update {zone}')
-    #             os.remove(file2)
-    #             os.remove(file)
-        
-    # main()
+    main()
 
     

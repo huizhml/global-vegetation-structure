@@ -57,10 +57,8 @@ def get_land_sea_boundary_tiles(s2_grid_file: str, countries_file: str, ocean_fi
 
     # Tiles that intersect both land and ocean
     coastal_tiles = tiles_land[tiles_land["Name"].isin(tiles_ocean["Name"])]
-    coastal_tiles_file = Path('~/data/gvs/deploy/coastal_tiles.txt').expanduser()
-    with open(coastal_tiles_file, 'w') as f:
-        for tile in coastal_tiles['Name'].unique():
-            f.write(tile + '\n')
+    # Optionally join with countries to get which country they belong to
+    coastal_tiles = gpd.sjoin(coastal_tiles, countries, predicate="intersects")[["Name", "ADMIN", "geometry"]]
     return coastal_tiles
 
 def mask_snow_water_preds(year: int = 2020, tile_id: str = None, s2_grid_file: str = None, save_dir: str = None, translate: bool = False):
@@ -126,7 +124,7 @@ class MaskConfig:
     save_dir: str = f'~/data/gvs/deploy/predictions_gtiff_masked_{year}'
     tile_id: str = '11XMG'
     countries_file: str = '~/data/gvs/ne_10m_admin_0_countries/ne_10m_admin_0_countries.shp'
-    ocean_file: str = '~/data/gvs/ne_10m_ocean/ne_10m_ocean.shp'
+    ocean_file: str = '~/data/gvs/ne_10m_land/ne_10m_ocean.shp'
     task: str = 'mask_snow_water_preds'
 
     

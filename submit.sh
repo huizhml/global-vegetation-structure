@@ -210,7 +210,7 @@ python -m postprocess.stac_collection task=create_catalog
 #    CREATE DISTANCE MAPS
 # =======================================
 echo create distance maps;
-python -m postprocess.blending task=create_distance_maps save_dir=${HOME}/data/gvs/deploy/blending/distance_maps
+python -m postprocess.blending task=create_distance_maps
 ;;
 *)
 echo runnning nothing ;;

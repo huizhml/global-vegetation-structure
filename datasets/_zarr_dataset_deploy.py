@@ -274,13 +274,15 @@ class BaseDeployDataset(Dataset):
         esa_wc[nodata_mask] = float('nan')
         nodata_mask = nodata_mask.repeat(1, 303, 1, 1)
         prediction_no_border[nodata_mask] = float('nan') # mask the prediction when input is nodata
-        water_mask_scl = torch.mode(scl, dim=0).values == self.scl_water
+        water_mask_scl = torch.mode(scl, dim=0).values == self.scl_water #!!! this is not nan mode,mode value could be nan, resulting in all-false water mask
         
+        # NOTE: this cannot mask all water pixels neither, there are cloud pixels, scl shows as cloud or even vegetation instead of water, 
+        # and the predicted land cover also fails because of the cloud pixels.
+        # water_mask_scl = (scl == self.scl_water).any(dim=0) 
         built_up_mask = torch.mode(esa_wc, dim=0).values == self.esa_built_up
         water_mask_esa = torch.mode(esa_wc, dim=0).values == self.esa_water # predicted esa wc
         esa_wc_mask = esa_wc == self.esa_snow
         prediction_no_border = torch.where(scl_mask | esa_wc_mask, torch.nan, prediction_no_border)
-        
         if self.save_intermediate_tif:
             prediction_no_border = prediction_no_border[:, 295, :, :]
         else:
@@ -716,16 +718,21 @@ class S2DatasetStream(BaseDeployDataset):
         api = pystac_client.Client.open(stac_endpoint, modifier=planetary_computer.sign_inplace, stac_io=stac_api_io)
         datetime = f'{self.year}-01-01/{self.year}-12-31'
         s2_df = gpd.read_parquet(self.s2_grid_file)
+
         row = s2_df[s2_df['Name'] == self.tile_id]#.iloc[0]
+        if len(row) == 0:
+            raise RuntimeError(f'{self.tile_id} not found in {self.s2_grid_file}')
         bbox = row.geometry.total_bounds
         row = row.iloc[0]
         tile = row['Name']
+        
         bbox = [bbox[0], bbox[1], min(bbox[2], 180), bbox[3]]
         search = api.search(collections=collection_id, bbox=bbox, datetime=datetime, 
                             query={'eo:cloud_cover': {'lt': max_cloud_cover},
                                     's2:nodata_pixel_percentage': {'lt': 90},
                                     's2:mgrs_tile': {'eq': tile}})
         items = search.item_collection()
+        
         if len(items) == 0:
             print(f'{tile} has no images, bbox={bbox}, skipping...')
             self.h5_file.with_name(f'{tile}_no_images').touch()
@@ -762,7 +769,7 @@ class S2DatasetStream(BaseDeployDataset):
         # get top 20 images
         df = df.drop_duplicates(subset='id')
         if len(df)>self.n_iamges_per_tile:
-            df['s2:nodata_pixel_percentage'] = df['s2:nodata_pixel_percentage'].round()
+            df['s2:nodata_pixel_percentage'] = df['s2:nodata_pixel_percentage'].round() # NOTE： maybe we should do this earlier, when getting top 30 images
             df = df.sort_values(['s2:nodata_pixel_percentage', 'eo:cloud_cover'])
             if (df['s2:nodata_pixel_percentage']==0).sum() > 0:
                 df = df.head(self.n_iamges_per_tile)
