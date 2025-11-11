@@ -99,15 +99,14 @@ class BiasCorrection:
         correction_stats_dir = self.root_save_dir / f'tile_stats_{self.year}'
         correction_stats_dir.mkdir(parents=True, exist_ok=True)
         file = correction_stats_dir / f'{tile_id}.npz'
-        # if file.exists():
-        #     print(f'{tile_id} correction stats already exists')
-        #     return
+        if file.exists():
+            print(f'{tile_id} correction stats already exists')
+            return
         item = pystac.Item.from_file(str(self.stac_collection_dir / f'{tile_id}_{self.year}/{tile_id}_{self.year}.json'))
         old_pred_dir = item.assets['RH98'].href.replace('file://', '')
-        if 'home' in old_pred_dir:
-            old_pred_dir = Path(old_pred_dir).parent
-        else:
-            old_pred_dir = Path.home() / 'flash' / Path(*Path(old_pred_dir).parts[3:])
+        old_pred_dir = Path(old_pred_dir).parent
+        if 'home' not in str(Path.home()):
+            old_pred_dir = Path.home() / 'flash' / Path(*old_pred_dir.parts[3:])
         
         gedi_ref_df = gpd.read_parquet(self.ref_data_dir / f'{tile_id}.parquet')
 
