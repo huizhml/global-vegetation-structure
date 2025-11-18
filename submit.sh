@@ -2,7 +2,7 @@
 ##SBATCH --account=project_465000894
 #SBATCH --partition=ml4good
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=32GB
+#SBATCH --mem=64GB
 #SBATCH --time=4-00:00:00
 #SBATCH --job-name=submit
 #SBATCH --output=./logs/%x-%A_%a.out
@@ -212,6 +212,13 @@ python -m postprocess.stac_collection task=create_catalog
 echo create distance maps;
 python -m postprocess.blending task=create_distance_maps
 ;;
+19) 
+# =======================================
+#    SAMPLE ALPHAEARTH EMBEDDINGS
+# =======================================
+echo sample alphaearth embeddings;
+python -m download.gee_downloader;;
+
 *)
 echo runnning nothing ;;
 esac
