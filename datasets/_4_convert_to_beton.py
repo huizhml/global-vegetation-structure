@@ -235,26 +235,9 @@ def check_s2_value(train_fp: Path):
             print(i)
             print(batch[0].min())
             return
-        
-@dataclass
-class MyConfig:
-    index_table: str = '~/data/GEDI/split_test0.1_cal0.1_val0.1_seed42_v1/index_table_train'
-    h5_file: str = '~/data/gvs/data_train.h5'
-    out_idx_dir: str = '~/data/gvs/index_table_train_subsets'
-    nsplit: int= 5
-    split_idx: int = 0
-    seed: int = 42
-    shuffle_indices: bool = False
-    version: str = '1' # version of the beton file
 
-cs = ConfigStore.instance()
-cs.store(name="config", node=MyConfig)
 
-@hydra.main(config_name='config', version_base="1.2")
-def main(cfg: DictConfig):
-    print(cfg)
-    random.seed(cfg.seed)
-    np.random.seed(cfg.seed)
+def run_convert_to_beton(cfg: DictConfig):
     h5_file = Path(cfg.h5_file).expanduser()
     index_dir = Path(cfg.index_table).expanduser()
     out_idx_dir = Path(cfg.out_idx_dir).expanduser()
@@ -312,7 +295,42 @@ def main(cfg: DictConfig):
                 print(f'number of {split} samples (high sensitivity): ', len(index_table))
                 dataset = S2Dataset(h5_file, index_table)
                 write_beton(out_file, dataset, shuffle_indices=False)
-    check_s2_value(out_file)
+
+def check_total_size(index_table: Path):
+    import pyarrow.parquet as pq
+    index_table = Path(index_table).expanduser()
+    n = 0
+    for file in index_table.glob('*.parquet'):
+        n += pq.ParquetFile(file).metadata.num_rows
+    print('Total number of samples: ', n)
+ 
+@dataclass
+class MyConfig:
+    index_table: str = '~/data/gvs/split_test0.1_cal0.1_val0.1_seed42_v1/index_table_train'
+    h5_file: str = '~/data/gvs/data_train.h5'
+    out_idx_dir: str = '~/data/gvs/index_table_train_subsets'
+    nsplit: int= 5
+    split_idx: int = 0
+    seed: int = 42
+    shuffle_indices: bool = False
+    version: str = '1' # version of the beton file
+    task: str = 'convert_to_beton'
+
+cs = ConfigStore.instance()
+cs.store(name="config", node=MyConfig)
+
+@hydra.main(config_name='config', version_base="1.2")
+def main(cfg: DictConfig):
+    print(cfg)
+    random.seed(cfg.seed)
+    np.random.seed(cfg.seed)
+    if cfg.task == 'convert_to_beton':
+        run_convert_to_beton(cfg)
+    elif cfg.task == 'check_s2_value':
+        check_s2_value(cfg.out_file)
+    elif cfg.task == 'check_total_size':
+        check_total_size(cfg.index_table)
+    
 
 if __name__ == '__main__':
     print('Running main')
