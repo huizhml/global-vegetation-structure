@@ -124,6 +124,7 @@ class GEEDownloader:
             keep_cols = [col for col in keep_cols if col not in ['geometry', 'Index']]
             x_coords = range(self.patch_size)
             y_coords = range(self.patch_size)
+            das = []
             with rasterio.Env(GDAL_ERROR_LEVEL="CPLE_Fatal"):
                 for row in locations.itertuples():
                     ds = xr.open_dataset(patch_dir / f'row_{row.rowid}.tif')
