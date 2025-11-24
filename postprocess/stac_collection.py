@@ -19,18 +19,12 @@ class StacCatalog:
     Predictions for different year will be organized in different items, i.e., {tile_id}_{year}
     '''
     
-    def __init__(self, collection_id:str=None, year: int=2020, cog_dir: str=None, catalog_dir: str=None, data_source: str=None, **kwargs): 
+    def __init__(self, collection_id:str=None, year: int=2020, catalog_dir: str=None, data_source: str=None, **kwargs): 
         self.collection_id = f'{collection_id}_{data_source}'
         self.year = year
         
         self.catalog_dir = Path(f'{catalog_dir}').expanduser()
         self.catalog_dir.mkdir(exist_ok=True)
-        if data_source == 'local':
-            self.cog_dir = Path(f'{cog_dir}').expanduser()
-        elif data_source == 'erda':
-            share_id = 'evze6lxv0t' if year == 2020 else 'cTWnFfMN97'
-            self.cog_dir = f'https://sid.erda.dk/share_redirect/{share_id}/'
-                    
         
     def create_catalog(self):
         catalog  = pystac.Catalog(id='gvsm', description='Global Vegetation Structure Model')
@@ -127,7 +121,7 @@ class StacCatalog:
             else:
                 raise ValueError(f'No predictions found for tile {tile} in year {year}')
         item = pystac.Item(
-            id=f'{tile}_{year}', # tile_id TODO: add q_idx here? or asset?
+            id=f'{tile}_{year}',
             geometry=tile_info['geom_4326'],
             bbox=tile_info['bbox_4326'],
             datetime=datetime.datetime.strptime(f'{year}-01-01T00:00:00Z', '%Y-%m-%dT%H:%M:%S%z'),
@@ -149,20 +143,21 @@ class StacCatalog:
         # else:
         href_prefix = 'file://'
         for rh_idx in range(101):
-            item.add_asset(
-                f"RH{rh_idx}",
-                pystac.Asset(
-                    href=f"{href_prefix}{path}/RH{rh_idx}_Q1.tif",
-                    media_type="image/tiff; application=geotiff; profile=cloud-optimized",
-                    title=f'Median RH {rh_idx} - 10m',
-                    roles=["data"],
-                    extra_fields={
-                        'proj:bbox': tile_info['bbox'],
-                        'proj:shape': tile_info['shape'],
-                        'proj:transform': tile_info['transform'],
-                        'gsd': tile_info['resolution']
-                    },
-                )
+            for q_idx in range(3):
+                item.add_asset(
+                    f"RH{rh_idx}_Q{q_idx}",
+                    pystac.Asset(
+                        href=f"{href_prefix}{path}/RH{rh_idx}_Q{q_idx}.tif",
+                        media_type="image/tiff; application=geotiff; profile=cloud-optimized",
+                        title=f'Median RH {rh_idx} - 10m',
+                        roles=["data"],
+                        extra_fields={
+                            'proj:bbox': tile_info['bbox'],
+                            'proj:shape': tile_info['shape'],
+                            'proj:transform': tile_info['transform'],
+                            'gsd': tile_info['resolution']
+                        },
+                    )
             )
         # image = stackstac.stack(item, resolution=10)
         # test = image.isel(time=0, band=0).compute() #@2025-10-02, tested, works well, can load image from tif files
@@ -172,7 +167,6 @@ class StacCatalog:
 @dataclass
 class Config:
     collection_id: str ='vsm'
-    cog_dir: str = '~/data/gvs/deploy/predictions_2020'
     catalog_dir: str = '~/data/gvs/deploy/gvsm_stac_catalog'
     data_source: str = 'local'
     task: str = 'create_catalog'
