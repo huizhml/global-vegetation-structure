@@ -15,13 +15,12 @@ import dask
 from dask.diagnostics import ProgressBar
 import pystac
 import stackstac
-from rasterio.warp import transform
 from rasterio.transform import rowcol
 import xarray as xr
 import rioxarray
 import numpy as np
 import dask.dataframe as dd
-from shapely.geometry import shape
+from shapely.geometry import shape, box
 import dask.array as da
 from rasterio.transform import rowcol
 from rasterio.windows import Window
@@ -52,7 +51,9 @@ def init_gtiff(prediction_fp: Path, tile_info: dict, options: list):
 class VSMCorrection(DaskDownloader):
     def __init__(self, year: int, n_parallel: int = 100, corrected_pred_dir: str=None,
                  correction_stats_dir:str=None, stac_collection_dir:str=None, 
-                 s2_grid_file:str=None, distance_map_dir:str=None, output_dir:str=None, **kwargs):
+                 cal_index_dir:str=None, test_index_dir:str=None,
+                 s2_grid_file:str=None, distance_map_dir:str=None, output_dir:str=None,
+                 cal_pred_dir:str=None, test_pred_dir:str=None, **kwargs):
         
         super().__init__(n_parallel=n_parallel, **kwargs)
         self.year = year
@@ -64,7 +65,13 @@ class VSMCorrection(DaskDownloader):
         self.s2_grid_file = Path(s2_grid_file).expanduser()
         self.s2_grid = gpd.read_parquet(self.s2_grid_file, columns=['Name', 'geometry'])
         self._sindex = self.s2_grid.sindex
-
+        self.cal_index_dir = Path(cal_index_dir).expanduser()
+        self.test_index_dir = Path(test_index_dir).expanduser()
+        self.cal_pred_dir = Path(cal_pred_dir).expanduser()
+        self.test_pred_dir = Path(test_pred_dir).expanduser()
+        self.cal_pred_dir.mkdir(parents=True, exist_ok=True)
+        self.test_pred_dir.mkdir(parents=True, exist_ok=True)
+    
     
     def find_intersecting_s2_tiles(self, current_tile: pystac.Item):
         '''
@@ -116,15 +123,37 @@ class VSMCorrection(DaskDownloader):
             item.assets[asset].href = f'file://{str(new_path)}'
         return item
     
+    def get_overlapped_points(self, tile_id: str, index_dir: Path, local_crs: int):
+        '''
+        Get overlapped cal and test points for a single tile
+        '''
+        zone = tile_id[:3]
+        index_fp = index_dir / f'{zone}.parquet'
+        if index_fp.exists():
+            df = gpd.read_parquet(index_fp, columns=['path', 'in_partition_idx', 's2_tile', 'geometry', 'sensitivity'])
+            df = df[df['s2_tile'] == tile_id]
+            if not df.empty:
+                df['id'] = df['path'].astype(str) + '_' + df['in_partition_idx'].astype(str)
+                df = df.drop(columns=['path', 'in_partition_idx'])
+                df = df.to_crs(epsg=local_crs)
+                df = df.set_index('id')
+                median_cols = [f'RH{i}' for i in range(101)]
+                # q0_cols = [f'RH{i}_Q0' for i in range(101)]
+                # q2_cols = [f'RH{i}_Q2' for i in range(101)]
+                df[median_cols] = None
+                # df[q0_cols] = None
+                # df[q2_cols] = None
+            return df
+        else:
+            return pd.DataFrame()
+        
     
     def run_correction_and_blending(self, tile_id: str):
         '''
-        Run correction and blending for a single tile and band.
+        Run correction and blending for a single tile and band. And extract points for conformal prediction, save median prediction. It'll be the final version
         Pre-requisite:
         - Generated distance maps for all tiles
         - Calculated residuals for all tiles, and saved the residuals for each RH for later correction step.
-
-
         '''
         current_tile = pystac.Item.from_file(str(self.stac_collection_dir / f'{tile_id}_{self.year}/{tile_id}_{self.year}.json'))
         bbox_local = current_tile.assets['RH98'].extra_fields['proj:bbox']
@@ -203,13 +232,44 @@ class VSMCorrection(DaskDownloader):
             'nodata': 32767,
         }
         trans = blended.rio.transform()
+        # get overlapped cal and test points
+        cal_df = self.get_overlapped_points(tile_id, self.cal_index_dir, current_tile.properties['proj:epsg'])
+        test_df = self.get_overlapped_points(tile_id, self.test_index_dir, current_tile.properties['proj:epsg'])
+    
+        
         def write_block(block):
             band_name = block.band.values[0]
             output_file = corrected_pred_dir / f'{band_name}.tif'
             row, col = rowcol(trans, block.x.values[0], block.y.values[0])
             window = Window(col, row, block.shape[2], block.shape[1])
+            
+            # Save the median prediction, final version
             with rasterio.open(output_file, 'r+', **profile) as dst:
                 dst.write(block.data.squeeze(), indexes=1, window=window)
+            
+            # get bounding box of the block
+            min_x = block.x.values.min()
+            max_x = block.x.values.max()
+            min_y = block.y.values.min()
+            max_y = block.y.values.max()
+            bbox = (min_x, min_y, max_x, max_y)
+            bbox = box(*bbox)
+            # extract points for conformal prediction
+            if not cal_df.empty:
+                cal_df_patch = cal_df[cal_df.intersects(bbox)]
+                if not cal_df_patch.empty:
+                    cal_xs = cal_df_patch.geometry.x.values
+                    cal_ys = cal_df_patch.geometry.y.values
+                    pred_points = block.interp(x=('points', cal_xs), y=('points', cal_ys))
+                    cal_df.loc[cal_df_patch.index, band_name] = pred_points.data[0, :]
+            if not test_df.empty:
+                test_df_patch = test_df[test_df.intersects(bbox)]
+                if not test_df_patch.empty:
+                    test_xs = test_df_patch.geometry.x.values
+                    test_ys = test_df_patch.geometry.y.values
+                    pred_points = block.interp(x=('points', test_xs), y=('points', test_ys))
+                    test_df.loc[test_df_patch.index, band_name] = pred_points.data
+            
              # Return a small dummy array to satisfy dask requirements
             return xr.DataArray(
                     np.zeros((1, 1,1), dtype="bool"),
@@ -234,6 +294,11 @@ class VSMCorrection(DaskDownloader):
         ) 
         blended = blended.map_blocks(write_block, template=output_template)
         dask.compute(blended)
+        
+        if not cal_df.empty:
+            cal_df.to_parquet(self.cal_pred_dir / f'{tile_id}.parquet')
+        if not test_df.empty:
+            test_df.to_parquet(self.test_pred_dir / f'{tile_id}.parquet')
 
             
     def run_correction(self, tile_id: str):
@@ -292,10 +357,14 @@ class AggGediToS2:
     correction_stats_dir: str = f'~/data/gvs/deploy/correction/tile_stats_{year}'
     stac_collection_dir: str = '~/data/gvs/deploy/gvsm_stac_catalog/vsm_local'
     distance_map_dir: str = '~/data/gvs/deploy/blending/distance_maps'
+    cal_index_dir: str = '~/data/gvs/split_test0.1_cal0.1_val0.1_seed42_v1/index_table_cal'
+    test_index_dir: str = '~/data/gvs/split_test0.1_cal0.1_val0.1_seed42_v1/index_table_val'
+    cal_pred_dir: str = f'~/data/gvs/uncertainty/predictions_corrected_blended_{year}_cal'
+    test_pred_dir: str = f'~/data/gvs/uncertainty/predictions_corrected_blended_{year}_test'
     tile_id: str = '20MRS'
     n_parallel: int = 2
     task: str = 'run_correction_and_blending'
-    output_dir: str = '~/data/gvs/deploy/predictions_corrected_blended_2024'
+    output_dir: str = f'~/data/gvs/uncertainty/predictions_corrected_blended_{year}'
 
 cs = ConfigStore.instance()
 cs.store(name='agg_gedi_to_s2', node=AggGediToS2)
