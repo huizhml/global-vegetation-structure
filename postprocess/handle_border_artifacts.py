@@ -1,4 +1,5 @@
 import os
+from typing import Any
 from osgeo import gdal
 import geopandas as gpd
 import pandas as pd
@@ -22,8 +23,10 @@ import numpy as np
 import dask.dataframe as dd
 from shapely.geometry import shape, box
 import dask.array as da
+from dask.distributed import Lock
 from rasterio.transform import rowcol
 from rasterio.windows import Window
+from rasterio.enums import Resampling
 from dask.diagnostics import Profiler, ResourceProfiler, CacheProfiler
 from download._dask_downloader import DaskDownloader
 
@@ -178,13 +181,16 @@ class VSMCorrection(DaskDownloader):
                 epsg=current_tile.properties['proj:epsg'], bounds=bbox_local,
                 resolution=10, rescale=False, dtype='float32', fill_value=np.float32(np.nan))
 
-        
-
         intersect_images = intersect_images + biases[:, :, None, None]
         blended = (intersect_images * weights_normalized.data).sum(dim='time')
         blended = blended.round().astype(np.int16).fillna(np.int16(32767))
 
         tile_shape = current_tile.assets['RH98_Q1'].extra_fields['proj:shape']
+        band_names =  blended.band.values # ['RH48_Q2'] # + list(blended.band.values)[:16]
+        corrected_pred_dir = self.corrected_pred_dir / f'{tile_id}'
+        corrected_pred_dir.mkdir(parents=True, exist_ok=True)
+        
+        
         profile = {
             'driver': 'GTiff',
             'width': tile_shape[1],
@@ -196,24 +202,27 @@ class VSMCorrection(DaskDownloader):
             'tiled': True,
             'blockxsize': self.chunksize,
             'blockysize': self.chunksize,
-            'compress': None,
-            'num_threads': 2,
+            'compress': 'ZSTD',
+            'num_threads': 1,
             'predictor': 2,
             'interleave': 'BAND',
             'nodata': 32767,
         }
-        trans = blended.rio.transform()
+        
         
         def write_block(block):
             band_name = block.band.values[0]
             output_file = corrected_pred_dir / f'{band_name}.tif'
-            row, col = rowcol(trans, block.x.values[0], block.y.values[0])
-            window = Window(col, row, block.shape[2], block.shape[1])
+            with rasterio.open(output_file, 'w', **profile) as dst:
+                dst.write(block.data.squeeze(), indexes=1)
+            # row, col = rowcol(trans, block.x.values[0], block.y.values[0])
+            # window = Window(col, row, block.shape[2], block.shape[1])
             
-            # Save the median prediction, final version
-            with rasterio.open(output_file, 'r+', **profile) as dst:
-                dst.write(block.data.squeeze(), indexes=1, window=window)
-            
+            # # # Save the median prediction, final version
+            # lock = locks[band_name]
+            # with lock: # slows down the writing process
+            #     with rasterio.open(output_file, 'r+', **profile) as dst:
+            #         dst.write(block.data.squeeze(), indexes=1, window=window)
              # Return a small dummy array to satisfy dask requirements
             return xr.DataArray(
                     np.zeros((1, 1,1), dtype="bool"),
@@ -221,25 +230,29 @@ class VSMCorrection(DaskDownloader):
                     name="block_status",
                 )
         
-        corrected_pred_dir = self.corrected_pred_dir / f'{tile_id}'
-        corrected_pred_dir.mkdir(parents=True, exist_ok=True)
-        
-        def init_tiff(band_name):
-            with rasterio.open(corrected_pred_dir / f'{band_name}.tif', 'w', **profile) as dst:
-                dst.set_band_description(1, f"{band_name}")
-                  
-        tasks = [dask.delayed(init_tiff)(band_name) for band_name in blended.band.values]
-        dask.compute(*tasks)
-        
-        n_chunks = (blended.shape[-1] // self.chunksize) + 1
+        blended = blended.sel(band=band_names)
+        chunk_size = 10980
+        blended = blended.chunk({'band': 1, 'x': chunk_size, 'y': chunk_size})
         num_bands = blended.shape[0]
         output_template = xr.DataArray(
-            da.zeros((num_bands, n_chunks, n_chunks), dtype="bool", chunks=(1,1,1)),   # each block returned a reduced array, to save RAM
+            da.zeros((num_bands, 1, 1), dtype="bool", chunks=(1,1,1)),   # each block returned a reduced array, to save RAM
             dims=('band', "x", 'y'),
             name="block_status",
         ) 
+        
         blended = blended.map_blocks(write_block, template=output_template)
         dask.compute(blended)
+        
+        # # ADD overviews
+        factors = [2, 4, 8, 16, 32]
+        def add_overviews(band_name):
+            with rasterio.open(corrected_pred_dir / f'{band_name}.tif', 'r+') as src:
+                src.build_overviews(factors, Resampling.nearest)
+                src.update_tags(ns='rio_overview', resampling='nearest' )
+        
+        tasks = [dask.delayed(add_overviews)(band_name) for band_name in band_names]
+        dask.compute(*tasks)
+
 
     # ------------------------------------------------------------
     #     Following functions are for testing purposes
@@ -290,7 +303,7 @@ class VSMCorrection(DaskDownloader):
     
 @dataclass
 class AggGediToS2:
-    year: int = 2020
+    year: int = 2024
     s2_grid_file: str = '~/data/gvs/s2_tiles_with_growing_months.parquet'
     corrected_pred_dir: str = f'~/data/gvs/deploy/predictions_corrected_blended_{year}'
     correction_stats_dir: str = f'~/data/gvs/deploy/correction/tile_stats_{year}'
