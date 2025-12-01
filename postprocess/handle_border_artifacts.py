@@ -1,36 +1,33 @@
 import os
-from typing import Any
 from osgeo import gdal
 import geopandas as gpd
-import pandas as pd
 from dataclasses import dataclass
 import hydra
 from hydra.core.config_store import ConfigStore
 from pathlib import Path
-import glob
 import numpy as np
 import rasterio
 import time
-import matplotlib.pyplot as plt
 import dask
-from dask.diagnostics import ProgressBar
 import pystac
 import stackstac
-from rasterio.transform import rowcol
 import xarray as xr
 import rioxarray
 import numpy as np
 import dask.dataframe as dd
 from shapely.geometry import shape, box
 import dask.array as da
-from dask.distributed import Lock
-from rasterio.transform import rowcol
-from rasterio.windows import Window
-from rasterio.enums import Resampling
-from dask.diagnostics import Profiler, ResourceProfiler, CacheProfiler
+import pystac_client
+import planetary_computer
+from pystac_client.stac_api_io import StacApiIO
 from download._dask_downloader import DaskDownloader
+from postprocess.translate import translate_tile
 
 gdal.UseExceptions()
+
+stac_api_io = StacApiIO()
+stac_endpoint = 'https://planetarycomputer.microsoft.com/api/stac/v1'
+
 
 def init_gtiff(prediction_fp: Path, tile_info: dict, options: list):
     prediction_fp = prediction_fp.with_suffix('.tif')
@@ -56,10 +53,15 @@ class VSMCorrection(DaskDownloader):
                  correction_stats_dir:str=None, stac_collection_dir:str=None, 
                  s2_grid_file:str=None, distance_map_dir:str=None, output_dir:str=None, 
                  chunksize:int=1024,
+                 costal_tiles_file:str=None,
                  **kwargs):
         
         super().__init__(n_parallel=n_parallel, **kwargs)
         self.year = year
+        if costal_tiles_file is not None:
+            self.costal_tiles_file = Path(costal_tiles_file).expanduser()
+        else:
+            self.costal_tiles_file = None
         self.corrected_pred_dir = Path(corrected_pred_dir).expanduser()
         self.correction_stats_dir = Path(correction_stats_dir).expanduser()
         self.output_dir = Path(output_dir).expanduser()
@@ -102,7 +104,28 @@ class VSMCorrection(DaskDownloader):
             roles=["data"],
         ))
         return dist_item
-
+    
+    def get_water_snow_mask(self, tile: pystac.Item):
+        '''
+        Mask snow and water predictions if it is costal tile
+        '''
+        with open(self.costal_tiles_file, 'r') as f:
+            costal_tiles = f.read().splitlines()
+        tile_id = tile.id.split("_")[0]
+        if tile_id not in costal_tiles:
+            return None
+        
+        api = pystac_client.Client.open(stac_endpoint, modifier=planetary_computer.sign_inplace, stac_io=stac_api_io)
+        search = api.search(collections='esa-worldcover', bbox=tile.bbox, datetime=f'2021-01-01/2021-12-31')
+        items = search.item_collection()
+        if len(items) == 0:
+            raise ValueError(f'No ESA World Cover items found for tile {tile_id}')
+        wc_image = stackstac.stack(items, ['map'], bounds=tile.assets['RH98_Q1'].extra_fields['proj:bbox'], epsg=tile.properties['proj:epsg'], resolution=10, dtype='uint16', fill_value=np.uint16(0),rescale=False)
+        wc_image = wc_image.max(dim='time', skipna=True).squeeze()
+        assert wc_image.shape == tile.assets['RH98_Q1'].extra_fields['proj:shape']
+        water_snow_mask = wc_image.isin([0, 70, 80]) # nodata, snow and ice, water
+        return water_snow_mask
+    
     def update_href(self, item: pystac.Item, use_flash: bool = True):
         '''
         Update href for all assets in the item
@@ -185,12 +208,13 @@ class VSMCorrection(DaskDownloader):
         blended = (intersect_images * weights_normalized.data).sum(dim='time')
         blended = blended.round().astype(np.int16).fillna(np.int16(32767))
 
-        tile_shape = current_tile.assets['RH98_Q1'].extra_fields['proj:shape']
-        band_names =  blended.band.values # ['RH48_Q2'] # + list(blended.band.values)[:16]
+        water_snow_mask = self.get_water_snow_mask(current_tile)
+        if water_snow_mask is not None:
+            blended = blended.where(~water_snow_mask, 32767)
+            
         corrected_pred_dir = self.corrected_pred_dir / f'{tile_id}'
         corrected_pred_dir.mkdir(parents=True, exist_ok=True)
-        
-        
+        tile_shape = current_tile.assets['RH98_Q1'].extra_fields['proj:shape']
         profile = {
             'driver': 'GTiff',
             'width': tile_shape[1],
@@ -202,7 +226,7 @@ class VSMCorrection(DaskDownloader):
             'tiled': True,
             'blockxsize': self.chunksize,
             'blockysize': self.chunksize,
-            'compress': 'ZSTD',
+            'compress': None,
             'num_threads': 1,
             'predictor': 2,
             'interleave': 'BAND',
@@ -215,21 +239,13 @@ class VSMCorrection(DaskDownloader):
             output_file = corrected_pred_dir / f'{band_name}.tif'
             with rasterio.open(output_file, 'w', **profile) as dst:
                 dst.write(block.data.squeeze(), indexes=1)
-            # row, col = rowcol(trans, block.x.values[0], block.y.values[0])
-            # window = Window(col, row, block.shape[2], block.shape[1])
-            
-            # # # Save the median prediction, final version
-            # lock = locks[band_name]
-            # with lock: # slows down the writing process
-            #     with rasterio.open(output_file, 'r+', **profile) as dst:
-            #         dst.write(block.data.squeeze(), indexes=1, window=window)
-             # Return a small dummy array to satisfy dask requirements
             return xr.DataArray(
                     np.zeros((1, 1,1), dtype="bool"),
                     dims=('band',"x", "y"),
                     name="block_status",
                 )
-        
+            
+        band_names =  blended.band.values # ['RH48_Q2'] # + list(blended.band.values)[:16]
         blended = blended.sel(band=band_names)
         chunk_size = 10980
         blended = blended.chunk({'band': 1, 'x': chunk_size, 'y': chunk_size})
@@ -243,15 +259,9 @@ class VSMCorrection(DaskDownloader):
         blended = blended.map_blocks(write_block, template=output_template)
         dask.compute(blended)
         
-        # # ADD overviews
-        factors = [2, 4, 8, 16, 32]
-        def add_overviews(band_name):
-            with rasterio.open(corrected_pred_dir / f'{band_name}.tif', 'r+') as src:
-                src.build_overviews(factors, Resampling.nearest)
-                src.update_tags(ns='rio_overview', resampling='nearest' )
-        
-        tasks = [dask.delayed(add_overviews)(band_name) for band_name in band_names]
-        dask.compute(*tasks)
+        translate_dir = self.corrected_pred_dir.with_name(self.corrected_pred_dir.name + '_cog') / f'{tile_id}'
+        translate_dir.mkdir(parents=True, exist_ok=True)
+        translate_tile(corrected_pred_dir, translate_dir, profile="ZSTD")
 
 
     # ------------------------------------------------------------
@@ -309,9 +319,10 @@ class AggGediToS2:
     correction_stats_dir: str = f'~/data/gvs/deploy/correction/tile_stats_{year}'
     stac_collection_dir: str = '~/data/gvs/deploy/gvsm_stac_catalog/vsm_local'
     distance_map_dir: str = '~/data/gvs/deploy/blending/distance_maps'
+    costal_tiles_file: str = '~/data/gvs/deploy/tiles_coastal_regions.txt'
     tile_id: str = '20MRS'
     n_parallel: int = 2
-    chunksize: int = 2048
+    chunksize: int = 1024
     task: str = 'run_correction_and_blending'
     output_dir: str = f'~/data/gvs/deploy/predictions_corrected_blended_{year}'
 
