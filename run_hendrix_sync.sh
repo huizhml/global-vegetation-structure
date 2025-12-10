@@ -222,7 +222,7 @@ for zone in ${buckets[@]}; do
                 break
             else
                 echo "[${tile_id}] Copying data from LUMI-O to local..."
-                rclone copy --transfers=16 --multi-thread-streams=4 ${remote}/${zone}/predictions_GTiff_${year}/${tile_id} ${HOME}/data/gvs/deploy/predictions_GTiff_${year}/${tile_id}_GTiff
+                rclone copy --transfers=16 --multi-thread-streams=4 ${remote}/${zone}/predictions_GTiff_${year}/${tile_id} ${HOME}/data/gvs/deploy/predictions_gtiff_${year}/${tile_id}
             fi
 
         done
@@ -256,8 +256,8 @@ sleep 5
 #    SYNC SPECIFIC TILES FROM LUMI-O
 # =======================================
 echo "Syncing specific tiles from LUMI-O"
-tile_ids=(13XEG)
-year=2020
+tile_ids=(19NBF)
+year=2024
 lumi_project=465001846
 remote=lumi-${lumi_project}-private:
 start_time=$(date +%s)
@@ -265,13 +265,135 @@ for tile_id in ${tile_ids[@]}; do
     zone=$(echo ${tile_id:0:3} | tr '[:upper:]' '[:lower:]')
     bucket_name=${zone}-${year}
     echo "Syncing tile $tile_id from LUMI-O bucket $bucket_name"
-    rclone copy --transfers=8 --checkers=8 --multi-thread-streams=4 \
+    rclone copy --transfers=8 --checkers=8 --multi-thread-streams=2 \
         ${remote}${bucket_name}/predictions_GTiff_${year}/${tile_id} ${HOME}/data/gvs/deploy/predictions_gtiff_${year}/${tile_id} 
 done
 end_time=$(date +%s)
 echo "Syncing specific tiles from LUMI-O took $((end_time - start_time)) seconds"
 sleep 5
 ;;
+
+7)
+# =======================================
+#    Compare tar and gdal merge&compress
+# =======================================
+echo "Testing compression before copying"
+tile_id=47RLJ
+year=2020
+cog_dir="${HOME}/data/gvs/deploy/predictions_${year}/${tile_id}"
+gtiff_dir="${HOME}/data/gvs/deploy/predictions_gtiff_${year}/${tile_id}"
+dst_dir="${HOME}/data/gvs/deploy/predictions_zip_${year}/${tile_id}"
+
+# archive with tar
+start_time=$(date +%s)
+cd ${cog_dir}
+tar -cvf ${dst_dir}.tar .
+end_time=$(date +%s)
+echo "Archiving took $((end_time - start_time)) seconds, size: $(du -sh ${dst_dir}.tar | awk '{print $1}')"
+
+
+# Unarchiving
+start_time=$(date +%s)
+cd ${HOME}
+mkdir -p ${dst_dir}/unarchived
+tar -xvf ${dst_dir}.tar -C ${dst_dir}/unarchived/
+end_time=$(date +%s)
+echo "Unarchiving took $((end_time - start_time)) seconds"
+
+# compression with gdal merge&compress
+start_time=$(date +%s)
+gdalbuildvrt -separate ${dst_dir}.vrt ${gtiff_dir}/*.tif # order?
+echo 'translating to one file'
+gdal_translate ${dst_dir}.vrt ${dst_dir}.tif \
+  -co COMPRESS=ZSTD \
+  -co ZSTD_LEVEL=3 \
+  -co TILED=YES \
+  -co BLOCKXSIZE=1024 \
+  -co BLOCKYSIZE=1024 \
+  -co NUM_THREADS=16 \
+  -co PREDICTOR=2 \
+  -co INTERLEAVE=BAND \
+  -co BIGTIFF=IF_SAFER
+
+# # TODO: set band names
+# # gdal_edit.py -metadatafile band_names.txt ${dst_dir}.tif
+end_time=$(date +%s)
+echo "Gdal merge&compress took $((end_time - start_time)) seconds, size: $(du -sh ${dst_dir}.tif | awk '{print $1}')"
+
+
+# compress with tar zstd 3
+start_time=$(date +%s)
+cd ${gtiff_dir}
+tar -I 'pzstd -p 16 -3' -cvf ${dst_dir}.tar.gz .
+end_time=$(date +%s)
+echo "Compressing with tar zstd 3 took $((end_time - start_time)) seconds, size: $(du -sh ${dst_dir}.tar.gz | awk '{print $1}')"
+
+# Uncompressing with tar zstd 3
+start_time=$(date +%s)
+mkdir -p ${dst_dir}/decompressed
+tar -I 'pzstd -p 16 -3' -xvf ${dst_dir}.tar.gz -C ${dst_dir}/decompressed/
+end_time=$(date +%s)
+echo "Uncompressing with tar zstd 3 took $((end_time - start_time)) seconds"
+;;
+
+
+8) 
+# =======================================
+#    Compare 
+# =======================================
+echo "Testing transfer speed after compression"
+tile_id=47RLJ
+year=2020
+big_tif_dir="${HOME}/data/gvs/deploy/predictions_zip_${year}/${tile_id}/test"
+# for i in {1..10}; do
+#   cp ${big_tif_file} "${big_tif_file}_duplicate_$i.tif"
+# done
+
+module load rclone
+time_start=$(date +%s)
+lumi_project=465001846
+remote=lumi-${lumi_project}-private:
+rclone copy ${big_tif_dir} ${remote}/dummy-bucket/ \
+    --transfers=8 --checkers=8 --multi-thread-streams=4 -P
+    # --s3-chunk-size 100M
+
+time_end=$(date +%s)
+echo "Transfer took $((time_end - time_start)) seconds"
+
+;;
+
+9) 
+# =======================================
+#    GDAL pipe 
+# =======================================
+lumi_project=465001846
+remote=lumi-${lumi_project}-private:
+
+tile_id=47RLJ
+year=2020
+cog_dir="${HOME}/data/gvs/deploy/predictions_${year}/${tile_id}"
+gtiff_dir="${HOME}/data/gvs/deploy/predictions_gtiff_${year}/${tile_id}"
+dst_dir="${HOME}/data/gvs/deploy/predictions_zip_${year}/${tile_id}"
+
+
+# compression with gdal merge&compress
+start_time=$(date +%s)
+gdalbuildvrt -separate ${dst_dir}.vrt ${gtiff_dir}/*.tif # order?
+echo 'translating to one file'
+gdal_translate ${dst_dir}.vrt /vsistdout/ \
+  -co COMPRESS=ZSTD \
+  -co ZSTD_LEVEL=3 \
+  -co TILED=YES \
+  -co BLOCKXSIZE=1024 \
+  -co BLOCKYSIZE=1024 \
+  -co NUM_THREADS=16 \
+  -co PREDICTOR=2 \
+  -co INTERLEAVE=BAND \
+  -co BIGTIFF=IF_SAFER | rclone rcat ${remote}/dummy-bucket/test.tif  --ignore-checksum --transfers=1 --multi-thread-streams=16 -P
+
+
+;;
+
 esac
 
 
