@@ -199,7 +199,7 @@ python -m postprocess.mask_snow_water_preds year=$year tile_id=$tile_id save_dir
 
 17)
 # =======================================
-#    CREATE STAC CATALOG FROM ERDA
+#    CREATE STAC CATALOG FROM Local Predictions
 # =======================================
 echo create stac catalog;
 conda activate py3;
@@ -218,7 +218,21 @@ python -m postprocess.blending task=create_distance_maps
 # =======================================
 echo sample alphaearth embeddings;
 python -m download.gee_downloader;;
+20)
+# =======================================
+#    CORRECT BORDER ARTIFACTS
+# =======================================
+echo correct border artifacts;
+python -m postprocess.handle_border_artifacts year=2020 task=run_correction_and_blending tile_id=20MRS chunksize=2048;;
 
+21)
+# =======================================
+#    CREATE EU MOSAIC
+# =======================================
+echo create eu mosaic;
+python -m visualization.create_global_view year=2020 rh_idx='10 25 50 98' \
+    task=run_mosaic_for_key_rhs countries=${HOME}/data/gvs/deploy/eu_results/countries_list.txt
+;;
 *)
 echo runnning nothing ;;
 esac

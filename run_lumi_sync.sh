@@ -12,6 +12,19 @@
 year=2024
 
 case $1 in
+3)
+# =======================================
+#    SYNC TILES FROM LUMI-O TO FLASH
+# =======================================
+tile_id=$2
+zone=$(echo ${tile_id:0:3} | tr '[:upper:]' '[:lower:]')
+bucket_name=${zone}-${year}
+lumi_project=465001846
+remote=lumi-${lumi_project}-private:
+dst_dir=${HOME}/data/gvs/deploy/predictions_gtiff_${year}/${tile_id}
+mkdir -p ${dst_dir}
+rclone sync ${remote}${bucket_name}/predictions_GTiff_${year}/${tile_id} ${HOME}/data/gvs/deploy/predictions_gtiff_${year}/${tile_id} --transfers=16 --checkers=16 --multi-thread-streams=4
+;;
 2)
 # =======================================
 #    CHECK PREDICTION INTEGRITY

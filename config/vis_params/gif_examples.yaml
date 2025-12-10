@@ -10,15 +10,15 @@
 
 # Example of small structures captured by RH25 instead of RH98
 
-width: 1200
-height: 900
+width: 600
+height: 450
 tile_id: "32UMV"
 # params for plotting RHs for the same location
 rhs:
   width: ${width}
   height: ${height}
-  row_off: 9077
-  col_off: 5361
+  row_off: 9277
+  col_off: 5561
   tile_id: ${tile_id}
   name: "vsm_example"
   rh_idxs: [25, 98]
@@ -27,8 +27,8 @@ rhs:
 rgb:
   width: ${width}
   height: ${height}
-  row_off: 9077
-  col_off: 5361
+  row_off: 9277
+  col_off: 5561
   tile_id: ${tile_id}
   name: "vsm_example"
   max_val: 2000
@@ -71,7 +71,7 @@ gif:
       row_off: 5800
 
 s2_rh_subplots:
-  pred_path: "~/data/gvs/deploy/predictions_GTiff_2020"
+  pred_path: "~/data/gvs/deploy/predictions_gtiff_2020"
   width: 200 #${width}
   height: 200 #${height}
   rh_idxs: [25, 98]
