@@ -6,9 +6,22 @@
 #SBATCH --mem=2G
 #SBATCH --time=3-00:00:00
 #SBATCH --job-name=allocate
-#SBATCH --output=./logs/%x-%A_%a.out
-#SBATCH --error=./logs/%x-%A_%a.err
+#SBATCH --output=/users/zhanghui/scratch/logs/%x-%A_%a.out
+#SBATCH --error=/users/zhanghui/scratch/logs/%x-%A_%a.err
 
+
+# Count active (PD+R) tasks for our inference/translate jobs, expanding array ranges
+count_jobs() {
+  local job_name="$1"
+  if [[ -z "$job_name" ]]; then
+    echo "Usage: count_jobs <job_name>"
+    return 1
+  fi
+  squeue -h --array -u "$USER" -t RUNNING,PENDING -n "$job_name" | wc -l
+}
+
+case $1 in
+1)
 # =======================================
 #    JOB ARRAY FOR LINES, CONTROL THE MAX NUMBER OF 
 # =======================================
@@ -47,15 +60,6 @@ check_unfinished_tiles() {
   echo "$result"
 }
 
-# Count active (PD+R) tasks for our inference/translate jobs, expanding array ranges
-count_jobs() {
-  local job_name="$1"
-  if [[ -z "$job_name" ]]; then
-    echo "Usage: count_jobs <job_name>"
-    return 1
-  fi
-  squeue -h --array -u "$USER" -t RUNNING,PENDING -n "$job_name" | wc -l
-}
 
 # for file_num in $(seq $FILE_START $FILE_END); do
 for file_num in "${FILE_LIST[@]}"; do
@@ -130,7 +134,53 @@ for file_num in "${FILE_LIST[@]}"; do
   done
 
 done
+;;
+2)
+# =======================================
+#    ALLOCATE JOBS FOR CORRECTION AND BLENDING
+# =======================================
 
+use_flash=True
+
+# Target active inference jobs (pending + running)
+TARGET_ACTIVE=10 # 100
+RECHECK_INTERVAL=60
+
+year=${2:-2024}
+tile_id_dir=${HOME}/data/gvs/deploy/tiles_by_zone_for_postprocess/
+n_jobs=$(ls $tile_id_dir | wc -l)
+
+for zone in $(ls $tile_id_dir); do
+    done_flag="${HOME}/data/gvs/deploy/flags_postprocess_${year}/${zone}_done"
+    if [ -f "$done_flag" ]; then
+        echo "Zone $zone already processed, skipping"
+        continue
+    fi
+    echo "Processing zone $zone"
+    
+    while true; do
+      read active_inf_now < <(count_jobs correction)
+      # read active_inf_now active_trans_now < <(count_active_tasks)
+      echo "********** Active tasks: Correction=$active_inf_now"
+      if [ "$active_inf_now" -lt "$TARGET_ACTIVE" ]; then
+        # if [ "$active_inf_now" -lt "$TARGET_ACTIVE" ] && [ "$active_trans_now" -lt "$TARGET_ACTIVE" ]; then
+        break
+      fi
+      echo "Active tasks ($active_inf_now) >= target ($TARGET_ACTIVE). Sleeping ${RECHECK_INTERVAL}s..."
+      # Wait until we have room to submit more
+      sleep "$RECHECK_INTERVAL"
+    done
+
+    echo "Submitting correction job for zone $zone"
+    JOBID_A=$(sbatch --parsable run_lumi_correction.sh "$year" "$zone" "$use_flash" | awk '{print $1}')
+    echo "Submitted correction job for zone $zone as job $JOBID_A"
+    sleep 1s
+  # done
+
+done
+;;
+
+esac
 
 # # =======================================
 # #    JOB ARRAY FOR CONFIG FILES
