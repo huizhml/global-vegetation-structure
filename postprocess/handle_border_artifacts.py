@@ -1,4 +1,6 @@
 import os
+import re
+import datetime
 from osgeo import gdal
 import geopandas as gpd
 from dataclasses import dataclass
@@ -19,6 +21,8 @@ from shapely.geometry import shape, box
 import dask.array as da
 import pystac_client
 import planetary_computer
+import subprocess
+import shutil
 from pystac_client.stac_api_io import StacApiIO
 from download._dask_downloader import DaskDownloader
 from postprocess.translate import translate_tile
@@ -51,9 +55,10 @@ def init_gtiff(prediction_fp: Path, tile_info: dict, options: list):
 class VSMCorrection(DaskDownloader):
     def __init__(self, year: int, n_parallel: int = 100, corrected_pred_dir: str=None,
                  correction_stats_dir:str=None, stac_collection_dir:str=None, 
-                 s2_grid_file:str=None, distance_map_dir:str=None, output_dir:str=None, 
+                 s2_grid_file:str=None, distance_map_dir:str=None, 
                  chunksize:int=1024,
                  costal_tiles_file:str=None,
+                 use_flash: bool = False,
                  **kwargs):
         
         super().__init__(n_parallel=n_parallel, **kwargs)
@@ -64,13 +69,25 @@ class VSMCorrection(DaskDownloader):
             self.costal_tiles_file = None
         self.corrected_pred_dir = Path(corrected_pred_dir).expanduser()
         self.correction_stats_dir = Path(correction_stats_dir).expanduser()
-        self.output_dir = Path(output_dir).expanduser()
         self.stac_collection_dir = Path(stac_collection_dir).expanduser()
         self.distance_map_dir = Path(distance_map_dir).expanduser()
         self.s2_grid_file = Path(s2_grid_file).expanduser()
         self.s2_grid = gpd.read_parquet(self.s2_grid_file, columns=['Name', 'geometry'])
         self._sindex = self.s2_grid.sindex
         self.chunksize = chunksize
+        self.use_flash = use_flash
+        self.flag_dir = Path.home() / f'data/gvs/deploy/flags_postprocess_{self.year}'
+        self.flag_dir.mkdir(parents=True, exist_ok=True)
+        self.on_lumi = 'home' not in str(Path.home())
+        self.flash_dir = Path.home() / f'flash/data/gvs/deploy/predictions_gtiff_{self.year}'
+        self.scratch_dir = Path.home() / f'data/gvs/deploy/predictions_gtiff_{self.year}'
+        self.key_rhs = [0, 10, 25, 50, 75, 95, 98, 100]
+        self.key_rhs = [f'RH{rh}_Q{q}' for rh in self.key_rhs for q in range(0, 3)]
+        self.tiles = []
+        for config_file in Path('~/data/gvs/deploy/tiles_by_zone_for_postprocess/').expanduser().glob('*.txt'):
+            with open(config_file, 'r') as f:
+                tiles = f.read().splitlines()
+                self.tiles.extend(tiles)
     
     
     def find_intersecting_s2_tiles(self, current_tile: pystac.Item):
@@ -79,8 +96,91 @@ class VSMCorrection(DaskDownloader):
         '''
         geom = shape(current_tile.geometry)
         idx = list(self._sindex.query(geom, predicate="intersects"))
-        return self.s2_grid.iloc[idx]['Name'].to_numpy()
+        tiles = self.s2_grid.iloc[idx]['Name'].to_numpy()
+        tiles = [tile for tile in tiles if tile in self.tiles]
+        return tiles
     
+    
+    def copy_data_from_lumio(self, tile_ids: list[str]):
+        '''
+        Copy data from lumio to local
+        '''
+        t0 = time.time()
+        correct_tiles = 0
+        if self.use_flash:
+            local = self.flash_dir
+        else:
+            local = self.scratch_dir
+        for tile_id in tile_ids:
+            # check if the local file exists
+            if (self.flash_dir / f'{tile_id}').exists() or (self.scratch_dir / f'{tile_id}').exists():
+                correct_tiles += 1
+                continue
+            print(f"Copying tile {tile_id}")
+            zone_name = tile_id[:3].lower()
+            bucket_name = f"{zone_name}-{self.year}"
+            remote = f"lumi-465001846-private:{bucket_name}/predictions_GTiff_{self.year}/{tile_id}"
+            os.system(f"rclone copy {remote} {local/f'{tile_id}'} --transfers=16 --checkers=16 --multi-thread-streams=4")
+            local_files = list(local.glob(f'{tile_id}/*.tif'))
+            if len(local_files) == 303:
+                correct_tiles += 1
+        if correct_tiles < len(tile_ids):
+            self.copy_data_from_lumio(tile_ids)
+        t1 = time.time()
+        print(f"LUMI-O ➡️ Local - {len(tile_ids)} tiles: {t1 - t0} seconds")
+    
+    
+    def copy_data_to_lumio(self, tile_id: str, translate_dir: Path = None):
+        '''
+        Copy data to lumio
+        '''
+        t0 = time.time()
+        zone_name = tile_id[:3].lower()
+        bucket_name = f"{zone_name}-{self.year}"
+        remote = f"lumi-465001846-private:{bucket_name}/{tile_id}"
+        os.system(f"rclone sync {translate_dir} {remote} --transfers=16 --checkers=16 --multi-thread-streams=4")
+        t1 = time.time()
+        # check if remote file are exactly the same as local file
+        rclone_command = ['rclone', 'check', '--checkers=16', '--checksum', '--stats-one-line', remote, translate_dir]
+        task = subprocess.run(rclone_command, capture_output=True, text=True)
+        
+        if task.returncode != 0:
+            raise ValueError(f"Failed to check if remote file {remote} is exactly the same as local file {translate_dir}")
+        log_output = task.stdout + task.stderr
+        DIFF_PATTERN = r': (\d+) differences found'
+        match = re.search(DIFF_PATTERN, log_output)
+        if match:
+            difference_count = int(match.group(1))
+            print(f"✅ Extracted difference count: {difference_count}")
+            if difference_count > 0:
+                print(f"🚨 FAILURE: Found {difference_count} differences/corruptions.")
+                self.copy_data_to_lumio(tile_id)
+            else:
+                print("✨ SUCCESS: All files verified as identical and uncorrupted. Deleting local corrected predictions.")
+                shutil.rmtree(translate_dir) # cog files
+                shutil.rmtree(self.corrected_pred_dir / f'{tile_id}') # geotiff files
+                (self.flag_dir / f"{tile_id}_done").touch()
+        else:
+            raise ValueError(f"Could not find the summary line in rclone output.")
+        print(f"LUMI-O ⬅️ Local - {tile_id}: {t1 - t0} seconds")
+        
+    def delete_local_file(self, tile_ids: list[str]):
+        '''
+        Delete local input files
+        '''
+        for tile_id in tile_ids:
+            current_tile = pystac.Item.from_file(str(self.stac_collection_dir / f'{tile_id}_{self.year}/{tile_id}_{self.year}.json'))
+            intersecting_tiles = self.find_intersecting_s2_tiles(current_tile)
+            # only if all intersecting tiles are done, delete the local file
+            if all(os.path.exists(self.flag_dir / f'{tile}_done') for tile in intersecting_tiles):
+                print(f"ALL tiles are done, deleting local file for tile {tile_id}")
+                #  TODO: delete the original predictions on lumi-o
+                if (self.flash_dir / f'{tile_id}').exists():
+                    shutil.rmtree(self.flash_dir / f'{tile_id}')
+                elif (self.scratch_dir / f'{tile_id}').exists():
+                    shutil.rmtree(self.scratch_dir / f'{tile_id}')
+                else:
+                    raise ValueError(f"Tile {tile_id} does not exist in flash or scratch directory")
     
     def create_distance_map_item(self, map_item: pystac.Item, dist_map_file: str):
         '''
@@ -119,10 +219,12 @@ class VSMCorrection(DaskDownloader):
         search = api.search(collections='esa-worldcover', bbox=tile.bbox, datetime=f'2021-01-01/2021-12-31')
         items = search.item_collection()
         if len(items) == 0:
-            raise ValueError(f'No ESA World Cover items found for tile {tile_id}')
+            # raise ValueError(f'No ESA World Cover items found for tile {tile_id}')
+            print(f'No ESA World Cover items found for tile {tile_id}')
+            return None
         wc_image = stackstac.stack(items, ['map'], bounds=tile.assets['RH98_Q1'].extra_fields['proj:bbox'], epsg=tile.properties['proj:epsg'], resolution=10, dtype='uint16', fill_value=np.uint16(0),rescale=False)
         wc_image = wc_image.max(dim='time', skipna=True).squeeze()
-        assert wc_image.shape == tile.assets['RH98_Q1'].extra_fields['proj:shape']
+        assert wc_image.shape == tuple(tile.assets['RH98_Q1'].extra_fields['proj:shape'])
         water_snow_mask = wc_image.isin([0, 70, 80]) # nodata, snow and ice, water
         return water_snow_mask
     
@@ -135,10 +237,13 @@ class VSMCorrection(DaskDownloader):
             item.assets['distance_to_border'].href = f'file://{file_path}'
             return item
         old_dir = Path(item.assets['RH98_Q1'].href.replace('file://', '')).parent
-        if use_flash:
-            new_dir = Path.home() / f'flash/data/gvs/deploy/predictions_gtiff_{self.year}/{old_dir.parts[-1]}' 
+        tile_id = old_dir.parts[-1] 
+        if (self.flash_dir / f'{tile_id}').exists():
+            new_dir = self.flash_dir / f'{tile_id}' 
+        elif (self.scratch_dir / f'{tile_id}').exists():
+            new_dir = self.scratch_dir / f'{tile_id}' 
         else:
-            new_dir = Path.home() / f'data/gvs/deploy/predictions_gtiff_{self.year}/{old_dir.parts[-1]}' 
+            raise ValueError(f"Tile {tile_id} does not exist in flash or scratch directory")
         for asset in item.assets:
             new_path = new_dir / Path(item.assets[asset].href).name.replace('.tif', '_uncompressed.tif')
             item.assets[asset].href = f'file://{str(new_path)}'
@@ -153,11 +258,20 @@ class VSMCorrection(DaskDownloader):
         - Generated distance maps for all tiles
         - Calculated residuals for all tiles, and saved the residuals for each RH for later correction step.
         '''
+        if (self.flag_dir / f'{tile_id}_done').exists():
+            print(f"Tile {tile_id} already processed, skipping")
+            return
+  
         current_tile = pystac.Item.from_file(str(self.stac_collection_dir / f'{tile_id}_{self.year}/{tile_id}_{self.year}.json'))
         bbox_local = current_tile.assets['RH98_Q1'].extra_fields['proj:bbox']
         dist_map_file = self.distance_map_dir / f'{tile_id}.tif'
         
         intersecting_s2_tiles = self.find_intersecting_s2_tiles(current_tile)
+        if self.on_lumi:
+            self.copy_data_from_lumio(intersecting_s2_tiles)
+        cluster = LocalCluster(n_workers=4, threads_per_worker=4, dashboard_address=":9020")
+        client = Client(cluster)
+        print(client)
         intersect_items = []
         intersect_dist_items = []
         biases = []
@@ -167,8 +281,8 @@ class VSMCorrection(DaskDownloader):
             dist_map_file = self.distance_map_dir / f'{tile}.tif'
             intersect_dist_item = self.create_distance_map_item(intersect_tile, dist_map_file)
             intersect_dist_items.append(intersect_dist_item)
-            if 'home' not in str(Path.home()): # on lumi
-                intersect_tile = self.update_href(intersect_tile, use_flash=False)
+            if self.on_lumi: # on lumi
+                intersect_tile = self.update_href(intersect_tile)
                 intersect_dist_item = self.update_href(intersect_dist_item, use_flash=False)
             
             tile_image = stackstac.stack(
@@ -245,7 +359,7 @@ class VSMCorrection(DaskDownloader):
                     name="block_status",
                 )
             
-        band_names =  blended.band.values # ['RH48_Q2'] # + list(blended.band.values)[:16]
+        band_names =  self.key_rhs or blended.band.values # blended.band.values # ['RH48_Q2'] # + list(blended.band.values)[:16]
         blended = blended.sel(band=band_names)
         chunk_size = 10980
         blended = blended.chunk({'band': 1, 'x': chunk_size, 'y': chunk_size})
@@ -258,11 +372,14 @@ class VSMCorrection(DaskDownloader):
         
         blended = blended.map_blocks(write_block, template=output_template)
         dask.compute(blended)
-        
         translate_dir = self.corrected_pred_dir.with_name(self.corrected_pred_dir.name + '_cog') / f'{tile_id}'
         translate_dir.mkdir(parents=True, exist_ok=True)
-        translate_tile(corrected_pred_dir, translate_dir, profile="ZSTD")
-
+        translate_tile(corrected_pred_dir, translate_dir, profile="ZSTD") # TODO: add list of bands, key RHs are prioritized
+        if self.on_lumi:
+            self.copy_data_to_lumio(tile_id, translate_dir)
+            self.delete_local_file(intersecting_s2_tiles)
+        else:
+            (self.flag_dir / f"{tile_id}_done").touch()
 
     # ------------------------------------------------------------
     #     Following functions are for testing purposes
@@ -324,14 +441,15 @@ class AggGediToS2:
     n_parallel: int = 2
     chunksize: int = 1024
     task: str = 'run_correction_and_blending'
-    output_dir: str = f'~/data/gvs/deploy/predictions_corrected_blended_{year}'
 
 cs = ConfigStore.instance()
 cs.store(name='agg_gedi_to_s2', node=AggGediToS2)
 
 
-@hydra.main(config_name='agg_gedi_to_s2', version_base="1.2")
+@hydra.main(config_path=None,config_name='agg_gedi_to_s2', version_base="1.2")
 def main(cfg):
+    print("Start at:", datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    
     time_start = time.time()
     vsm_correction = VSMCorrection(**cfg)
     if cfg.task == 'run_correction_and_blending':
@@ -340,11 +458,9 @@ def main(cfg):
         vsm_correction.test_reading()
     time_end = time.time()
     print(f'Time taken: {time_end - time_start} seconds')
+    print("-" * 30)
 
 
 if __name__ == '__main__':
     from dask.distributed import Client, LocalCluster
-    cluster = LocalCluster(n_workers=4, threads_per_worker=4, dashboard_address=":9020")
-    client = Client(cluster)
-    print(client)
     main()

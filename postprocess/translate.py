@@ -9,7 +9,7 @@ import time
 import dask
 
 @dask.delayed
-def _translate(src_path, dst_path, profile="LERC_ZSTD", profile_options={}, **options):
+def _translate(src_path, dst_path, profile="ZSTD", profile_options={}, **options):
     """Convert image to COG."""
     # Format creation option (see gdalwarp `-co` option)
     output_profile = cog_profiles.get(profile)
@@ -25,7 +25,7 @@ def _translate(src_path, dst_path, profile="LERC_ZSTD", profile_options={}, **op
 
     # Dataset Open option (see gdalwarp `-oo` option)
     config = dict(
-        GDAL_NUM_THREADS="ALL_CPUS",
+        GDAL_NUM_THREADS=2,
         GDAL_TIFF_INTERNAL_MASK=True,
         GDAL_TIFF_OVR_BLOCKSIZE="128",
     )
@@ -41,14 +41,14 @@ def _translate(src_path, dst_path, profile="LERC_ZSTD", profile_options={}, **op
     )
     return True
 
-def translate_tile(src_dir, dst_dir, profile="LERC_ZSTD"):
+def translate_tile(src_dir, dst_dir, profile="ZSTD"):
     src_dir = Path(src_dir).expanduser()
     dst_dir = Path(dst_dir).expanduser()
     dst_dir.mkdir(exist_ok=True)
-    tiff_files = src_dir.glob('RH*_Q*_uncompressed.tif')
+    tiff_files = src_dir.glob('RH*_Q*.tif')
     futures = []
     for tiff_file in tiff_files:
-        dst_path = dst_dir / tiff_file.name.replace('_uncompressed.tif', '.cog.tif')
+        dst_path = dst_dir / tiff_file.name #.replace('_uncompressed.tif', '.cog.tif')
         futures.append(_translate(tiff_file, dst_path, profile))
     results = dask.compute(*futures)
     if all(results):
@@ -66,7 +66,7 @@ class TranslateConfig:
 cs = ConfigStore.instance()
 cs.store(name="config", node=TranslateConfig)
     
-@hydra.main(config_name="config")
+@hydra.main(config_path=None, config_name="config", version_base="1.2")
 def main(cfg: DictConfig):
     
     t0 = time.time()
@@ -75,4 +75,4 @@ def main(cfg: DictConfig):
 
 
 if __name__ == "__main__":
-    main()
+    main() 
