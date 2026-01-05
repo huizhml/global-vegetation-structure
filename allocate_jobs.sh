@@ -1,106 +1,169 @@
 
-a100_nodes=(hendrixgpu01fl hendrixgpu02fl)
-l40s_nodes=(hendrixgpu23fl hendrixgpu24fl hendrixgpu25fl hendrixgpu26fl)
-year=2024
-config_dir="${HOME}/data/GVS/deploy/slurm_job_files_${year}"
-
-FILE_LIST=$(seq 0 22)
-TARGET_ACTIVE=24
-# How many inference tasks to submit per top-up
-CHUNK_SIZE=4
-# Re-check interval when at capacity (seconds)
-RECHECK_INTERVAL=60
-
 check_unfinished_tiles() {
-  local tile_list=("$@")
-  local result=""
-  for tile in "${tile_list[@]}"; do
-    translate_flag="${HOME}/data/GVS/deploy/translate_flags_${year}/${tile}_done"
-    translate_flag_new="${HOME}/data/GVS/deploy/translate_flags_${year}/${tile}_best_images_done"
-    if [ ! -f "$translate_flag" ] && [ ! -f "$translate_flag_new" ]; then
-      result+="$tile "
-    fi
-  done
-  echo "$result"
+    local year=$1
+    local offset=$2
+    local n_zones=$3
+    local all_zones=($(ls ${HOME}/data/gvs/deploy/tiles_by_zone_for_postprocess/*.txt | sort))
+    zones=(${all_zones[@]:offset:n_zones})
+    unfinished_tiles=()
+    for tile_id_file in ${zones[@]}; do
+        for tile_id in $(cat $tile_id_file); do
+            if [ ! -f "${HOME}/data/gvs/deploy/flags_postprocess_${year}/${tile_id}_done" ]; then
+                unfinished_tiles+=($tile_id)
+            fi
+        done
+    done
+    echo ${unfinished_tiles[@]}
 }
 
-job_array_id=$(sbatch --array=2-13 run_deploy.sh 2020 | awk '{print $4}')
-sbatch --array=2-13 --dependency=aftercorr:${job_array_id} --cpus-per-task=8 run_cpu.sh 2020
+case $1 in
+0)
+# ==========================================
+#   Initial job allocation on hendrix for postprocess
+# ==========================================
+sbatch -w hendrixgpu01fl --ntasks-per-node=6 run_hendrix_ntasks.sh 0 0 2020 rest_rhs
+# sbatch -p gpu -t 2-00:00:00 -w hendrixgpu22fl --ntasks-per-node=6 run_hendrix_ntasks.sh 0 0 2020 rest_rhs
+sbatch -w hendrixgpu02fl --ntasks-per-node=6 run_hendrix_ntasks.sh 0 144 2020 rest_rhs
+sbatch -w hendrixgpu11fl --ntasks-per-node=3 run_hendrix_ntasks.sh 0 288 2020 rest_rhs
+sbatch -w hendrixgpu12fl --ntasks-per-node=3 run_hendrix_ntasks.sh 0 360 2020 rest_rhs
+sbatch -w hendrixgpu23fl --ntasks-per-node=2 run_hendrix_ntasks.sh 0 432 2020 rest_rhs
+sbatch -w hendrixgpu24fl --ntasks-per-node=2 run_hendrix_ntasks.sh 0 480 2020 rest_rhs
+sbatch -w hendrixgpu25fl --ntasks-per-node=2 run_hendrix_ntasks.sh 0 528 2020 rest_rhs
+sbatch -w hendrixgpu26fl --ntasks-per-node=2 run_hendrix_ntasks.sh 0 576 2020 rest_rhs
+# sbatch -w hendrixgpu01fl --ntasks-per-node=2 run_hendrix_ntasks.sh 0 576 2020 rest_rhs
+;;
 
-job_array_id=$(sbatch --array=2-25 run_deploy.sh 2024 | awk '{print $4}')
-sbatch --array=2-25 --dependency=aftercorr:${job_array_id} --cpus-per-task=8 run_cpu.sh 2024
+1)
+# ==========================================
+#   check unfinished tiles for postprocess
+# ==========================================
+
+offset=0
+node=hendrixgpu11fl
+n_zones=144
+year=2020
+unfinished_tiles=($(check_unfinished_tiles $year $offset $n_zones))
+echo "Total unfinished tiles: ${#unfinished_tiles[@]}"
+echo ${unfinished_tiles[@]}
+
+sbatch -w $node --ntasks-per-node=3 run_hendrix_ntasks.sh 1 "${unfinished_tiles[*]}" $year
+;;
+2)
+
+# ==========================================
+#   check unfinished tiles for postprocess
+# ==========================================
+
+offset=144
+node=hendrixgpu11fl
+n_zones=144
+year=2020
+unfinished_tiles=($(check_unfinished_tiles $year $offset $n_zones))
+echo "Total unfinished tiles: ${#unfinished_tiles[@]}"
+echo ${unfinished_tiles[@]}
+
+sbatch -w $node --ntasks-per-node=1 run_hendrix_ntasks.sh 1 "${unfinished_tiles[*]}" $year
+;;
+
+3)
+
+offset=288
+node=hendrixgpu22fl
+n_zones=72
+year=2020
+unfinished_tiles=($(check_unfinished_tiles $year $offset $n_zones))
+echo "Total unfinished tiles: ${#unfinished_tiles[@]}"
+echo ${unfinished_tiles[@]}
+
+# sbatch -p gpu -t 2-00:00:00 -w $node --ntasks-per-node=6 run_hendrix_ntasks.sh 1 "${unfinished_tiles[*]}" $year
+;;
+
+4)
+
+# ==========================================
+#   check unfinished tiles for postprocess
+# ==========================================
+
+offset=360
+node=hendrixgpu11fl
+n_zones=72
+year=2020
+unfinished_tiles=($(check_unfinished_tiles $year $offset $n_zones))
+echo "Total unfinished tiles: ${#unfinished_tiles[@]}"
+echo ${unfinished_tiles[@]}
+
+# sbatch -w $node --ntasks-per-node=3 run_hendrix_ntasks.sh 1 "${unfinished_tiles[*]}" $year
+;;
 
 
-# # launch jobs for hendrixgpu01fl
-# for idx in $(seq 0 6); do
-#   echo "Launching jobs for index $idx on hendrixgpu01fl"
-#   sbatch -w hendrixgpu01fl run_deploy.sh $idx 2020
-#   sbatch -w hendrixgpu01fl --cpus-per-task=8 run_cpu.sh $idx 2020
-# done
+5)
+# ==========================================
+#   check unfinished tiles for postprocess
+# ==========================================
 
-# # launch jobs for hendrixgpu02fl
-# for idx in $(seq 7 8); do
-#   echo "Launching jobs for index $idx on hendrixgpu02fl"
-#   sbatch -w hendrixgpu02fl run_deploy.sh $idx 2020
-#   sbatch -w hendrixgpu02fl --cpus-per-task=16 run_cpu.sh $idx 2020
-# done
+offset=432
+node=hendrixgpu23fl
+n_zones=48
+year=2020
+unfinished_tiles=($(check_unfinished_tiles $year $offset $n_zones))
+echo "Total unfinished tiles: ${#unfinished_tiles[@]}"
+echo ${unfinished_tiles[@]}
 
-# # launch jobs for l40s
-# part_idx=8
-# for node in ${l40s_nodes[@]}; do
-#   for idx in $(seq 0 3); do
-#     part_idx=$((part_idx + 1))
-#     echo "Launching jobs for index $part_idx on $node"
-#     sbatch -w $node run_deploy.sh $part_idx 2020  
-#     sbatch -w $node --cpus-per-task=4 run_cpu.sh $part_idx 2020
-#   done
-# done
+sbatch -w $node --ntasks-per-node=1 run_hendrix_ntasks.sh 1 "${unfinished_tiles[*]}" $year
 
-# # launch jobs for hendrixgpu26fl
-# for idx in $(seq 0 3); do
-#     echo "Launching jobs for index $idx on hendrixgpu26fl"
-#     sbatch -w hendrixgpu26fl run_deploy.sh $idx 2024
-#     sbatch -w hendrixgpu26fl --cpus-per-task=4 run_cpu.sh $idx 2024
-# done
+;;
 
 
+6)
 
-# ================== 2024 ==================
+# ==========================================
+#   check unfinished tiles for postprocess
+# ==========================================
 
-# #launch jobs for hendrixgpu01fl
-# for idx in $(seq 66 72); do
-#   echo "Launching jobs for index $idx on hendrixgpu01fl"
-#   sbatch -w hendrixgpu01fl run_deploy.sh $idx 2024
-#   sbatch -w hendrixgpu01fl --cpus-per-task=8 run_cpu.sh $idx 2024
-# done
+offset=480
+node=hendrixgpu24fl
+n_zones=48
+year=2020
+unfinished_tiles=($(check_unfinished_tiles $year $offset $n_zones))
+echo "Total unfinished tiles: ${#unfinished_tiles[@]}"
+echo ${unfinished_tiles[@]}
 
-# # launch jobs for hendrixgpu02fl
-# for idx in $(seq 73 74); do
-#   echo "Launching jobs for index $idx on hendrixgpu02fl"
-#   sbatch -w hendrixgpu02fl run_deploy.sh $idx 2024
-#   sbatch -w hendrixgpu02fl --cpus-per-task=16 run_cpu.sh $idx 2024
-# done
+# sbatch -w $node --ntasks-per-node=1 run_hendrix_ntasks.sh 1 "${unfinished_tiles[*]}" $year
+;;
 
-# # launch jobs for l40s
-# part_idx=74
-# for node in ${l40s_nodes[@]}; do
-#   for idx in $(seq 0 3); do
-#     part_idx=$((part_idx + 1))
-#     echo "Launching jobs for index $part_idx on $node"
-#     sbatch -w $node run_deploy.sh $part_idx 2024  
-#     sbatch -w $node --cpus-per-task=4 run_cpu.sh $part_idx 2024
-#   done
-# done
 
-# # launch jobs for hendrixgpu26fl
-# for idx in $(seq 47 49); do
-#     echo "Launching jobs for index $idx on hendrixgpu01fl"
-#     # sbatch -w hendrixgpu01fl run_deploy.sh $idx 2024
-#     sbatch -w hendrixgpu01fl --cpus-per-task=8 run_cpu.sh $idx 2024
-# done
+7)
 
-# for idx in $(seq 66 68); do
-#     echo "Launching jobs for index $idx on hendrixgpu01fl"
-#     # sbatch -w hendrixgpu01fl run_deploy.sh $idx 2024
-#     sbatch -w hendrixgpu01fl --cpus-per-task=8 run_cpu.sh $idx 2024
-# done
+# ==========================================
+#   check unfinished tiles for postprocess
+# ==========================================
+
+offset=528
+node=hendrixgpu02fl
+n_zones=48
+year=2020
+unfinished_tiles=($(check_unfinished_tiles $year $offset $n_zones))
+echo "Total unfinished tiles: ${#unfinished_tiles[@]}"
+echo ${unfinished_tiles[@]}
+
+sbatch -w $node --ntasks-per-node=5 run_hendrix_ntasks.sh 1 "${unfinished_tiles[*]}" $year
+;;
+
+8)
+# ==========================================
+#   check unfinished tiles for postprocess
+# ==========================================
+
+offset=576
+node=hendrixgpu25fl
+n_zones=48
+year=2020
+unfinished_tiles=($(check_unfinished_tiles $year $offset $n_zones))
+echo "Total unfinished tiles: ${#unfinished_tiles[@]}"
+echo ${unfinished_tiles[@]}
+
+sbatch -w $node --ntasks-per-node=1 run_hendrix_ntasks.sh 1 "${unfinished_tiles[*]}" $year
+;;
+
+
+esac

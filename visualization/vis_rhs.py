@@ -14,9 +14,11 @@ from typing import Optional
 from hydra.core.config_store import ConfigStore
 import hydra
 from omegaconf import OmegaConf
+from scipy.interpolate import interp1d
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from matplotlib import gridspec
 import geopandas as gpd
+import pandas as pd
 from visualization._utils import get_patch_by_coords
 
 
@@ -308,48 +310,81 @@ class VisRHS:
         
         s2_grid = gpd.read_parquet(self.project_folder / 'deploy' / 'deploy_status.parquet').to_crs("EPSG:4326")
         
+        # load GT
+        # gt_dfs = []
+        # for idx in range(5):
+        #     csv_file = save_dir / f'point{idx}.csv'
+        #     gt_dfs.append(pd.read_csv(csv_file, index_col=0).T)
+        # gt_df = pd.concat(gt_dfs)
+        # rh_cols = [f'rh{i}' for i in range(101)]
+        
         # example specific parameters
-        cfg = self.tiles_info['density']
-        best_image_time = cfg['best_image_time']
-        buffer_m = cfg['buffer_m']
-        points = cfg['points']
-        
-        
-        vsm_patch, rgb, points_utm = get_patch_by_coords(
-            points, s2_grid, self.year, buffer_m=buffer_m, prediction_dir=self.prediction_dir, input_image_dir=zarr_path,
-            stac_collection=self.project_folder / f'deploy/gvsm_stac_catalog/vsm_{self.year}', best_image_time=best_image_time)
-        vsm_patch = vsm_patch.compute()
-        rgb = rgb.compute()
-        rgb = rgb.clip(0, 2000) / 2000
-        rgb = rgb.data.transpose(1, 2, 0)
-        extent = [
-            float(vsm_patch.x.min()),
-            float(vsm_patch.x.max()),
-            float(vsm_patch.y.min()),
-            float(vsm_patch.y.max())
-        ]
-        fig, axes = plt.subplots(2, len(points_utm)+1, figsize=(18, 9), gridspec_kw={'width_ratios': [2] + [1] * len(points_utm)})
-        axes[0, 0].imshow(rgb, extent=extent, origin='upper')
-        axes[0, 0].set(title='RGB', xticks=[], yticks=[], aspect='equal', xlabel='', ylabel='')
-        
-        axes[1, 0].imshow(vsm_patch.sel(band='RH98'), cmap='inferno', extent=extent, origin='upper')
-        axes[1, 0].set(title='RH98', xticks=[], yticks=[], aspect='equal', xlabel='', ylabel='')
-        for i, coord in enumerate(points_utm.geometry):
-            for ax in axes[:, 0]:
-                ax.plot(coord.x, coord.y, 'ro', markersize=6)
-                ax.text(coord.x, coord.y, str(i), color='black', fontsize=10, va='bottom')
 
-            rhs = vsm_patch.sel(x=coord.x, y=coord.y, method='nearest')
-            axes[0, i+1].plot(rhs)
-            axes[0, i+1].set_title(f'Point {i}')
-            density = 1/(rhs - rhs.shift(band=1))
-            density = density.fillna(0)
-            density[density == np.inf]=1
-            axes[1, i+1].plot(density, np.arange(len(density)))
-        
+        for name, cfg in self.tiles_info['density']['examples'].items():
+            best_image_time = cfg['best_image_time']
+            buffer_m = cfg['buffer_m']
+            points = cfg['points']
+            point_locs = [point['loc'] for point in points]
+            max_rh = cfg.get('max_rh', 40)
             
-        plt.savefig(save_dir / f'density_{buffer_m}m_{best_image_time}.pdf', bbox_inches='tight')
-        plt.close()
+            vsm_patch, rgb, points_utm = get_patch_by_coords(
+                point_locs, s2_grid, self.year, buffer_m=buffer_m, prediction_dir=self.prediction_dir, input_image_dir=zarr_path,
+                stac_collection=self.project_folder / f'deploy/gvsm_stac_catalog/vsm_{self.year}', best_image_time=best_image_time)
+            vsm_patch = vsm_patch.compute()
+            rgb = rgb.compute()
+            rgb = rgb.clip(0, 2000) / 2000
+            rgb = rgb.data.transpose(1, 2, 0)
+            extent = [
+                float(vsm_patch.x.min()),
+                float(vsm_patch.x.max()),
+                float(vsm_patch.y.min()),
+                float(vsm_patch.y.max())
+            ]
+            fig, axes = plt.subplots(2, len(points_utm)+1, figsize=(18, 9), gridspec_kw={'width_ratios': [2] + [1] * len(points_utm)})
+            axes[0, 0].imshow(rgb, extent=extent, origin='upper')
+            axes[0, 0].set(title='Sentinel-2 RGB', xticks=[], yticks=[], aspect='equal', xlabel='', ylabel='')
+            
+            axes[1, 0].imshow(vsm_patch.sel(band='RH98'), cmap='inferno', extent=extent, origin='upper')
+            axes[1, 0].set(title='RH98 [m]', xticks=[], yticks=[], aspect='equal', xlabel='', ylabel='')
+
+            for i, coord in enumerate(points_utm.geometry):
+                for ax in axes[:, 0]:
+                    ax.plot(coord.x, coord.y, 'ro', markersize=6)
+                    ax.text(coord.x, coord.y, str(i), color='black', fontsize=10, va='bottom')
+
+                xcoord = round(coord.x)
+                ycoord = round(coord.y)
+                rhs = vsm_patch.sel(x=[xcoord-10, xcoord, xcoord+10], y=[ycoord-10, ycoord, ycoord+10], method='nearest')
+                rhs = rhs.mean(dim=['x', 'y'])
+                axes[0, i+1].plot(rhs/10, label='Pred')
+                axes[0, i+1].set_title(f'{i}: {points[i]["name"]}')
+                # gt_rhs = gt_df.iloc[i][rh_cols].astype(float)
+                # axes[0, i+1].plot(gt_rhs.values, label='GT')
+                # axes[0, i+1].legend()
+                axes[0, i+1].set_ylim(-10, max_rh)
+                
+                # density = 1/(rhs - rhs.shift(band=1))
+                # density = density.fillna(0)
+                # density[density == np.inf]=1
+                # axes[1, i+1].plot(density, np.arange(len(density)))
+                x = np.arange(len(rhs))
+                f_interp = interp1d(rhs, x, kind='linear')
+                rhs_fine = np.arange(rhs.min(), rhs.max(), 1)
+                x_fine = f_interp(rhs_fine)
+                derivative_fine = np.gradient(x_fine, rhs_fine)
+                derivate = np.gradient(x, rhs)
+                axes[1, i+1].plot(derivative_fine, rhs_fine/10)
+                axes[1, i+1].set_ylim(-10, max_rh)
+                
+                # f_interp_gt = interp1d(gt_rhs, x, kind='linear')
+                # rhs_fine_gt = np.arange(gt_rhs.min(), gt_rhs.max(), 0.2)
+                # x_fine_gt = f_interp_gt(rhs_fine_gt)
+                # derivative_fine_gt = np.gradient(x_fine_gt, rhs_fine_gt*10)
+                # axes[1, i+1].plot(derivative_fine_gt, rhs_fine_gt)
+                # axes[1, i+1].set_ylim(-10, 30)
+                
+            plt.savefig(save_dir / f'{name}_{buffer_m}m_{best_image_time}.pdf', bbox_inches='tight')
+            plt.close()
             
 
 

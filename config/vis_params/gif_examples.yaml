@@ -91,12 +91,76 @@ s2_rh_subplots:
 
 density:
   examples:
-    - points:
-        - [-1.700492, 103.385077] # oil palm
-        - [-1.703650, 103.384743] # oil palm
-        - [-1.701612, 103.383485] # other
-        - [-1.698744, 103.388125] # looks like gaps in oil palm plantation
-        - [-1.702604, 103.383226] # oil palm in early stage?
-      buffer_m: 100
-      best_image_time: 2020-04-20
-      name: "density_example"
+    # exp1:
+    #   points:
+    #       - [-1.700492, 103.385077] # oil palm
+    #       - [-1.703650, 103.384743] # oil palm
+    #       - [-1.701612, 103.383485] # other
+    #       - [-1.698744, 103.388125] # looks like gaps in oil palm plantation
+    #       - [-1.702604, 103.383226] # oil palm in early stage?
+    #   buffer_m: 500
+    #   best_image_time: 2020-04-20
+    # exp2:
+    #   points:
+    #       - [-1.725416, 103.386698] # oil palm
+    #       - [-1.72021, 103.383149] # oil palm
+    #       - [-1.719744, 103.382866] # other
+    #       - [-1.721138, 103.383804] # looks like gaps in oil palm plantation
+    #       - [-1.714552, 103.379026] # oil palm in early stage?
+    #   buffer_m: 500
+    #   best_image_time: 2020-04-20
+    # - name: "density_example3"
+    #   points:
+    #       - [-2.333164, 111.616018] # oil palm
+    #       - [-2.330247, 111.618253] # other
+    #       - [-2.336500, 111.635214] # looks like gaps in oil palm plantation
+    #       - [-2.319983, 111.622275] # oil palm in early stage?
+    #       - [-2.326347, 111.624144]
+    #   buffer_m: 500
+    #   best_image_time: 2020-06-02
+
+    dk_oil_palm:
+      max_rh: 35
+      points:
+          - loc: [56.106560, 9.563374] # oil palm, mixed with other trees
+            name: "coniferous forest"
+          - loc: [56.108319, 9.561760] # oil palm, more dense
+            name: "oil palm"
+          - loc: [56.106562, 9.564703] # oil palm early stage
+            name: "oil palm"
+          - loc: [56.105816, 9.563038] # dense forest
+            name: "dense forest"
+          - loc: [56.107865, 9.562733] # sparse trees
+            name: "sparse trees"
+      buffer_m: 500
+      best_image_time: 2020-06-01
+
+    de_conifer:
+      max_rh: 40
+      points:
+          - loc: [49.063268, 9.969319] # coniferous forest
+            name: "coniferous forest"
+          - loc: [49.061133, 9.965714] # coniferous forest
+            name: "coniferous forest"
+          - loc: [49.060942, 9.961630] # oil palm, more dense
+            name: "coniferous forest?"
+          - loc: [49.058853, 9.965833] # coniferous forest
+            name: "coniferous forest?"
+          - loc: [49.061182, 9.967607] # coniferous forest
+            name: "sparse vegetation"
+      buffer_m: 500
+      best_image_time: 2020-08-09
+
+    col_wetland:
+      max_rh: 40
+      points:
+          - loc: [-2.165000, -71.868489] # [-2.160689, -71.884367] #[-2.16259, -71.88269] #
+            name: "Forested wetland"
+          - loc: [-2.1595, -71.89643] # 
+            name: "Forested wetland"
+          - loc: [-2.17545, -71.89454, ] #
+            name: "Permanent marsh"
+          - loc: [-2.15264, -71.91617] #
+            name: "Tropical forest"
+      buffer_m: 500
+      best_image_time: 2020-01-08

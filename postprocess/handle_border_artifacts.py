@@ -26,7 +26,13 @@ import shutil
 from pystac_client.stac_api_io import StacApiIO
 from download._dask_downloader import DaskDownloader
 from postprocess.translate import translate_tile
-
+import warnings
+warnings.filterwarnings(
+    "ignore",
+    category=UserWarning,
+    module="rio_cogeo\\.profiles",
+    message="Non-standard compression schema: zstd.*",
+)
 gdal.UseExceptions()
 
 stac_api_io = StacApiIO()
@@ -54,11 +60,12 @@ def init_gtiff(prediction_fp: Path, tile_info: dict, options: list):
 
 class VSMCorrection(DaskDownloader):
     def __init__(self, year: int, n_parallel: int = 100, corrected_pred_dir: str=None,
-                 correction_stats_dir:str=None, stac_collection_dir:str=None, 
+                 correction_stats_dir:str=None, stac_collection_dir:str=None, flag_dir:str=None,
                  s2_grid_file:str=None, distance_map_dir:str=None, 
                  chunksize:int=1024,
                  costal_tiles_file:str=None,
                  use_flash: bool = False,
+                 rhs_idx: str = 'all_rhs',
                  **kwargs):
         
         super().__init__(n_parallel=n_parallel, **kwargs)
@@ -76,13 +83,22 @@ class VSMCorrection(DaskDownloader):
         self._sindex = self.s2_grid.sindex
         self.chunksize = chunksize
         self.use_flash = use_flash
-        self.flag_dir = Path.home() / f'data/gvs/deploy/flags_postprocess_{self.year}'
+        self.flag_dir = Path(flag_dir).expanduser()
         self.flag_dir.mkdir(parents=True, exist_ok=True)
         self.on_lumi = 'home' not in str(Path.home())
         self.flash_dir = Path.home() / f'flash/data/gvs/deploy/predictions_gtiff_{self.year}'
         self.scratch_dir = Path.home() / f'data/gvs/deploy/predictions_gtiff_{self.year}'
-        self.key_rhs = [0, 10, 25, 50, 75, 95, 98, 100]
-        self.key_rhs = [f'RH{rh}_Q{q}' for rh in self.key_rhs for q in range(0, 3)]
+        key_rhs = [0, 10, 25, 50, 75, 95, 98, 100] 
+        if rhs_idx == 'all_rhs':
+            self.key_rhs = None
+        elif rhs_idx == 'key_rhs':
+            self.key_rhs = [f'RH{rh}_Q{q}' for rh in key_rhs for q in range(0, 3)]
+        elif rhs_idx == 'rest_rhs':
+            all_rhs = list(range(101))
+            rest_rhs = [rh for rh in all_rhs if rh not in key_rhs]
+            self.key_rhs = [f'RH{rh}_Q{q}' for rh in rest_rhs for q in range(0, 3)]
+        else:
+            raise ValueError(f"Invalid rhs_idx: {rhs_idx}")
         self.tiles = []
         for config_file in Path('~/data/gvs/deploy/tiles_by_zone_for_postprocess/').expanduser().glob('*.txt'):
             with open(config_file, 'r') as f:
@@ -113,9 +129,16 @@ class VSMCorrection(DaskDownloader):
             local = self.scratch_dir
         for tile_id in tile_ids:
             # check if the local file exists
-            if (self.flash_dir / f'{tile_id}').exists() or (self.scratch_dir / f'{tile_id}').exists():
-                correct_tiles += 1
-                continue
+            if (self.flash_dir / f'{tile_id}').exists():
+                file_count = len(list((self.flash_dir / f'{tile_id}').glob('*.tif')))
+                if file_count == 303:
+                    correct_tiles += 1
+                    continue
+            elif (self.scratch_dir / f'{tile_id}').exists():
+                file_count = len(list((self.scratch_dir / f'{tile_id}').glob('*.tif')))
+                if file_count == 303:
+                    correct_tiles += 1
+                    continue
             print(f"Copying tile {tile_id}")
             zone_name = tile_id[:3].lower()
             bucket_name = f"{zone_name}-{self.year}"
@@ -223,6 +246,11 @@ class VSMCorrection(DaskDownloader):
             print(f'No ESA World Cover items found for tile {tile_id}')
             return None
         wc_image = stackstac.stack(items, ['map'], bounds=tile.assets['RH98_Q1'].extra_fields['proj:bbox'], epsg=tile.properties['proj:epsg'], resolution=10, dtype='uint16', fill_value=np.uint16(0),rescale=False)
+        print(wc_image.shape)
+        if wc_image.shape[0] == 0:
+            print(f'{tile_id} has no overlap with ESA World Cover')
+            return None
+        
         wc_image = wc_image.max(dim='time', skipna=True).squeeze()
         assert wc_image.shape == tuple(tile.assets['RH98_Q1'].extra_fields['proj:shape'])
         water_snow_mask = wc_image.isin([0, 70, 80]) # nodata, snow and ice, water
@@ -237,18 +265,29 @@ class VSMCorrection(DaskDownloader):
             item.assets['distance_to_border'].href = f'file://{file_path}'
             return item
         old_dir = Path(item.assets['RH98_Q1'].href.replace('file://', '')).parent
-        tile_id = old_dir.parts[-1] 
-        if (self.flash_dir / f'{tile_id}').exists():
-            new_dir = self.flash_dir / f'{tile_id}' 
-        elif (self.scratch_dir / f'{tile_id}').exists():
-            new_dir = self.scratch_dir / f'{tile_id}' 
+        tile_id = old_dir.parts[-1]
+        flash_dir = self.flash_dir / f'{tile_id}'
+        scratch_dir = self.scratch_dir / f'{tile_id}'
+        if flash_dir.exists() and len(list(flash_dir.glob('*.tif'))) == 303:
+            new_dir = f'file://{str(flash_dir)}/' 
+        elif scratch_dir.exists() and len(list(scratch_dir.glob('*.tif'))) == 303:
+            new_dir = f'file://{str(scratch_dir)}/' 
         else:
-            raise ValueError(f"Tile {tile_id} does not exist in flash or scratch directory")
+            # read directory from s3
+            new_dir = self.get_bucket_url(tile_id, project_id=465001846)
+            # raise ValueError(f"Tile {tile_id} does not exist in flash or scratch directory")
         for asset in item.assets:
-            new_path = new_dir / Path(item.assets[asset].href).name.replace('.tif', '_uncompressed.tif')
-            item.assets[asset].href = f'file://{str(new_path)}'
+            new_path = new_dir + Path(item.assets[asset].href).name.replace('.tif', '_uncompressed.tif')
+            item.assets[asset].href = new_path
         return item
     
+    def get_bucket_url(self, tile_id: str, project_id: int=465001846):
+        '''
+        Get bucket url for a tile
+        '''
+        zone_name = tile_id[:3].lower()
+        bucket_name = f"{zone_name}-{self.year}"
+        return f"https://{project_id}.lumidata.eu/{bucket_name}/predictions_GTiff_{self.year}/{tile_id}/"
         
     
     def run_correction_and_blending(self, tile_id: str):
@@ -262,13 +301,17 @@ class VSMCorrection(DaskDownloader):
             print(f"Tile {tile_id} already processed, skipping")
             return
   
-        current_tile = pystac.Item.from_file(str(self.stac_collection_dir / f'{tile_id}_{self.year}/{tile_id}_{self.year}.json'))
+        stac_file = self.stac_collection_dir / f'{tile_id}_{self.year}/{tile_id}_{self.year}.json'
+        if not stac_file.exists():
+            print(f"Stac file {stac_file} does not exist, skipping")
+            return
+        current_tile = pystac.Item.from_file(str(stac_file))
         bbox_local = current_tile.assets['RH98_Q1'].extra_fields['proj:bbox']
         dist_map_file = self.distance_map_dir / f'{tile_id}.tif'
         
         intersecting_s2_tiles = self.find_intersecting_s2_tiles(current_tile)
-        if self.on_lumi:
-            self.copy_data_from_lumio(intersecting_s2_tiles)
+        # if self.on_lumi:
+        #     self.copy_data_from_lumio(intersecting_s2_tiles)
         cluster = LocalCluster(n_workers=4, threads_per_worker=4, dashboard_address=":9020")
         client = Client(cluster)
         print(client)
@@ -276,7 +319,11 @@ class VSMCorrection(DaskDownloader):
         intersect_dist_items = []
         biases = []
         for tile in intersecting_s2_tiles:
-            intersect_tile = pystac.Item.from_file(str(self.stac_collection_dir / f'{tile}_{self.year}/{tile}_{self.year}.json'))
+            intersect_stac_file = self.stac_collection_dir / f'{tile}_{self.year}/{tile}_{self.year}.json'
+            if not intersect_stac_file.exists():
+                print(f"Stac file {intersect_stac_file} does not exist, skipping")
+                continue
+            intersect_tile = pystac.Item.from_file(str(intersect_stac_file))
             intersect_items.append(intersect_tile)
             dist_map_file = self.distance_map_dir / f'{tile}.tif'
             intersect_dist_item = self.create_distance_map_item(intersect_tile, dist_map_file)
@@ -302,6 +349,7 @@ class VSMCorrection(DaskDownloader):
             else:
                 bias = np.zeros(101)
             biases.append(bias)
+        print(f"Loaded {len(biases)} bias files")
         # get normalized weights for blending, same for each band
         dist_images = stackstac.stack(
             intersect_dist_items, assets=['distance_to_border'], chunksize=self.chunksize,
@@ -309,7 +357,7 @@ class VSMCorrection(DaskDownloader):
             resolution=10, rescale=False, dtype='float32', fill_value=np.float32(np.nan))
         weights = dist_images.where(dist_images.notnull(), 0)
         sum_w = weights.sum(dim='time')
-        weights_normalized = weights / sum_w
+        weights_normalized = xr.where(sum_w > 0, weights / sum_w, np.nan).transpose(*weights.dims) # masked area like water, the sum can be 0
         # weights_normalized = weights_normalized.persist()
         biases = np.vstack(biases).repeat(3, axis=1)
         intersect_images = stackstac.stack(
@@ -319,8 +367,8 @@ class VSMCorrection(DaskDownloader):
                 resolution=10, rescale=False, dtype='float32', fill_value=np.float32(np.nan))
 
         intersect_images = intersect_images + biases[:, :, None, None]
-        blended = (intersect_images * weights_normalized.data).sum(dim='time')
-        blended = blended.round().astype(np.int16).fillna(np.int16(32767))
+        blended = (intersect_images * weights_normalized.data).sum(dim='time', min_count=1) #!!!!! skipna=True is the default, and it'll return 0 if all are nan, we need min_count=1 to be able to mask water, built-up, snow
+        blended = blended.round().fillna(32767).astype(np.int16)
 
         water_snow_mask = self.get_water_snow_mask(current_tile)
         if water_snow_mask is not None:
@@ -436,15 +484,27 @@ class AggGediToS2:
     correction_stats_dir: str = f'~/data/gvs/deploy/correction/tile_stats_{year}'
     stac_collection_dir: str = '~/data/gvs/deploy/gvsm_stac_catalog/vsm_local'
     distance_map_dir: str = '~/data/gvs/deploy/blending/distance_maps'
+    flag_dir: str = f'~/data/gvs/deploy/flags_postprocess_{year}'
     costal_tiles_file: str = '~/data/gvs/deploy/tiles_coastal_regions.txt'
     tile_id: str = '20MRS'
     n_parallel: int = 2
-    chunksize: int = 1024
+    chunksize: int = 2048
+    use_flash: bool = False
+    rhs_idx: str = 'all_rhs'
     task: str = 'run_correction_and_blending'
+    
+disable_outputs = {
+    "hydra": {
+        "run": {"dir": "."},
+        "output_subdir": None,
+        "job_logging": {"enabled": False},
+        "hydra_logging": {"enabled": False},
+    }
+}
 
 cs = ConfigStore.instance()
 cs.store(name='agg_gedi_to_s2', node=AggGediToS2)
-
+cs.store(group="hydra", name="disable_logging", node=disable_outputs)
 
 @hydra.main(config_path=None,config_name='agg_gedi_to_s2', version_base="1.2")
 def main(cfg):

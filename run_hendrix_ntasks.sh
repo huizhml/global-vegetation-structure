@@ -3,8 +3,8 @@
 #SBATCH --ntasks-per-node=2
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=16
-#SBATCH --mem-per-cpu=3G # total memory for all tasks
-#SBATCH --time=3-00:00:00
+#SBATCH --mem-per-cpu=4G # total memory for all tasks
+#SBATCH --time=18-00:00:00
 #SBATCH --job-name=correction
 #SBATCH --output=./logs/%x-%A-%t.out
 #SBATCH --nodelist=hendrixgpu26fl
@@ -20,7 +20,29 @@ if [ "${SLURM_LOCALID:-0}" -eq 0 ] ; then
 fi
 # source setup_env.sh
 # module load lumio
-job_offset=${1:0}
-chmod +x run_hendrix_correction.sh
-srun run_hendrix_correction.sh $job_offset
 
+chmod +x run_hendrix_correction.sh
+
+case $1 in
+0)
+# ==========================================
+#   Run postprocessing with config file
+# ==========================================
+job_offset=${2:0}
+srun run_hendrix_correction.sh 0 $job_offset
+;;
+1)
+# ==========================================
+#   Run postprocessing with list of tiles
+# ==========================================
+unfinished_tiles=(${2:-})
+year=${3:-2020}
+srun run_hendrix_correction.sh 1 "${unfinished_tiles[*]}" $year
+
+;;
+
+*)
+echo "Invalid option"
+exit 1
+;;
+esac

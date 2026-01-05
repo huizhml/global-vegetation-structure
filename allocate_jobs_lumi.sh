@@ -141,27 +141,73 @@ done
 # =======================================
 
 use_flash=True
-
+year=${3:-2024}
 # Target active inference jobs (pending + running)
-TARGET_ACTIVE=10 # 100
+TARGET_ACTIVE=100 # 100
 RECHECK_INTERVAL=60
-
-year=${2:-2024}
 tile_id_dir=${HOME}/data/gvs/deploy/tiles_by_zone_for_postprocess/
-n_jobs=$(ls $tile_id_dir | wc -l)
+all_zones=($(ls $tile_id_dir))
+offset=0
+zones=(${all_zones[@]:offset:TARGET_ACTIVE})
 
-for zone in $(ls $tile_id_dir); do
-    done_flag="${HOME}/data/gvs/deploy/flags_postprocess_${year}/${zone}_done"
-    if [ -f "$done_flag" ]; then
+for zone in ${zones[@]}; do
+    tile_ids=($(cat ${tile_id_dir}/${zone}))
+    zone_processed=true
+    for tile_id in ${tile_ids[@]}; do
+        done_flag="${HOME}/data/gvs/deploy/flags_postprocess_${year}/${tile_id}_done"
+        if [ ! -f "$done_flag" ]; then
+            echo "Tile $tile_id not processed, processing zone $zone"
+            zone_processed=false
+            break
+        fi
+    done
+    if [ "$zone_processed" == false ]; then
+        echo "Submitting correction job for zone $zone"
+        JOBID_A=$(sbatch --parsable run_lumi_correction.sh "$year" "$zone" "$use_flash" | awk '{print $1}')
+        echo "Submitted correction job for zone $zone as job $JOBID_A"
+        sleep 1s
+    fi
+done
+;;
+
+3)
+# =======================================
+#    ALLOCATE JOBS FOR CORRECTION AND BLENDING, scratch
+# =======================================
+
+use_flash=False
+year=${3:-2024}
+# Target active inference jobs (pending + running)
+TARGET_ACTIVE=100 # 100
+RECHECK_INTERVAL=60
+tile_id_dir=${HOME}/data/gvs/deploy/tiles_by_zone_for_postprocess/
+all_zones=($(ls $tile_id_dir))
+offset=0
+zones=(${all_zones[@]:offset:TARGET_ACTIVE})
+echo "Total zones: ${#all_zones[@]}"
+
+for zone in ${all_zones[@]}; do
+    tile_ids=($(cat ${tile_id_dir}/${zone}))
+    zone_processed=true
+    for tile_id in ${tile_ids[@]}; do
+        done_flag="${HOME}/data/gvs/deploy/flags_postprocess_${year}/${tile_id}_done"
+        if [ ! -f "$done_flag" ]; then
+            echo "Tile $tile_id not processed, processing zone $zone"
+            zone_processed=false
+            break
+        fi
+    done
+    if [ "$zone_processed" == true ]; then
         echo "Zone $zone already processed, skipping"
         continue
     fi
     echo "Processing zone $zone"
     
+    # check until there's capacity to submit the job for zone
     while true; do
-      read active_inf_now < <(count_jobs correction)
+      read active_inf_now < <(count_jobs correction_scratch)
       # read active_inf_now active_trans_now < <(count_active_tasks)
-      echo "********** Active tasks: Correction=$active_inf_now"
+      echo "********** Active tasks: correction_scratch=$active_inf_now"
       if [ "$active_inf_now" -lt "$TARGET_ACTIVE" ]; then
         # if [ "$active_inf_now" -lt "$TARGET_ACTIVE" ] && [ "$active_trans_now" -lt "$TARGET_ACTIVE" ]; then
         break
@@ -172,10 +218,9 @@ for zone in $(ls $tile_id_dir); do
     done
 
     echo "Submitting correction job for zone $zone"
-    JOBID_A=$(sbatch --parsable run_lumi_correction.sh "$year" "$zone" "$use_flash" | awk '{print $1}')
+    JOBID_A=$(sbatch --parsable --job-name=correction_scratch run_lumi_correction.sh "$year" "$zone" "$use_flash" | awk '{print $1}')
     echo "Submitted correction job for zone $zone as job $JOBID_A"
     sleep 1s
-  # done
 
 done
 ;;
