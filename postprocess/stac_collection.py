@@ -163,6 +163,32 @@ class StacCatalog:
         # test = image.isel(time=0, band=0).compute() #@2025-10-02, tested, works well, can load image from tif files
         self.collection.add_item(item)   
 
+    def update_item(self, tile_id: str):
+        item_path = f'{self.catalog_dir}/{self.collection_id}/{tile_id}_{self.year}/{tile_id}_{self.year}.json'
+        item = pystac.Item.from_file(item_path)
+        gtif_dir = Path(f'~/data/gvs/deploy/predictions_gtiff_{self.year}/{tile_id}').expanduser()
+        cog_dir = Path(f'~/data/gvs/deploy/predictions_{self.year}/{tile_id}').expanduser()
+        file_path = item.assets['RH98_Q1'].href.replace('file://', '')
+        file_path = Path(file_path).expanduser()
+        if file_path.exists() and len(list(file_path.parent.glob('*.tif'))) == 303:
+            print('Local file exists and is complete, skip updating')
+            return
+        if gtif_dir.exists() and len(list(gtif_dir.glob('*.tif'))) == 303:
+            pred_dir = gtif_dir
+            print(f'GTiff directory exists and is complete, updating')
+        elif cog_dir.exists() and len(list(cog_dir.glob('*.tif'))) == 303:
+            pred_dir = cog_dir
+            print(f'COG directory exists and is complete, updating')
+        else:
+            raise ValueError(f'No predictions found for tile {tile_id} in year {self.year}')
+        # Update asset hrefs
+        for key, asset in item.assets.items():
+            asset.href = f'file://{pred_dir / Path(asset.href).name}'
+
+        # 🔑 Save updated item back to disk
+        item.save_object(dest_href=item_path)
+
+        print(f'Updated STAC item saved to {item_path}')
 
 @dataclass
 class Config:
@@ -170,6 +196,8 @@ class Config:
     catalog_dir: str = '~/data/gvs/deploy/gvsm_stac_catalog'
     data_source: str = 'local'
     task: str = 'create_catalog'
+    tile_id: str = '32TNS'
+    year: int = 2020
     
     
 cs = ConfigStore.instance()
@@ -181,6 +209,8 @@ def main(cfg):
     stac_collection = StacCatalog(**cfg)
     if cfg.task == 'create_catalog':
         stac_collection.create_catalog()
+    elif cfg.task == 'update_item':
+        stac_collection.update_item(cfg.tile_id)
     else:
         raise ValueError(f'Invalid task: {cfg.task}')
 
