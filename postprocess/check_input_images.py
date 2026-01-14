@@ -35,6 +35,45 @@ def normalize_to_list(val):
 def check_water_mask(image):
     pass
 
+
+class CheckInputImages:
+    def __init__(self, year):
+        self.year = year
+        self.zarr_store_path = Path(f'~/data/gvs/inputs/inference_{year}.zarr').expanduser()
+
+
+    def plot_input_images(self, tile_id, save_dir=None):
+        save_dir = Path(f'{save_dir}/{tile_id}').expanduser()
+        save_dir.mkdir(parents=True, exist_ok=True)
+        ds = xr.open_zarr(self.zarr_store_path / tile_id)
+        ds = ds.swap_dims({"time": "id"})
+        if ds.time.size > 20:
+            # put the 20 images used for prediction first
+            meta_file = Path(f'~/data/gvs/assets/worklists/s2_meta_by_zone/{self.year}/{tile_id[:3]}.parquet').expanduser()
+            meta_df = gpd.read_parquet(meta_file)
+            meta_df = meta_df[meta_df['s2:mgrs_tile'] == tile_id]
+            # NOTE: not all images in the meta df are actually downloaded, we need to check the zarr store
+            s2_ids_zarr = ds.id.values
+            meta_df = meta_df[meta_df['id'].isin(s2_ids_zarr)]
+            meta_df = meta_df.reset_index(drop=True)
+            meta_df['s2:nodata_pixel_percentage'] = meta_df['s2:nodata_pixel_percentage'].round()
+            meta_df = meta_df.sort_values(['s2:nodata_pixel_percentage', 'eo:cloud_cover'])
+            ids = meta_df['id']
+            # there might be duplicated images in the zarr store, in this case,it doesn't allow to select images by id
+            _, unique_indices = np.unique(ds.id.values, return_index=True)
+            ds = ds.isel(id=unique_indices)
+            ds = ds.sel(id=ids.values)
+        ds = ds.s2.sel(band=['B04', 'B03', 'B02'])
+        for i, s2_id in enumerate(ds.id.data):
+            plt.figure(figsize=(10, 10))
+            img = ds.sel(id=s2_id)
+            img = img.clip(0, 2000) / 2000
+            img.plot.imshow(rgb='band')
+            plt.savefig(save_dir / f'{s2_id}_order{i}.pdf')
+            plt.close()
+        
+        
+
 def check_duplicated_images():
     
     for year in [2020, 2024]:
@@ -110,7 +149,7 @@ def check_n_images_per_tile():
 
 
 def convert_rgb_to_geotiff(year, tile_id):
-    ds = xr.open_zarr(f'~/data/gvs/deploy/inference_{year}.zarr', group=tile_id)
+    ds = xr.open_zarr(f'~/data/gvs/inputs/inference_{year}.zarr', group=tile_id)
     rgb = ds.s2.sel(band=['B04', 'B03', 'B02'])
     save_dir = Path(f'~/data/gvs/debug/').expanduser()
     save_dir.mkdir(parents=True, exist_ok=True)
@@ -254,7 +293,7 @@ def check_intermediate_preds(tile_ids, year):
 
 @dataclass
 class MyConfig:
-    zarr_store_path: str = '~/data/gvs/deploy/inference_2024.zarr'
+    zarr_store_path: str = '~/data/gvs/inputs/inference_2024.zarr'
     year: int = 2024
     tile_id: str = '20XNR'
     output_dir: str = '~/data/gvs/deploy/check_input_images_2024'
@@ -265,13 +304,18 @@ cs.store(name="check_input_images", node=MyConfig)
 
 @hydra.main(config_name='check_input_images', version_base="1.2")
 def main(cfg: DictConfig):
-    # check_duplicated_images()
-    if cfg.task == 'check_images_order':
+
+    check_input_images = CheckInputImages(cfg.year)
+    if cfg.task == 'plot_input_images':
+        save_dir = cfg.get('save_dir', f'~/data/gvs/diagnostics/check_input_images/{cfg.year}')
+        check_input_images.plot_input_images(cfg.tile_id, save_dir=save_dir)
+    elif cfg.task == 'check_images_order':
         check_images_order()
     elif cfg.task == 'check_image_statistics':
         check_image_statistics(cfg.tile_id, cfg.year)
     elif cfg.task == 'check_intermediate_preds':
         check_intermediate_preds(cfg.tile_id, cfg.year)
+    
     # tile_configs = {
     #     '20LPP': (10000, 4, 900), 
     #     '20LQP': (4, 4, 900),
