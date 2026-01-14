@@ -486,13 +486,25 @@ class WorldS2(DaskDownloader):
 
         res = pd.concat([best, rest])
         return res
-
+    
+    def save_s2_items_by_zone(self, df):
+        zone = df['mgrs_zone'].iloc[0]
+        df.to_parquet(self.save_dir / f'{zone}.parquet')
+    
+    def partition_s2_items_by_zone(self, parquet_dir: str = None, save_dir: str = None):
+        parquet_dir = Path(parquet_dir).expanduser()
+        self.save_dir = Path(save_dir).expanduser()
+        self.save_dir.mkdir(exist_ok=True, parents=True)
+        parquet_files = list(parquet_dir.glob(f'*.parquet'))
+        
+        s2_df = dgp.read_parquet(parquet_files, gather_spatial_partitions=False)
+        s2_df['mgrs_zone'] = s2_df['s2:mgrs_tile'].str[:3]
+        s2_df.groupby('mgrs_zone').apply(self.save_s2_items_by_zone, meta=('object', None)).compute()
         
 @dataclass
 class MyConfig:
     year: int = 2020
     s2_parquet: str = '~/data/gvs/s2_tiles_with_growing_months.parquet'
-    save_dir: str = '~/data/gvs/deploy'
     store_name: str = 'inference'
     wc_parq_file:str = '~/data/gvs/deploy/esa_wc.parquet'
     comp_name: str = 'lz4'
@@ -523,7 +535,12 @@ def main(cfg):
     # with open_dict(cfg):
         # cfg.specified_tiles = specified_tiles
     s2 = WorldS2(**cfg)
-    getattr(s2, cfg.task)(**cfg, specified_tiles_df=specified_tiles_df)
+    if cfg.task == 'partition_s2_items_by_zone':
+        parquet_dir = cfg.get('geoparquet_dir', f'~/data/gvs/assets/worklists/slurm_job_files_{cfg.year}')
+        save_dir = cfg.get('save_dir', f'~/data/gvs/assets/worklists/s2_meta_by_zone/{cfg.year}')
+        s2.partition_s2_items_by_zone(parquet_dir, save_dir)
+    else:
+        getattr(s2, cfg.task)(**cfg, specified_tiles_df=specified_tiles_df)
     # s2.check_images_per_tile()
     print(f"Time taken: {time.time() - t0:.2f}s")
 
