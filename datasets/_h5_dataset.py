@@ -11,9 +11,16 @@ from torch import Tensor
 from kornia.enhance import normalize
 import xarray as xr
 import pandas as pd
+import geopandas as gpd
 from lightning.pytorch import LightningDataModule
+from dataclasses import dataclass
+from hydra.core.config_store import ConfigStore
+from omegaconf import DictConfig
+import hydra
+import dask
 from utils import get_dense_latlon
-
+from download._const import gedi_attr_dtype
+from download._utils import check_unfinished_files
 
 coverage_beams = ['BEAM0000', 'BEAM0001', 'BEAM0010', 'BEAM0011']
 power_beams = ['BEAM0101', 'BEAM0110', 'BEAM1000', 'BEAM1011']
@@ -378,44 +385,73 @@ def get_reference_data_with_images(h5_file: str, naturalness_fp: str):
     target_df_with_images.to_csv(naturalness_fp.with_suffix('.with_images.csv'))
     
 
-if __name__ == '__main__':
-    import pandas as pd
-    import dask.dataframe as dd
-    run_id = '0crmfaia'
-    naturalness_fp = f'~/data/gvs/downstream_task_data/naturalness/reference_data_set_updated.csv'
-    h5_file = f'~/data/gvs/downstream_task_data/rhs_predictions_2017_{run_id}_ps31.h5'
-    mean_std_fp = f'~/data/gvs/downstream_task_data/naturalness/mean_std_{run_id}.npz'
-    calculate_mean_std(h5_file, mean_std_fp)
-    # get_reference_data_with_images(h5_file, naturalness_fp)
-    # print(files)
-    # index_table = dd.read_parquet(files).compute()
-    # print(index_table.head())
-    # index_table = index_table.sort_values(['path', 'in_partition_idx'])
-    # index_table['in_partition_idx'] = index_table.groupby('path').cumcount()
-    # # index_table = [str(p) for p in index_table.glob('*.parquet')]
-    # # index_table = pd.read_parquet(index_table)#.compute()
-    # dataset = S2Dataset(h5_file, index_table)
-    # for i in range(len(dataset)):
-    #     image, label, wc, slope, lon_vector, lat_vector = dataset[i]
-    #     import ipdb; ipdb.set_trace()
-    #     print(i)
-    # dataset = NaturalnessDataModule(h5_file, naturalness_fp=naturalness_fp, mean_std_fp=mean_std_fp)
-    # dataloader = torch.utils.data.DataLoader(dataset, batch_size=4096, num_workers=4)
-    # naturalness_fp = Path(naturalness_fp).expanduser()
-    # dataset = NaturalnessDataset(h5_file, naturalness_fp=naturalness_fp.with_suffix('.with_images.csv'), use_full_profile=True)
-    # for i in range(len(dataset)):
-    #     rhs, s2, target = dataset[i]
-    #     print(i)
-    # for batch in enumerate(dataloader):
-        # print(batch[0].shape)
+def extract_gedi_from_h5(h5_dir: str, index_table_dir: str, save_dir: str, year: int):
+    """
+    Extract GEDI data (with, slope and lc info) from the H5 file and save it to a parquet file.
+    """
+    h5_dir = Path(h5_dir).expanduser()
+    index_table_dir = Path(index_table_dir).expanduser()
+    save_dir = Path(save_dir).expanduser()
+    save_dir.mkdir(parents=True, exist_ok=True)
+    index_table_fps = list(index_table_dir.glob('*.parquet'))
+    rh_cols = [f'rh{i}' for i in range(101)]
+    gedi_attr_cols = list(gedi_attr_dtype.keys())
+    cols = rh_cols + gedi_attr_cols + ['slope', 'lc', 'lat', 'lon', 'shot_number'] 
+    dtype = {**gedi_attr_dtype, 'slope': 'float32', 'lc': 'int8', 'shot_number': 'uint64'}
     
-    # for i in range(len(dataset)):
-    #     lon = dataset[i][4]
-    #     import ipdb; ipdb.set_trace()
-    #     if np.isinf(lon).any():
-    #         print(i)
-    # dataset.h5_file.close()
+    
+    @dask.delayed
+    def _extract(index_table_fp: str, year: int):
+        df = gpd.read_parquet(index_table_fp)
+        zone = index_table_fp.stem.split('_')[0]
+        h5_file = h5_dir / f'{zone}.h5'
+        data = h5py.File(h5_file, 'r')
+        tile_ids = df['s2_tile'].unique()
+        if len(tile_ids) == 0:
+            return
+        for tile_id in tile_ids:
+            groups = df[df['s2_tile']==tile_id]['path'].unique()
+            groups = [group[4:] for group in groups if f'{year}' in group]
+            if len(groups) == 0:
+                continue
+            data_list = []
+            for group in groups:
+                rhs = data[f'{group}/rhs'][:]
+                gedi_attrs = data[f'{group}/gedi_attrs'][:]
+                slope = data[f'{group}/slope'][:, 7,7:8]
+                lc = data[f'{group}/image'][:, 13, 7, 7:8]
+                latlon = data[f'{group}/latlon'][:]
+                shot_number = data[f'{group}/shot_number'][:][:, np.newaxis]
+                _data = np.concatenate([rhs, gedi_attrs, slope, lc, latlon, shot_number], axis=1)
+                data_list.append(_data)
+            da = np.concatenate(data_list, axis=0)
+            df_gedi = pd.DataFrame(da, columns=cols)
+            df_gedi = df_gedi.astype(dtype)
+            df_gedi.to_parquet(save_dir / f'{tile_id}.parquet')
+    
+    unfinished_files = check_unfinished_files(index_table_fps, save_dir, output_format='parquet')
+    tasks = [_extract(index_table_fp, year) for index_table_fp in unfinished_files]
+    dask.compute(*tasks)
+
+@dataclass
+class MyConfig:
+    year: int = 2020
+    task: str = 'extract_gedi_from_h5'
+    
+cs = ConfigStore.instance()
+cs.store(name="h5_dataset", node=MyConfig)
+
+@hydra.main(config_name='h5_dataset', version_base="1.2")
+def main(cfg: DictConfig):
+
+    if cfg.task == 'extract_gedi_from_h5':
+        h5_dir = cfg.get('h5_dir', f'~/data/gvs/datasets/splits/split_test0.1_cal0.1_val0.1_seed42_v1/h5_partitions_cal')
+        index_table_dir = cfg.get('index_table_dir', f'~/data/gvs/datasets/splits/split_test0.1_cal0.1_val0.1_seed42_v1/index_table_cal')
+        save_dir = cfg.get('save_dir', f'~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_cal/original/{cfg.year}')
+        extract_gedi_from_h5(h5_dir, index_table_dir, save_dir, year=cfg.year)
 
 
 
-# %%
+if __name__ == '__main__':
+    main()
+    
