@@ -59,10 +59,9 @@ class SOTAChmDownloader(DaskDownloader):
         tasks = []
         for file in self.location_files:
             tasks.append(self.download_file(file))
-        import ipdb; ipdb.set_trace()
         self.schedule_tasks(delayed_tasks=tasks)
 
-    # @dask.delayed
+    @dask.delayed
     @retry(requests.HTTPError, tries=10, delay=1)
     def download_file(self, file: Path):
         output_file = self.output_dir / f'{file.stem}.parquet'
@@ -70,7 +69,12 @@ class SOTAChmDownloader(DaskDownloader):
             print(f'{output_file} exists, skipping')
             return
         
-        loc_df = gpd.read_parquet(file, columns=['geometry', 'rh95', 'rh98', 'rh100'])
+        try:
+            loc_df = gpd.read_parquet(file, columns=['geometry', 'rh95', 'rh98', 'rh100'])
+        except ValueError as e:
+            loc_df = pd.read_parquet(file, columns=['rh95', 'rh98', 'rh100', 'lat', 'lon'])
+            loc_df = gpd.GeoDataFrame(loc_df, geometry=gpd.points_from_xy(loc_df.lon, loc_df.lat, crs="EPSG:4326"))
+            
         if loc_df.empty:
             return
         # features more than 10000 would likely fail because of GEE memory limit
