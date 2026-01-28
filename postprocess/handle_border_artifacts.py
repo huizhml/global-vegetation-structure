@@ -24,6 +24,7 @@ import planetary_computer
 import subprocess
 import shutil
 from pystac_client.stac_api_io import StacApiIO
+from dask.distributed import Client, LocalCluster
 from download._dask_downloader import DaskDownloader
 from postprocess.translate import translate_tile
 import warnings
@@ -38,6 +39,8 @@ gdal.UseExceptions()
 stac_api_io = StacApiIO()
 stac_endpoint = 'https://planetarycomputer.microsoft.com/api/stac/v1'
 
+KEY_RHS = (0, 10, 25, 50, 75, 95, 98, 100)
+ESA_WORLD_COVER_WATER_SNOW_MASK = (0, 70, 80) # nodata, snow and ice, water
 
 def init_gtiff(prediction_fp: Path, tile_info: dict, options: list):
     prediction_fp = prediction_fp.with_suffix('.tif')
@@ -58,53 +61,132 @@ def init_gtiff(prediction_fp: Path, tile_info: dict, options: list):
     tiff_output.SetMetadataItem('Sentinel-2 tile', tile_info['tile_id'])
     return tiff_output
 
+
+def find_intersecting_s2_tiles(s2_grid: gpd.GeoDataFrame=None, current_tile: str=None) -> list[str]:
+    '''
+    Find intersecting S2 tiles
+    '''
+    tile_geom = s2_grid[s2_grid['Name'] == current_tile]['geometry'].iloc[0]
+    geom = shape(tile_geom)
+    idx = list(s2_grid.sindex.query(geom, predicate="intersects"))
+    tiles = s2_grid.iloc[idx]['Name'].unique()
+    return tiles
+
+
+    
+def create_distance_map_item(map_item: pystac.Item, dist_map_file: str):
+    '''
+    Create distance map STAC item from an existing STAC item and a distance map file
+    '''
+    dist_map_file = Path(dist_map_file).expanduser()
+    dist_item = pystac.Item(
+        id=f'{map_item.id}',
+        geometry=map_item.geometry,
+        bbox=map_item.bbox,
+        datetime=map_item.datetime,
+        properties={
+            'proj:epsg': map_item.properties['proj:epsg'],
+            'raster:bands': map_item.properties['raster:bands']
+        }
+    )
+    dist_item.add_asset('distance_to_border', pystac.Asset(
+        href=f'file://{str(dist_map_file)}',
+        media_type="image/tiff; application=geotiff; profile=cloud-optimized",
+        title=f'Distance map - 10m',
+        roles=["data"],
+    ))
+    return dist_item
+
 class VSMCorrection(DaskDownloader):
-    def __init__(self, year: int, n_parallel: int = 100, corrected_pred_dir: str=None,
-                 correction_stats_dir:str=None, stac_collection_dir:str=None, flag_dir:str=None,
-                 s2_grid_file:str=None, distance_map_dir:str=None, 
+    def __init__(self, year: int, 
+                 tile_id: str=None,
+                 flag_dir:str=None,
+                 output_dir: str=None,
+                 stac_collection_dir:str=None, 
+                 s2_grid_file:str=None, 
+                 distance_map_dir:str=None, 
                  chunksize:int=1024,
+                 total_tiles_file:str=None,
                  costal_tiles_file:str=None,
                  use_flash: bool = False,
                  rhs_idx: str = 'all_rhs',
+                 n_parallel: int = 100, # not used
                  **kwargs):
         
         super().__init__(n_parallel=n_parallel, **kwargs)
         self.year = year
-        if costal_tiles_file is not None:
-            self.costal_tiles_file = Path(costal_tiles_file).expanduser()
-        else:
-            self.costal_tiles_file = None
-        self.corrected_pred_dir = Path(corrected_pred_dir).expanduser()
-        self.correction_stats_dir = Path(correction_stats_dir).expanduser()
-        self.stac_collection_dir = Path(stac_collection_dir).expanduser()
-        self.distance_map_dir = Path(distance_map_dir).expanduser()
-        self.s2_grid_file = Path(s2_grid_file).expanduser()
-        self.s2_grid = gpd.read_parquet(self.s2_grid_file, columns=['Name', 'geometry'])
-        self._sindex = self.s2_grid.sindex
+        self.tile_id = tile_id
         self.chunksize = chunksize
         self.use_flash = use_flash
-        self.flag_dir = Path(flag_dir).expanduser()
+        self.stac_collection_dir = Path(stac_collection_dir).expanduser()
+        self.distance_map_dir = Path(distance_map_dir).expanduser()
+        self.flag_dir = Path(f'{flag_dir}/{rhs_idx}').expanduser()
         self.flag_dir.mkdir(parents=True, exist_ok=True)
         self.on_lumi = 'home' not in str(Path.home())
-        self.flash_dir = Path.home() / f'flash/data/gvs/deploy/predictions_gtiff_{self.year}'
-        self.scratch_dir = Path.home() / f'data/gvs/deploy/predictions_gtiff_{self.year}'
-        key_rhs = [0, 10, 25, 50, 75, 95, 98, 100] 
+        
+        self.geotiff_dir, self.cog_dir = self._init_output_dir(output_dir)
+        self.s2_grid, self._sindex = self._init_s2_grid(s2_grid_file)
+        self.total_tiles = self._load_total_tiles(total_tiles_file)
+        self.is_costal_tile = self._check_if_costal_tile(costal_tiles_file)
+        self.key_rhs = self._init_rhs_idx(rhs_idx)
+        
+    def _init_output_dir(self, output_dir: str):
+        '''
+        Initialize output directory
+        '''
+        output_dir = Path(output_dir).expanduser()
+        output_dir.mkdir(parents=True, exist_ok=True)
+        geotiff_dir = output_dir / f'geotiff/{self.tile_id}'
+        geotiff_dir.mkdir(parents=True, exist_ok=True)
+        cog_dir = output_dir / f'cog/{self.tile_id}'
+        cog_dir.mkdir(parents=True, exist_ok=True)
+        return geotiff_dir, cog_dir
+        
+    def _init_s2_grid(self, s2_grid_file: str):
+        '''
+        Initialize S2 grid
+        '''
+        s2_grid_file = Path(s2_grid_file).expanduser()
+        s2_grid = gpd.read_parquet(s2_grid_file, columns=['Name', 'geometry'])
+        return s2_grid, s2_grid.sindex
+    
+    def _init_rhs_idx(self, rhs_idx: str):
+        '''
+        Initialize RHS index
+        Args:
+            rhs_idx: str, 'all_rhs', 'key_rhs', 'rest_rhs', 'rh98'
+        '''
         if rhs_idx == 'all_rhs':
-            self.key_rhs = None
+            return None
         elif rhs_idx == 'key_rhs':
-            self.key_rhs = [f'RH{rh}_Q{q}' for rh in key_rhs for q in range(0, 3)]
+            return [f'RH{rh}_Q{q}' for rh in KEY_RHS for q in range(0, 3)]
         elif rhs_idx == 'rest_rhs':
             all_rhs = list(range(101))
-            rest_rhs = [rh for rh in all_rhs if rh not in key_rhs]
-            self.key_rhs = [f'RH{rh}_Q{q}' for rh in rest_rhs for q in range(0, 3)]
+            rest_rhs = [rh for rh in all_rhs if rh not in KEY_RHS]
+            return [f'RH{rh}_Q{q}' for rh in rest_rhs for q in range(0, 3)]
+        elif rhs_idx == 'rh98':
+            return [f'RH98_Q1']
         else:
             raise ValueError(f"Invalid rhs_idx: {rhs_idx}")
-        self.tiles = []
-        for config_file in Path('~/data/gvs/deploy/tiles_by_zone_for_postprocess/').expanduser().glob('*.txt'):
-            with open(config_file, 'r') as f:
-                tiles = f.read().splitlines()
-                self.tiles.extend(tiles)
     
+    def _load_total_tiles(self, total_tiles_file: str):
+        '''
+        Load total tiles from file. 
+        Not all tiles from the S2 grid file have images for the given year, therefore we keep a list of all tiles available for the given year.
+        '''
+        total_tiles_file = Path(total_tiles_file).expanduser()
+        with open(total_tiles_file, 'r') as f:
+            total_tiles = f.read().splitlines()
+        return total_tiles
+    
+    def _check_if_costal_tile(self, costal_tiles_file: str):
+        '''
+        Load costal tiles from file
+        '''
+        costal_tiles_file = Path(costal_tiles_file).expanduser()
+        with open(costal_tiles_file, 'r') as f:
+            costal_tiles = f.read().splitlines()
+        return self.tile_id in costal_tiles
     
     def find_intersecting_s2_tiles(self, current_tile: pystac.Item):
         '''
@@ -113,7 +195,7 @@ class VSMCorrection(DaskDownloader):
         geom = shape(current_tile.geometry)
         idx = list(self._sindex.query(geom, predicate="intersects"))
         tiles = self.s2_grid.iloc[idx]['Name'].to_numpy()
-        tiles = [tile for tile in tiles if tile in self.tiles]
+        tiles = [tile for tile in tiles if tile in self.total_tiles]
         return tiles
     
     
@@ -153,22 +235,22 @@ class VSMCorrection(DaskDownloader):
         print(f"LUMI-O ➡️ Local - {len(tile_ids)} tiles: {t1 - t0} seconds")
     
     
-    def copy_data_to_lumio(self, tile_id: str, translate_dir: Path = None):
+    def copy_data_to_lumio(self):
         '''
         Copy data to lumio
         '''
         t0 = time.time()
-        zone_name = tile_id[:3].lower()
+        zone_name = self.tile_id[:3].lower()
         bucket_name = f"{zone_name}-{self.year}"
-        remote = f"lumi-465001846-private:{bucket_name}/{tile_id}"
-        os.system(f"rclone sync {translate_dir} {remote} --transfers=16 --checkers=16 --multi-thread-streams=4")
+        remote = f"lumi-465001846-private:{bucket_name}/{self.tile_id}"
+        os.system(f"rclone sync {self.translate_dir} {remote} --transfers=16 --checkers=16 --multi-thread-streams=4")
         t1 = time.time()
         # check if remote file are exactly the same as local file
-        rclone_command = ['rclone', 'check', '--checkers=16', '--checksum', '--stats-one-line', remote, translate_dir]
+        rclone_command = ['rclone', 'check', '--checkers=16', '--checksum', '--stats-one-line', remote, self.translate_dir]
         task = subprocess.run(rclone_command, capture_output=True, text=True)
         
         if task.returncode != 0:
-            raise ValueError(f"Failed to check if remote file {remote} is exactly the same as local file {translate_dir}")
+            raise ValueError(f"Failed to check if remote file {remote} is exactly the same as local file {self.translate_dir}")
         log_output = task.stdout + task.stderr
         DIFF_PATTERN = r': (\d+) differences found'
         match = re.search(DIFF_PATTERN, log_output)
@@ -177,15 +259,15 @@ class VSMCorrection(DaskDownloader):
             print(f"✅ Extracted difference count: {difference_count}")
             if difference_count > 0:
                 print(f"🚨 FAILURE: Found {difference_count} differences/corruptions.")
-                self.copy_data_to_lumio(tile_id)
+                self.copy_data_to_lumio(self.translate_dir)
             else:
                 print("✨ SUCCESS: All files verified as identical and uncorrupted. Deleting local corrected predictions.")
-                shutil.rmtree(translate_dir) # cog files
-                shutil.rmtree(self.corrected_pred_dir / f'{tile_id}') # geotiff files
-                (self.flag_dir / f"{tile_id}_done").touch()
+                shutil.rmtree(self.translate_dir) # cog files
+                shutil.rmtree(self.output_dir / f'{self.tile_id}') # geotiff files
+                (self.flag_dir / f"{self.tile_id}_done").touch()
         else:
             raise ValueError(f"Could not find the summary line in rclone output.")
-        print(f"LUMI-O ⬅️ Local - {tile_id}: {t1 - t0} seconds")
+        print(f"LUMI-O ⬅️ Local - {self.tile_id}: {t1 - t0} seconds")
         
     def delete_local_file(self, tile_ids: list[str]):
         '''
@@ -205,38 +287,11 @@ class VSMCorrection(DaskDownloader):
                 else:
                     raise ValueError(f"Tile {tile_id} does not exist in flash or scratch directory")
     
-    def create_distance_map_item(self, map_item: pystac.Item, dist_map_file: str):
-        '''
-        Create distance map item
-        '''
-        dist_map_file = Path(dist_map_file).expanduser()
-        dist_item = pystac.Item(
-            id=f'{map_item.id}',
-            geometry=map_item.geometry,
-            bbox=map_item.bbox,
-            datetime=map_item.datetime,
-            properties={
-                'proj:epsg': map_item.properties['proj:epsg'],
-                'raster:bands': map_item.properties['raster:bands']
-            }
-        )
-        dist_item.add_asset('distance_to_border', pystac.Asset(
-            href=f'file://{str(dist_map_file)}',
-            media_type="image/tiff; application=geotiff; profile=cloud-optimized",
-            title=f'Distance map - 10m',
-            roles=["data"],
-        ))
-        return dist_item
-    
     def get_water_snow_mask(self, tile: pystac.Item):
         '''
         Mask snow and water predictions if it is costal tile
         '''
-        with open(self.costal_tiles_file, 'r') as f:
-            costal_tiles = f.read().splitlines()
         tile_id = tile.id.split("_")[0]
-        if tile_id not in costal_tiles:
-            return None
         
         api = pystac_client.Client.open(stac_endpoint, modifier=planetary_computer.sign_inplace, stac_io=stac_api_io)
         search = api.search(collections='esa-worldcover', bbox=tile.bbox, datetime=f'2021-01-01/2021-12-31')
@@ -253,10 +308,10 @@ class VSMCorrection(DaskDownloader):
         
         wc_image = wc_image.max(dim='time', skipna=True).squeeze()
         assert wc_image.shape == tuple(tile.assets['RH98_Q1'].extra_fields['proj:shape'])
-        water_snow_mask = wc_image.isin([0, 70, 80]) # nodata, snow and ice, water
+        water_snow_mask = wc_image.isin(ESA_WORLD_COVER_WATER_SNOW_MASK) # nodata, snow and ice, water
         return water_snow_mask
     
-    def update_href(self, item: pystac.Item, use_flash: bool = True):
+    def update_href(self, item: pystac.Item):
         '''
         Update href for all assets in the item
         '''
@@ -281,33 +336,33 @@ class VSMCorrection(DaskDownloader):
             item.assets[asset].href = new_path
         return item
     
-    def get_bucket_url(self, tile_id: str, project_id: int=465001846):
+    def get_bucket_url(self, project_id: int=465001846):
         '''
         Get bucket url for a tile
         '''
-        zone_name = tile_id[:3].lower()
+        zone_name = self.tile_id[:3].lower()
         bucket_name = f"{zone_name}-{self.year}"
-        return f"https://{project_id}.lumidata.eu/{bucket_name}/predictions_GTiff_{self.year}/{tile_id}/"
+        return f"https://{project_id}.lumidata.eu/{bucket_name}/predictions_GTiff_{self.year}/{self.tile_id}/"
         
     
-    def run_correction_and_blending(self, tile_id: str):
+    def run_blending(self):
         '''
         Run correction and blending for a single tile and band. And extract points for conformal prediction, save median prediction. It'll be the final version
         Pre-requisite:
         - Generated distance maps for all tiles
         - Calculated residuals for all tiles, and saved the residuals for each RH for later correction step.
         '''
-        if (self.flag_dir / f'{tile_id}_done').exists():
-            print(f"Tile {tile_id} already processed, skipping")
+        if (self.flag_dir / f'{self.tile_id}_done').exists():
+            print(f"Tile {self.tile_id} already processed, skipping")
             return
   
-        stac_file = self.stac_collection_dir / f'{tile_id}_{self.year}/{tile_id}_{self.year}.json'
+        stac_file = self.stac_collection_dir / f'{self.tile_id}_{self.year}/{self.tile_id}_{self.year}.json'
         if not stac_file.exists():
             print(f"Stac file {stac_file} does not exist, skipping")
             return
         current_tile = pystac.Item.from_file(str(stac_file))
         bbox_local = current_tile.assets['RH98_Q1'].extra_fields['proj:bbox']
-        dist_map_file = self.distance_map_dir / f'{tile_id}.tif'
+        dist_map_file = self.distance_map_dir / f'{self.tile_id}.tif'
         
         intersecting_s2_tiles = self.find_intersecting_s2_tiles(current_tile)
         # if self.on_lumi:
@@ -317,7 +372,6 @@ class VSMCorrection(DaskDownloader):
         print(client)
         intersect_items = []
         intersect_dist_items = []
-        biases = []
         for tile in intersecting_s2_tiles:
             intersect_stac_file = self.stac_collection_dir / f'{tile}_{self.year}/{tile}_{self.year}.json'
             if not intersect_stac_file.exists():
@@ -326,7 +380,7 @@ class VSMCorrection(DaskDownloader):
             intersect_tile = pystac.Item.from_file(str(intersect_stac_file))
             intersect_items.append(intersect_tile)
             dist_map_file = self.distance_map_dir / f'{tile}.tif'
-            intersect_dist_item = self.create_distance_map_item(intersect_tile, dist_map_file)
+            intersect_dist_item = create_distance_map_item(intersect_tile, dist_map_file)
             intersect_dist_items.append(intersect_dist_item)
             if self.on_lumi: # on lumi
                 intersect_tile = self.update_href(intersect_tile)
@@ -339,17 +393,9 @@ class VSMCorrection(DaskDownloader):
                 resolution=10, bounds=bbox_local, rescale=False, dtype='float32', fill_value=np.float32(np.nan))
             
             if tile_image.shape[0] == 0:
-                print(f'{tile} has no overlap with current tile {tile_id}')
+                print(f'{tile} has no overlap with current tile {self.tile_id}')
                 continue
             
-            # Apply bias correction if GEDI reference data is available
-            correct_stats_file = self.correction_stats_dir / f'{tile}.npz'
-            if correct_stats_file.exists():
-                bias = np.load(correct_stats_file)['bias']
-            else:
-                bias = np.zeros(101)
-            biases.append(bias)
-        print(f"Loaded {len(biases)} bias files")
         # get normalized weights for blending, same for each band
         dist_images = stackstac.stack(
             intersect_dist_items, assets=['distance_to_border'], chunksize=self.chunksize,
@@ -359,23 +405,20 @@ class VSMCorrection(DaskDownloader):
         sum_w = weights.sum(dim='time')
         weights_normalized = xr.where(sum_w > 0, weights / sum_w, np.nan).transpose(*weights.dims) # masked area like water, the sum can be 0
         # weights_normalized = weights_normalized.persist()
-        biases = np.vstack(biases).repeat(3, axis=1)
         intersect_images = stackstac.stack(
                 intersect_items, chunksize=self.chunksize,
                 # assets=[f'RH{i}_Q1' for i in range(101)],
                 epsg=current_tile.properties['proj:epsg'], bounds=bbox_local,
                 resolution=10, rescale=False, dtype='float32', fill_value=np.float32(np.nan))
 
-        intersect_images = intersect_images + biases[:, :, None, None]
         blended = (intersect_images * weights_normalized.data).sum(dim='time', min_count=1) #!!!!! skipna=True is the default, and it'll return 0 if all are nan, we need min_count=1 to be able to mask water, built-up, snow
         blended = blended.round().fillna(32767).astype(np.int16)
 
-        water_snow_mask = self.get_water_snow_mask(current_tile)
-        if water_snow_mask is not None:
-            blended = blended.where(~water_snow_mask, 32767)
             
-        corrected_pred_dir = self.corrected_pred_dir / f'{tile_id}'
-        corrected_pred_dir.mkdir(parents=True, exist_ok=True)
+        if self.is_costal_tile:
+            snow_water_mask = self.get_water_snow_mask(current_tile)
+            blended = blended.where(~snow_water_mask, 32767)
+            
         tile_shape = current_tile.assets['RH98_Q1'].extra_fields['proj:shape']
         profile = {
             'driver': 'GTiff',
@@ -398,7 +441,7 @@ class VSMCorrection(DaskDownloader):
         
         def write_block(block):
             band_name = block.band.values[0]
-            output_file = corrected_pred_dir / f'{band_name}.tif'
+            output_file = self.geotiff_dir / f'{band_name}.tif'
             with rasterio.open(output_file, 'w', **profile) as dst:
                 dst.write(block.data.squeeze(), indexes=1)
             return xr.DataArray(
@@ -420,15 +463,15 @@ class VSMCorrection(DaskDownloader):
         
         blended = blended.map_blocks(write_block, template=output_template)
         dask.compute(blended)
-        translate_dir = self.corrected_pred_dir.with_name(self.corrected_pred_dir.name + '_cog') / f'{tile_id}'
-        translate_dir.mkdir(parents=True, exist_ok=True)
-        translate_tile(corrected_pred_dir, translate_dir, profile="ZSTD") # TODO: add list of bands, key RHs are prioritized
+        translate_tile(self.geotiff_dir, self.cog_dir, profile="ZSTD") # TODO: add list of bands, key RHs are prioritized
         if self.on_lumi:
-            self.copy_data_to_lumio(tile_id, translate_dir)
+            self.copy_data_to_lumio(self.translate_dir)
             self.delete_local_file(intersecting_s2_tiles)
         else:
-            (self.flag_dir / f"{tile_id}_done").touch()
+            (self.flag_dir / f"{self.tile_id}_done").touch()
 
+            
+            
     # ------------------------------------------------------------
     #     Following functions are for testing purposes
     # ------------------------------------------------------------
@@ -476,16 +519,47 @@ class VSMCorrection(DaskDownloader):
         print(f'Time taken to read from one compressed geotiff file: {t2 - t1} seconds')
     
     
+def get_tiles_wo_enough_gedi_gt(tiles_list_file: str=None, bias_stats_dir: str=None, s2_grid_file: str=None):
+    '''
+    Get tiles not affected by bias correction, which means the bias correction is not applied to these tiles and their surrounding tiles
+    '''
+    bias_stats_dir = Path(bias_stats_dir).expanduser()
+    tiles_list_file = Path(tiles_list_file).expanduser()
+    s2_grid_file = Path(s2_grid_file).expanduser()
+    year = tiles_list_file.stem.split('_')[-1]
+    df = gpd.read_parquet(s2_grid_file)
+    with open(tiles_list_file, 'r') as f:
+        tiles = f.read().splitlines()
+        
+    @dask.delayed
+    def check_if_affected(tile: str):
+        '''
+        Check if the tile is affected by bias correction
+        Any intersecting tile has bias correction stats, then the tile is affected
+        '''
+        intersecting_tiles = find_intersecting_s2_tiles(df, tile)
+        for intersecting_tile in intersecting_tiles:
+            bias_stats_file = bias_stats_dir / f'{intersecting_tile}.npz'
+            if bias_stats_file.exists():
+                return None
+        return tile
+    
+    tiles_wo_enough_gedi_gt = dask.compute(*[check_if_affected(tile) for tile in tiles])
+    tiles_wo_enough_gedi_gt = [tile for tile in tiles_wo_enough_gedi_gt if tile is not None]
+    with open(tiles_list_file.with_name(f'tiles_wo_enough_gedi_gt_{year}.txt'), 'w') as f:
+        f.write('\n'.join(tiles_wo_enough_gedi_gt))
+
+
 @dataclass
 class AggGediToS2:
-    year: int = 2024
-    s2_grid_file: str = '~/data/gvs/s2_tiles_with_growing_months.parquet'
-    corrected_pred_dir: str = f'~/data/gvs/deploy/predictions_corrected_blended_{year}'
-    correction_stats_dir: str = f'~/data/gvs/deploy/correction/tile_stats_{year}'
-    stac_collection_dir: str = '~/data/gvs/deploy/gvsm_stac_catalog/vsm_local'
-    distance_map_dir: str = '~/data/gvs/deploy/blending/distance_maps'
-    flag_dir: str = f'~/data/gvs/deploy/flags_postprocess_{year}'
-    costal_tiles_file: str = '~/data/gvs/deploy/tiles_coastal_regions.txt'
+    year: int = 2020
+    s2_grid_file: str = '~/data/gvs/state/s2_tiles_with_growing_months.parquet'
+    output_dir: str = f'~/data/gvs/predictions/{year}/blended'
+    correction_stats_dir: str = f'~/data/gvs/assets/bias_correction_stats/slope_lt20_minpoints2000/{year}/none'
+    stac_collection_dir: str = '~/data/gvs/products/gvsm_stac_catalog/vsm_local'
+    distance_map_dir: str = '~/data/gvs/assets/blending/distance_maps'
+    flag_dir: str = f'~/data/gvs/state/{year}/blended'
+    costal_tiles_file: str = '~/data/gvs/assets/worklists/tiles_coastal_regions.txt'
     tile_id: str = '20MRS'
     n_parallel: int = 2
     chunksize: int = 2048
@@ -522,5 +596,4 @@ def main(cfg):
 
 
 if __name__ == '__main__':
-    from dask.distributed import Client, LocalCluster
     main()

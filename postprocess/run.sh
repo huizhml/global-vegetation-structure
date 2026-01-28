@@ -13,17 +13,17 @@ case $1 in
 
 1)
 # =======================================
-#    SPLIT TILES BY ZONE FOR CORRECTION
+#    SPLIT TILES BY ZONE FOR POSTPROCESSING
 # =======================================
 echo "Splitting tiles by zone (first 3 letters)...";
-output_dir="${HOME}/data/gvs/deploy/tiles_by_zone_for_postprocess"
+output_dir="${HOME}/data/gvs/assets/worklists/tiles_by_mgrs_zone"
 mkdir -p "$output_dir"
 
 # Clear existing zone files
 rm -f "$output_dir"/*.txt
 
 # Get all tiles and split by zone
-for tile in $(ls ${HOME}/data/gvs/deploy/predictions_gtiff_2024); do
+for tile in $(ls ${HOME}/data/gvs/predictions/2024/original/tiles/geotiff); do
     zone="${tile:0:3}"  # Extract first 3 letters
     echo "$tile" >> "$output_dir/${zone}.txt"
 done
@@ -44,64 +44,46 @@ done
 echo "Max number of tiles: $max"
 ;;
 
-2)
+2) 
 # =======================================
-#    MAKE BUCKET PUBLIC - finished tiles
+#    Evaluate bias correction performance
 # =======================================
-echo "Making bucket public..."
-module load lumio-ext-tools/1.0.0
-year=2024
-finished_tiles=($(find ${HOME}/data/gvs/deploy/flags_postprocess_${year} -type f -name "*_done" -exec basename {} \; | sed 's/_done//'))
-zones=($(for tile in "${finished_tiles[@]}"; do echo "${tile:0:3}" | tr '[:upper:]' '[:lower:]'; done | sort | uniq))
-for zone in ${zones[@]}; do
-    s3cmd setacl --recursive --acl-public s3://${zone}-${year}
-done
-
+year=2020
+split=${2:-cal}
+echo "Evaluating bias correction performance for ${split} split..."
+root_dir=${HOME}/data/gvs/
+python -m postprocess.run run=evaluate_bias_correction \
+    run.slope_lt20=True \
+    run.year=$year \
+    run.gedi_chm_ours_dir=${root_dir}/gedi/veg_sensitivity_gt0p95/subset_${split}/original_with_sota_chms_ours/${year} \
+    run.save_dir=${root_dir}/assets/bias_correction_stats/slope_lt20_minpoints2000/${year}/figures/${split}_slope_lt20  \
+    run.correction_stats_dir=${root_dir}/assets/bias_correction_stats/slope_lt20_minpoints2000/${year}/stats_with_median_and_trimmed_5_95_by_tile \
 ;;
-
 3)
 # =======================================
-#    MAKE BUCKET PUBLIC - all geotiff files
+#    Run postprocessing on Hendrix, multitasks, above bash config doesn't matter
 # =======================================
-echo "Making bucket public..."
-module load lumio-ext-tools/1.0.0
-year=2024
-zones=($(ls ${HOME}/data/gvs/deploy/tiles_by_zone_for_postprocess))
-for zone in ${zones[@]}; do
-    zone_name=$(basename "${zone}" .txt | tr '[:upper:]' '[:lower:]')
-    echo "Making bucket public for zone: ${zone_name}"
-    s3cmd setacl --recursive --acl-public s3://${zone_name}-${year}/predictions_GTiff_${year}
-    echo "Done!"
-done
-
-;;
-
-4)
-# =======================================
-#    MAKE BUCKET PUBLIC - all COG files
-# =======================================
-echo "Making bucket public..."
-module load lumio-ext-tools/1.0.0
-year=2024
 job_offset=${2:0}
-n_zones_per_task=10
+rhs_idx=${3:-key_rhs}
+n_zones_per_task=24
 n_zones=$((SLURM_NTASKS * n_zones_per_task))
-all_zones=($(ls ${HOME}/data/gvs/deploy/tiles_by_zone_for_postprocess/*.txt | sort))
-job_zones=(${all_zones[@]:$job_offset:n_zones})
+all_zones=($(ls ${HOME}/data/gvs/assets/worklists/tiles_by_mgrs_zone/*.txt | sort))
+job_zones=(${all_zones[@]:job_offset:n_zones})
 start_idx=$((SLURM_PROCID * n_zones_per_task))
 if [ $SLURM_PROCID -eq $((SLURM_NTASKS - 1)) ]; then
     task_zones=(${job_zones[@]:start_idx}) # take the rest of the zones
 else
     task_zones=(${job_zones[@]:start_idx:n_zones_per_task})
 fi
-flag_dir=${HOME}/data/gvs/deploy/tiles_by_zone_for_postprocess
 for zone in ${task_zones[@]}; do
-    zone_name=$(basename "${zone}" .txt | tr '[:upper:]' '[:lower:]')
-    tile_ids=$(cat $zone)
-    for tile_id in ${tile_ids[@]}; do
-        echo "Making bucket public for tile: s3://${zone_name}-${year}/${tile_id}"
-        s3cmd setacl --recursive --acl-public s3://${zone_name}-${year}/${tile_id}
-        echo "Done!"
+    for tile_id in $(cat $zone); do
+        echo "Processing tile $tile_id"
+        python -m postprocess.run run=run_blending \
+            run.year=$year \
+            run.tile_id=$tile_id \
+            run.flag_dir=${HOME}/data/gvs/state/${year}/blended/ \
+            run.output_dir=${HOME}/data/gvs/predictions/2020/blended/tiles \
+            run.total_tiles_file=${HOME}/data/gvs/assets/worklists/total_tiles_2020.txt
     done
 done
 ;;

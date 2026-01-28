@@ -3,9 +3,9 @@
 #SBATCH --ntasks-per-node=2
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=16
-#SBATCH --mem-per-cpu=4G # total memory for all tasks
+#SBATCH --mem-per-cpu=4G # total memory for all tasks for --mem
 #SBATCH --time=18-00:00:00
-#SBATCH --job-name=correction
+#SBATCH --job-name=blending
 #SBATCH --output=./logs/%x-%A-%t.out
 #SBATCH --nodelist=hendrixgpu26fl
 #SBATCH --mail-type=END,FAIL
@@ -21,7 +21,7 @@ fi
 # source setup_env.sh
 # module load lumio
 
-chmod +x run_hendrix_correction.sh
+chmod +x postprocess/run.sh
 
 case $1 in
 0)
@@ -29,7 +29,8 @@ case $1 in
 #   Run postprocessing with config file
 # ==========================================
 job_offset=${2:0}
-srun run_hendrix_correction.sh 0 $job_offset
+rhs_idx=${3:-key_rhs}
+srun postprocess/run.sh 3 $job_offset $rhs_idx
 ;;
 1)
 # ==========================================
