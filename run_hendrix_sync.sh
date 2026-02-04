@@ -390,8 +390,6 @@ gdal_translate ${dst_dir}.vrt /vsistdout/ \
   -co PREDICTOR=2 \
   -co INTERLEAVE=BAND \
   -co BIGTIFF=IF_SAFER | rclone rcat ${remote}/dummy-bucket/test.tif  --ignore-checksum --transfers=1 --multi-thread-streams=16 -P
-
-
 ;;
 
 esac

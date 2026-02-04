@@ -3,12 +3,12 @@ check_unfinished_tiles() {
     local year=$1
     local offset=$2
     local n_zones=$3
-    local all_zones=($(ls ${HOME}/data/gvs/deploy/tiles_by_zone_for_postprocess/*.txt | sort))
+    local all_zones=($(ls ${HOME}/data/gvs/assets/worklists/tiles_by_mgrs_zone/*.txt | sort))
     zones=(${all_zones[@]:offset:n_zones})
     unfinished_tiles=()
     for tile_id_file in ${zones[@]}; do
         for tile_id in $(cat $tile_id_file); do
-            if [ ! -f "${HOME}/data/gvs/deploy/flags_postprocess_${year}/${tile_id}_done" ]; then
+            if [ ! -f "${HOME}/data/gvs/state/${year}/corrected/key_rhs/${tile_id}_done" ]; then
                 unfinished_tiles+=($tile_id)
             fi
         done
@@ -164,6 +164,16 @@ echo ${unfinished_tiles[@]}
 
 sbatch -w $node --ntasks-per-node=1 run_hendrix_ntasks.sh 1 "${unfinished_tiles[*]}" $year
 ;;
-
+9)
+# ==========================================
+#   get correction stats for all tiles 2020
+# ==========================================
+year=2020
+tile_ids=($(grep '^43S' ${HOME}/data/gvs/assets/worklists/tiles_2020.txt))
+for tile_id in ${tile_ids[@]}; do
+    echo "Processing tile $tile_id"
+    python -m postprocess.bias_correction year=$year tile_id=$tile_id task=get_correction_stats
+done
+;;
 
 esac

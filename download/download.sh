@@ -145,15 +145,42 @@ case $1 in
             used_gedi_points_dir=${HOME}/data/GVS/fitting_data_coord_partitions
     ;;
     10)
-    echo download GEDI points for GVS correction for year 2020
-    python -m download._1_gedi task=download_gedi_for_gvs_correction \
-                correction_number_per_tile=4000 \
-                year=2020 \
-                exclude_used_gedi_points=True \
-                used_gedi_points_dir=${HOME}/data/GVS/fitting_data_coord_partitions \
-                save_dir=${HOME}/data/gvs/GEDI_for_correction/partitions_2020_v1
+    echo download all valid GEDI points for 2020
+    python -m download._1_gedi task=download_all_valid year=2020
+    ;;
+    11)
+    echo add slope column to GEDI points for 2020
+    python -m download._1_gedi task=add_slope year=2020
+    ;;
+    12)
+    echo check slope distribution
+    python -m download._1_gedi task=check_slope_distribution year=2020
+    ;;
+    13)
+    echo download SOTA CHM data for 2020 for val data
+    python -m download._7_download_sota_chm \
+    location_files=${HOME}/data/gvs/gedi/veg_sensitivity_gt0p95/subset_cal/subset_4k/2020/*.parquet \
+    output_dir=${HOME}/data/gvs/gedi/veg_sensitivity_gt0p95/subset_cal/subset_4k_with_sota_chm/2020/
     ;;
 
+    14)
+    split=${2:-cal}
+    root_dir=${HOME}/data/gvs/gedi/veg_sensitivity_gt0p95/subset_${split}
+    echo download SOTA CHM data for 2020 for $split data
+    python -m download.run run=download_sota_chms \
+        run.location_files=${root_dir}/original/2020/*.parquet \
+        run.save_dir=${root_dir}/original_with_sota_chms/2020 || exit $?
+    echo sanity check for two datasets
+    python -m download.run run=check_two_datasets \
+        run.source_dir=${root_dir}/original/2020/ \
+        run.target_dir=${root_dir}/original_with_sota_chms/2020/ || exit $?
+
+    echo make manifest
+    python -m download.run run=make_manifest \
+        run.data_dir=${root_dir}/original_with_sota_chms/2020/ \
+        run.dataset_name=gedi_${split}_2020_with_sota_chms \
+        run.root_note='' 
+    ;;
 esac
 
 # python -m download.correct_order zone="[$zone_list]" merge_zones=$merge_zones

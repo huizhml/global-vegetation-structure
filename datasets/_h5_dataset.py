@@ -18,6 +18,7 @@ from hydra.core.config_store import ConfigStore
 from omegaconf import DictConfig
 import hydra
 import dask
+import dask.dataframe as dd
 from utils import get_dense_latlon
 from download._const import gedi_attr_dtype
 from download._utils import check_unfinished_files
@@ -385,52 +386,76 @@ def get_reference_data_with_images(h5_file: str, naturalness_fp: str):
     target_df_with_images.to_csv(naturalness_fp.with_suffix('.with_images.csv'))
     
 
-def extract_gedi_from_h5(h5_dir: str, index_table_dir: str, save_dir: str, year: int):
+def extract_gedi_from_h5(h5_file: str, index_table_dir: str, save_dir: str, year: int, keep_columns: list = None):
     """
     Extract GEDI data (with, slope and lc info) from the H5 file and save it to a parquet file.
     """
-    h5_dir = Path(h5_dir).expanduser()
+    h5_file = Path(h5_file).expanduser()
     index_table_dir = Path(index_table_dir).expanduser()
+    assert index_table_dir.stem == h5_file.stem.split('_')[1], f'index_table_dir {index_table_dir} and h5_file {h5_file} should come from the same split'
     save_dir = Path(save_dir).expanduser()
     save_dir.mkdir(parents=True, exist_ok=True)
+    keep_columns = keep_columns or []
     index_table_fps = list(index_table_dir.glob('*.parquet'))
     rh_cols = [f'rh{i}' for i in range(101)]
     gedi_attr_cols = list(gedi_attr_dtype.keys())
-    cols = rh_cols + gedi_attr_cols + ['slope', 'lc', 'lat', 'lon', 'shot_number'] 
+    cols = rh_cols + gedi_attr_cols + ['slope', 'lc', 'lat', 'lon', 'shot_number']  + keep_columns
     dtype = {**gedi_attr_dtype, 'slope': 'float32', 'lc': 'int8', 'shot_number': 'uint64'}
-    
     
     @dask.delayed
     def _extract(index_table_fp: str, year: int):
-        df = gpd.read_parquet(index_table_fp)
-        zone = index_table_fp.stem.split('_')[0]
-        h5_file = h5_dir / f'{zone}.h5'
-        data = h5py.File(h5_file, 'r')
-        tile_ids = df['s2_tile'].unique()
-        if len(tile_ids) == 0:
+        df = pd.read_parquet(index_table_fp)
+        tile_id = index_table_fp.stem
+        save_fp = save_dir / f'{tile_id}.parquet'
+        if save_fp.exists():
+            print(f'{save_fp} already exists')
             return
-        for tile_id in tile_ids:
-            groups = df[df['s2_tile']==tile_id]['path'].unique()
-            groups = [group[4:] for group in groups if f'{year}' in group]
-            if len(groups) == 0:
-                continue
-            data_list = []
+    
+        groups = df['path'].unique()
+        groups = [group for group in groups if f'{year}' in group]
+        if len(groups) == 0:
+            print(f'No groups found for {tile_id}, maybe no data sampled for this split for this tile, or from other splits')
+            return
+        data_list = []
+        with h5py.File(h5_file, 'r') as data:
             for group in groups:
-                rhs = data[f'{group}/rhs'][:]
-                gedi_attrs = data[f'{group}/gedi_attrs'][:]
-                slope = data[f'{group}/slope'][:, 7,7:8]
-                lc = data[f'{group}/image'][:, 13, 7, 7:8]
-                latlon = data[f'{group}/latlon'][:]
-                shot_number = data[f'{group}/shot_number'][:][:, np.newaxis]
-                _data = np.concatenate([rhs, gedi_attrs, slope, lc, latlon, shot_number], axis=1)
+                in_partition_idx = df[df['path'] == f'{group}']['in_partition_idx'].values
+                rhs = data[f'{group}/rhs'][in_partition_idx]
+                gedi_attrs = data[f'{group}/gedi_attrs'][in_partition_idx]
+                slope = data[f'{group}/slope'][in_partition_idx, 7,7:8]
+                lc = data[f'{group}/image'][in_partition_idx, 13, 7, 7:8]
+                latlon = data[f'{group}/latlon'][in_partition_idx]
+                shot_number = data[f'{group}/shot_number'][in_partition_idx][:, np.newaxis]
+                index_df_keep = df[df['path'] == f'{group}'][keep_columns].values
+                _data = np.concatenate([rhs, gedi_attrs, slope, lc, latlon, shot_number, index_df_keep], axis=1)
                 data_list.append(_data)
             da = np.concatenate(data_list, axis=0)
             df_gedi = pd.DataFrame(da, columns=cols)
+            assert df_gedi.lon.max() - df_gedi.lon.min() < 6, f'lon range is too large for tile {tile_id}, {df_gedi.lon.max()} - {df_gedi.lon.min()}'
+            assert df_gedi.lat.max() - df_gedi.lat.min() < 2, f'lat range is too large for tile {tile_id}, {df_gedi.lat.max()} - {df_gedi.lat.min()}'
             df_gedi = df_gedi.astype(dtype)
-            df_gedi.to_parquet(save_dir / f'{tile_id}.parquet')
-    
+            df_gedi.to_parquet(save_fp)
     unfinished_files = check_unfinished_files(index_table_fps, save_dir, output_format='parquet')
+    # unfinished_files = [fp for fp in unfinished_files if '37T' in fp.stem]
     tasks = [_extract(index_table_fp, year) for index_table_fp in unfinished_files]
+    dask.compute(*tasks)
+    
+
+def subsample_parquet_files(parquet_dir: str, save_dir: str, n_samples: int, random_state: int = 42):
+    parquet_dir = Path(parquet_dir).expanduser()
+    save_dir = Path(save_dir).expanduser()
+    save_dir.mkdir(parents=True, exist_ok=True)
+    parquet_files = list(parquet_dir.glob('*.parquet'))
+    
+    @dask.delayed
+    def _subsample(parquet_file: str, n_samples: int, random_state: int):
+        df = pd.read_parquet(parquet_file)
+        if len(df) > n_samples:
+            df = df.sample(n_samples, random_state=random_state)
+        df = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.lon, df.lat))
+        df.to_parquet(save_dir / parquet_file.name)
+    
+    tasks = [_subsample(parquet_file, n_samples, random_state) for parquet_file in parquet_files]
     dask.compute(*tasks)
 
 @dataclass
@@ -443,15 +468,18 @@ cs.store(name="h5_dataset", node=MyConfig)
 
 @hydra.main(config_name='h5_dataset', version_base="1.2")
 def main(cfg: DictConfig):
-
     if cfg.task == 'extract_gedi_from_h5':
         h5_dir = cfg.get('h5_dir', f'~/data/gvs/datasets/splits/split_test0.1_cal0.1_val0.1_seed42_v1/h5_partitions_cal')
         index_table_dir = cfg.get('index_table_dir', f'~/data/gvs/datasets/splits/split_test0.1_cal0.1_val0.1_seed42_v1/index_table_cal')
         save_dir = cfg.get('save_dir', f'~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_cal/original/{cfg.year}')
-        extract_gedi_from_h5(h5_dir, index_table_dir, save_dir, year=cfg.year)
-
-
-
+        keep_columns = cfg.get('keep_columns', ['RH95_UMD', 'RH98_ETH', 'RH100_UM', 'RH95_META']) #TODO: 
+        extract_gedi_from_h5(h5_dir, index_table_dir, save_dir, year=cfg.year, keep_columns=keep_columns)
+    elif cfg.task == 'subsample_parquet_files':
+        parquet_dir = cfg.get('parquet_dir', f'~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_cal/original/{cfg.year}')
+        save_dir = cfg.get('save_dir', f'~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_cal/subset_4k/{cfg.year}')
+        n_samples = cfg.get('n_samples', 4000)
+        random_state = cfg.get('random_state', 42)
+        subsample_parquet_files(parquet_dir, save_dir, n_samples, random_state)
+        
 if __name__ == '__main__':
     main()
-    

@@ -1,4 +1,5 @@
 import os
+from osgeo import gdal
 import geopandas as gpd
 import pandas as pd
 from dataclasses import dataclass
@@ -15,6 +16,7 @@ import dask
 from dask.diagnostics import ProgressBar
 import pystac
 import stackstac
+from rasterio.io import MemoryFile
 from rasterio.warp import transform
 from rasterio.transform import rowcol
 import xarray as xr
@@ -77,38 +79,37 @@ def sample_locs_for_all_rhs(tile_id: str, stac_collection_dir: str = None, gedi_
 class BiasCorrection:
     def __init__(
             self, year: int, root_save_dir: str = None, corrected_pred_dir: str = None,
-            ref_data_dir: str = None, stac_collection_dir: str = None, min_n_points: int = 200, **kwargs):
+            stac_collection_dir: str = None, min_n_points: int = 2000, debug: bool = False, diagnose_folder: str = None, **kwargs):
         self.root_save_dir = Path(root_save_dir).expanduser()
         self.corrected_pred_dir = Path(corrected_pred_dir).expanduser()
-        self.ref_data_dir = Path(ref_data_dir).expanduser()
         self.stac_collection_dir = Path(stac_collection_dir).expanduser()
         self.min_n_points = min_n_points
         self.nodata = 32767
         self.year = year
+        self.debug = debug
+        self.diagnose_folder = Path(diagnose_folder).expanduser()
+        self.diagnose_folder.mkdir(parents=True, exist_ok=True)
         
-    def check_correction_performance_2020(self, tile_id: str):
-        '''
-        Check the correction performance for 2020
-        '''
-        pass
 
-    def get_correction_stats(self, tile_id: str):
+    def get_correction_stats(self, tile_id: str, save_dir: str = None, ref_data_dir: str = None):
         '''
         Check the correction performance for the current year
         '''
-        correction_stats_dir = self.root_save_dir / f'tile_stats_{self.year}'
-        correction_stats_dir.mkdir(parents=True, exist_ok=True)
-        file = correction_stats_dir / f'{tile_id}.npz'
-        if file.exists():
+        ref_data_dir = Path(ref_data_dir).expanduser()
+        save_dir = Path(save_dir).expanduser()
+        save_dir.mkdir(parents=True, exist_ok=True)
+        file = save_dir / f'{tile_id}.npz'
+        if file.exists() and not self.debug:
             print(f'{tile_id} correction stats already exists')
             return
         item = pystac.Item.from_file(str(self.stac_collection_dir / f'{tile_id}_{self.year}/{tile_id}_{self.year}.json'))
-        old_pred_dir = item.assets['RH98'].href.replace('file://', '')
+        old_pred_dir = item.assets['RH98_Q1'].href.replace('file://', '')
         old_pred_dir = Path(old_pred_dir).parent
         if 'home' not in str(Path.home()):
             old_pred_dir = Path.home() / 'flash' / Path(*old_pred_dir.parts[3:])
         
-        gedi_ref_df = gpd.read_parquet(self.ref_data_dir / f'{tile_id}.parquet')
+        gedi_ref_df = gpd.read_parquet(ref_data_dir / f'{tile_id}.parquet')
+        gedi_ref_df = gedi_ref_df[gedi_ref_df['slope'] < 20]
 
         if len(gedi_ref_df) <= self.min_n_points:
             print(f'{tile_id} has less than {self.min_n_points} points')
@@ -136,28 +137,129 @@ class BiasCorrection:
         mask = (preds == self.nodata).any(axis=1)
         preds = preds[~mask]
         preds = preds.astype(np.float32)
+        gedi_ref_df = gedi_ref_df[~mask]
         gedi_ref = gedi_ref_df[rh_cols].values
-        gedi_ref = gedi_ref[~mask]
         if len(gedi_ref) <= self.min_n_points:
             print(f'{tile_id} has less than {self.min_n_points} valid (not nodata) points')
             return
         
         # apply bias correction for all rhs
-        bias = (gedi_ref*10 - preds).mean(axis=0)  # >0 means under-estimation, <0 means over-estimation
+        residuals = gedi_ref*10 - preds
+        median_bias = np.median(residuals, axis=0)
+        p5 = np.percentile(residuals, 5, axis=0)
+        p95 = np.percentile(residuals, 95, axis=0)
+        valid = (residuals >= p5) & (residuals <= p95)
+        residuals_trimmed_5_95 = np.where(valid, residuals, np.nan)
+        mean_bias_trimmed_5_95 = np.nanmean(residuals_trimmed_5_95, axis=0)
+        
+        bias = residuals.mean(axis=0)  # >0 means under-estimation, <0 means over-estimation
         stats = {
             'n': len(preds),
             'bias': bias,
+            'median_bias': median_bias,
+            'mean_bias_trimmed_5_95': mean_bias_trimmed_5_95,
         }
         if np.isnan(bias).any():
             raise ValueError(f'{tile_id} has nan in bias')
-        np.savez(f'{correction_stats_dir}/{tile_id}.npz', **stats)
+        np.savez(f'{save_dir}/{tile_id}.npz', **stats)
+        if self.debug:
+            diagnose_folder = self.diagnose_folder / f'{tile_id}'
+            diagnose_folder.mkdir(parents=True, exist_ok=True)
+            pred_rh_cols = [f'RH{i}_Q1' for i in range(101)]
+            preds_df = pd.DataFrame(preds/10, columns=pred_rh_cols)
+            gedi_ref_df = gedi_ref_df.reset_index(drop=True)
+            df = pd.concat([gedi_ref_df, preds_df], axis=1)
+            df = gpd.GeoDataFrame(df, geometry=gedi_ref_df.geometry)
+            df.to_file(diagnose_folder / f'{tile_id}_pred_and_ref.fgb', driver='FlatGeobuf')
+            plt.figure(figsize=(10, 6))
+            for rh_profile_name, rh_profile in zip(['GEDI', 'Ours'], [gedi_ref, preds/10]):
+                plt.plot(range(101), rh_profile.mean(axis=0), label=rh_profile_name)
+            plt.xlabel('Relative height (0-100)')
+            plt.ylabel('Relative height (m)')
+            plt.title(f'Average RH profile for {tile_id}, n={len(gedi_ref_df)}, average bias={bias.mean()/10:.2f} m')
+            plt.legend()
+            plt.grid(True)
+            plt.savefig(diagnose_folder / f'average_rh_profile_GEDI_and_Ours.pdf')
+            plt.close()
+        return
 
+    def plot_bias_distribution(self, rh_idxs: list[int], bias_dir: str, bias_col: str = 'bias', save_dir: str=None, average_across_rhs: bool = False):
+        save_dir = Path(f'{save_dir}').expanduser()
+        save_dir.mkdir(parents=True, exist_ok=True)
+        bias_dir = Path(f'{bias_dir}').expanduser()
+        bias_files = list(bias_dir.glob('*.npz'))
+        biases = []
+        for bias_file in bias_files:
+            bias = np.load(bias_file)[bias_col] 
+            biases.append(bias)
+        biases = np.stack(biases)
+        biases = biases / 10  # covert to meters
+        if average_across_rhs:
+            biases = biases.mean(axis=1, keepdims=True)
+            rh_idxs = [0]
+        idx1,idx2 = np.where(biases >=1.42) # 95% of tiles have bias > 1.42 m
+        gt1p42_tiles = [[bias_files[i].stem, biases[i]] for i in idx1]
+        gt1p42_tiles = pd.DataFrame(gt1p42_tiles, columns=['tile', 'average_bias'])
+        gt1p42_tiles.to_csv(save_dir / f'tiles_with_average_bias_gt1p42.csv')
         
+        for rh_idx in rh_idxs:
+            p50 = np.percentile(biases[:, rh_idx], 50)
+            p75 = np.percentile(biases[:, rh_idx], 75)
+            p95 = np.percentile(biases[:, rh_idx], 95)
+            plt.figure(figsize=(10, 6))
+            plt.hist(biases[:, rh_idx], bins=100)
+            plt.axvline(p50, color='red', label=f'50th percentile: {p50:.2f} m')
+            plt.axvline(p75, color='orange', label=f'75th percentile: {p75:.2f} m')
+            plt.axvline(p95, color='green', label=f'95th percentile: {p95:.2f} m')
+            plt.xlabel('Bias (m)')
+            plt.ylabel('# of tiles')
+            plt.legend()
+            if average_across_rhs:
+                plt.title(f'Bias distribution averaged across all RHS')
+                plt.savefig(save_dir / f'bias_distribution_averaged_across_rhs.pdf')
+            else:
+                plt.title(f'Bias distribution for RH{rh_idx}')
+                plt.savefig(save_dir / f'bias_distribution_{bias_col}_RH{rh_idx}.pdf')
+            plt.close()
 
 
-def check_correction_performance(
-        ref_data_dir: str = None, year: int = None, prediction_dir: str = None, tiles_list_file: str = None,
-        correction_result_dir: str = None, sota_chm_dir: str = None, sota_and_ours_dir: str = None,
+def create_vrt_for_rhs(file_paths: list[str]):
+    with rasterio.open(file_paths[0]) as src0:
+        meta = src0.meta.copy()
+        width = meta['width']
+        height = meta['height']
+        transform_vals = src0.transform
+        crs = src0.crs
+        nodata_val = src0.nodata  # <--- Capture the nodata value here
+
+    # 3. Construct the VRT XML string
+    vrt_xml = f"""
+    <VRTDataset rasterXSize="{width}" rasterYSize="{height}">
+    <SRS dataAxisToSRSAxisMapping="2,1">{crs.wkt}</SRS>
+    <GeoTransform>{transform_vals.c}, {transform_vals.a}, {transform_vals.b}, {transform_vals.f}, {transform_vals.d}, {transform_vals.e}</GeoTransform>
+    """
+
+    for i, path in enumerate(file_paths, start=1):
+        # Add the <NoDataValue> tag inside each band
+        # We use 'nodata_val' if it exists, otherwise we skip that tag
+        nodata_xml = f"<NoDataValue>{nodata_val}</NoDataValue>" if nodata_val is not None else ""
+        
+        vrt_xml += f"""
+    <VRTRasterBand dataType="Float32" band="{i}">
+        {nodata_xml}
+        <SimpleSource>
+        <SourceFilename relativeToVRT="0">{path}</SourceFilename>
+        <SourceBand>1</SourceBand>
+        <SrcRect xOff="0" yOff="0" xSize="{width}" ySize="{height}" />
+        <DstRect xOff="0" yOff="0" xSize="{width}" ySize="{height}" />
+        </SimpleSource>
+    </VRTRasterBand>
+    """
+    vrt_xml += "</VRTDataset>"
+    return vrt_xml
+
+def pair_predictions_with_gedi_ref_data(
+        gedi_chm_reference_dir: str = None, year: int = None, tiles_list_file: str = None, save_dir: str = None,
         stac_collection_dir: str = None, **kwargs):
     '''
     Check the correction performance (RMSE, MAE and ME) with GEDI reference data and sota chm
@@ -165,118 +267,56 @@ def check_correction_performance(
     - Part 1: used for correction
     - Part 2: used for evaluation
     '''
-    correction_result_dir = Path(f'{correction_result_dir}/tile_stats').expanduser()
-    correction_result_dir.mkdir(parents=True, exist_ok=True)
-    ref_data_dir = Path(f'{ref_data_dir}').expanduser()
+    gedi_chm_reference_dir = Path(f'{gedi_chm_reference_dir}').expanduser()
     stac_collection_dir = Path(f'{stac_collection_dir}').expanduser()
-    sota_chm_dir = Path(f'{sota_chm_dir}').expanduser()
-    sota_and_ours_dir = Path(sota_and_ours_dir).expanduser()
-    sota_and_ours_dir.mkdir(parents=True, exist_ok=True)
-    if tiles_list_file != '':
+    
+    save_dir = Path(save_dir).expanduser()
+    save_dir.mkdir(parents=True, exist_ok=True)
+    if tiles_list_file is not None: # for european tiles
         with open(tiles_list_file, 'r') as f:
             all_tiles = f.read().splitlines()
     else:
-        all_tiles = [tile.stem for tile in ref_data_dir.glob('*.parquet')]
+        all_tiles = [tile.stem for tile in gedi_chm_reference_dir.glob('*.parquet')]
     # all_tiles = ['32SNA']
     print(f'{len(all_tiles)} tiles have predictions')
     rh_size = 101
+    ours_rh_cols = [f'RH{i}_Q1_raw' for i in range(rh_size)]
 
     @dask.delayed
-    def test_correction_for_one_tile(tile_id: str, min_n_points: int = 200):
-        if not (stac_collection_dir/tile_id).exists():
+    def test_correction_for_one_tile(tile_id: str):
+        if not (stac_collection_dir/f'{tile_id}_{year}').exists():
             print(f'{tile_id} not found in stac collection')
             return None, None, None
-        gedi_ref_df = gpd.read_parquet(ref_data_dir / f'{tile_id}.parquet')
+        
+        gedi_chm_ref_df = gpd.read_parquet(gedi_chm_reference_dir / f'{tile_id}.parquet')
+        lon = gedi_chm_ref_df.lon.values
+        lat = gedi_chm_ref_df.lat.values
+        stac_item = pystac.Item.from_file(str(stac_collection_dir / f'{tile_id}_{year}/{tile_id}_{year}.json'))
 
-        if len(gedi_ref_df) <= min_n_points:
-            print(f'{tile_id} has less than {min_n_points} points')
-            return None, None, None
-        # preds, nodata = sample_locs_for_all_rhs(tile_id, stac_collection_dir, gedi_ref_df, rh_size)
-        lon = gedi_ref_df.geometry.x.values
-        lat = gedi_ref_df.geometry.y.values
+        pred_fp0 = stac_item.assets[f'RH0_Q1'].href.replace('file://', '')
+        with rasterio.open(pred_fp0) as src:
+            xs, ys = transform('EPSG:4326', src.crs, lon, lat)
+            coords = list(zip(xs, ys))
+            nodata = src.nodata
+        
         preds = []
         for rh_idx in range(rh_size):
-            pred_fp = Path(f'{prediction_dir}/{tile_id}_cog/RH{rh_idx}_Q1.cog.tif').expanduser()
+            pred_fp = stac_item.assets[f'RH{rh_idx}_Q1'].href.replace('file://', '')
             with rasterio.open(pred_fp) as src:
-                xs, ys = transform('EPSG:4326', src.crs, lon, lat)
-                coords = list(zip(xs, ys))
+                # xs, ys = transform('EPSG:4326', src.crs, lon, lat)
+                # coords = list(zip(xs, ys))
                 rh = list(rasterio.sample.sample_gen(src, coords))
                 pred = np.concatenate(rh, axis=0).reshape(-1, 1)
                 preds.append(pred)  # (n_points, 1)
-                nodata = src.nodata
-
+                
         preds = np.concatenate(preds, axis=1)  # (n_points, rh_size)
-        # mask nodata (non-vegetation) for pred and ref
-        mask = (preds == nodata).any(axis=1)
-        preds = preds[~mask]
         preds = preds.astype(np.float32)
-        rh_cols = [f'rh{i}' for i in range(rh_size)]
-        gedi_ref = gedi_ref_df[rh_cols].values
-        gedi_ref = gedi_ref[~mask]
-        if len(gedi_ref) <= min_n_points:
-            print(f'{tile_id} has less than {min_n_points} valid (not nodata) points')
-            return None, None, None
-
-        # split data into correct and eval
-        n = gedi_ref.shape[0]
-        idx = np.random.permutation(gedi_ref.shape[0])
-        correct_idx = idx[:int(n*0.5)]
-        eval_idx = idx[int(n*0.5):]
-
-        correct_true = gedi_ref[correct_idx]
-        correct_pred = preds[correct_idx]
-        eval_true = gedi_ref[eval_idx]
-        eval_pred = preds[eval_idx]
-
-        # apply linear fit for all rhs
-        a, b = get_scale_and_shift(correct_pred, correct_true*10)  # in decimeters
-
-        eval_pred_linear_corrected = (a * eval_pred + b).round()  # in decimeters
-        residuals_linear_corrected = eval_pred_linear_corrected/10 - eval_true  # (n_points, rh_size) # In meters
-
+        preds = np.where(preds == nodata, np.nan, preds) # mask nodata (non-vegetation) for pred and ref
+        
         # apply bias correction for all rhs
-        bias = (correct_true*10 - correct_pred).mean(axis=0)  # >0 means under-estimation, <0 means over-estimation
-        eval_pred_bias_corrected = (eval_pred + bias).round()
-        residuals_bias_corrected = eval_pred_bias_corrected/10 - eval_true  # (n_points, rh_size)
-
-        # raw residuals
-        residuals = eval_pred/10 - eval_true  # (n_points, rh_size) # In meters
-
-        # add sota chm residuals
-        sota_chm_df = gpd.read_parquet(sota_chm_dir / f'{tile_id}.parquet')
-        assert (sota_chm_df['rh95'] == gedi_ref_df['rh95']).all(), 'index mismatch'
-
-        sota_chm_df = sota_chm_df[~mask].iloc[eval_idx]  # drop points we don't have prediction for (masked area)
-        # perhaps also drop locations where sota chm is nan
-
-        sota_chm_df[['RH95_raw', 'RH98_raw', 'RH100_raw']] = eval_pred[:, [95, 98, 100]]
-        sota_chm_df[['RH95_linear_corrected', 'RH98_linear_corrected',
-                     'RH100_linear_corrected']] = eval_pred_linear_corrected[:, [95, 98, 100]]
-        sota_chm_df[['RH95_bias_corrected', 'RH98_bias_corrected',
-                     'RH100_bias_corrected']] = eval_pred_bias_corrected[:, [95, 98, 100]]
-        sota_chm_df = sota_chm_df.dropna(subset=['RH95_UMD', 'RH95_META', 'RH98_ETH', 'RH100_UM'])
-        if not sota_chm_df.empty:
-            sota_chm_df.to_parquet(sota_and_ours_dir / f'{tile_id}.parquet')
-
-        stats = {
-            'n': len(eval_pred),
-            'scale': a,
-            'shift': b,
-            'bias': bias,
-            'rmse': np.sqrt(np.mean(residuals**2, axis=0)),
-            'mae': np.mean(np.abs(residuals), axis=0),
-            'me': np.mean(residuals, axis=0),
-            'rmse_linear_corrected': np.sqrt(np.mean(residuals_linear_corrected**2, axis=0)),
-            'mae_linear_corrected': np.mean(np.abs(residuals_linear_corrected), axis=0),
-            'me_linear_corrected': np.mean(residuals_linear_corrected, axis=0),
-            'rmse_bias_corrected': np.sqrt(np.mean(residuals_bias_corrected**2, axis=0)),
-            'mae_bias_corrected': np.mean(np.abs(residuals_bias_corrected), axis=0),
-            'me_bias_corrected': np.mean(residuals_bias_corrected, axis=0),
-        }
-        np.savez(f'{correction_result_dir}/correction_stats_{year}_{tile_id}.npz', **stats)
-        if np.isnan(residuals_linear_corrected).any() or np.isnan(residuals_bias_corrected).any() or np.isnan(residuals).any():
-            print(f'{tile_id} has nan in residuals')
-        return residuals, residuals_linear_corrected, residuals_bias_corrected
+        _df = pd.DataFrame(preds/10, index=gedi_chm_ref_df.index, columns=ours_rh_cols)
+        gedi_chm_ref_df = gedi_chm_ref_df.join(_df)
+        gedi_chm_ref_df.to_parquet(save_dir / f'{tile_id}.parquet')
 
     # all_tiles = ['48RWN']
     tasks = []
@@ -284,40 +324,140 @@ def check_correction_performance(
         tasks.append(test_correction_for_one_tile(tile_id))
     with ProgressBar():
         res = dask.compute(*tasks)
-    if tiles_list_file is None:
-        # no part files, all tiles are processed, aggregate the results
-        residuals = []
-        residuals_linear_corrected = []
-        residuals_bias_corrected = []
-        for r in res:
-            if r[0] is None:
-                continue
-            residuals.append(r[0])
-            residuals_linear_corrected.append(r[1])
-            residuals_bias_corrected.append(r[2])
+        
+    
+def evaluate_bias_correction_against_sota_chm(
+        gedi_chm_ours_dir: str = None, year: int = None,
+        correction_stats_dir: str = None,
+        save_dir: str = None,
+        slope_lt20: bool = False,
+        **kwargs):
+    '''
+    Evaluate the bias correction performance against SOTA CHM
+    '''
+    correction_stats_dir = Path(f'{correction_stats_dir}').expanduser()
+    gedi_chm_ours_dir = Path(f'{gedi_chm_ours_dir}').expanduser()
+    save_dir = Path(f'{save_dir}').expanduser()
+    save_dir.mkdir(parents=True, exist_ok=True)
+    tiles = [tile.stem for tile in gedi_chm_ours_dir.glob('*.parquet')]
+    ours_rh_cols = [f'RH{i}_Q1_raw' for i in range(101)]
+    gedi_rh_cols = [f'rh{i}' for i in range(101)]
 
-        rmse = (np.concatenate(residuals)**2).mean(axis=0)**0.5
-        mae = np.abs(np.concatenate(residuals)).mean(axis=0)
-        me = np.concatenate(residuals).mean(axis=0)
-        rmse_linear_corrected = (np.concatenate(residuals_linear_corrected)**2).mean(axis=0)**0.5
-        mae_linear_corrected = np.abs(np.concatenate(residuals_linear_corrected)).mean(axis=0)
-        me_linear_corrected = np.concatenate(residuals_linear_corrected).mean(axis=0)
-        rmse_bias_corrected = (np.concatenate(residuals_bias_corrected)**2).mean(axis=0)**0.5
-        mae_bias_corrected = np.abs(np.concatenate(residuals_bias_corrected)).mean(axis=0)
-        me_bias_corrected = np.concatenate(residuals_bias_corrected).mean(axis=0)
-        data = [rmse, rmse_linear_corrected, rmse_bias_corrected, mae, mae_linear_corrected,
-                mae_bias_corrected, me, me_linear_corrected, me_bias_corrected]
-        cols = [f'rh{i}' for i in range(rh_size)]
+    bias_cols = ['bias', 'median_bias', 'mean_bias_trimmed_5_95']
+    residuals_ours_order = ['original', 'avg_bias'] +bias_cols 
+    residuals_sota_order = ['UMD', 'ETH', 'UM',  'META']
+    
+    @dask.delayed
+    def get_residuals_for_one_tile(tile_id: str):
+        gedi_chm_ours_df = pd.read_parquet(gedi_chm_ours_dir / f'{tile_id}.parquet')
+        gedi_chm_ours_df = gedi_chm_ours_df.dropna()
+        if slope_lt20:
+            gedi_chm_ours_df = gedi_chm_ours_df[gedi_chm_ours_df['slope']<20]
+        original_residuals = gedi_chm_ours_df[ours_rh_cols].values - gedi_chm_ours_df[gedi_rh_cols].values
+        if not (correction_stats_dir / f'{tile_id}.npz').exists():
+            bias = {
+                'bias': np.zeros(101),
+                'median_bias': np.zeros(101),
+                'mean_bias_trimmed_5_95': np.zeros(101)
+                }
+        else:
+            bias = np.load(correction_stats_dir / f'{tile_id}.npz')
+        residuals_ours = {} # np.zeros((len(bias_cols) + 2, len(gedi_chm_ours_df), 101)) # n*101*(len(bias_cols) + 2)
+        residuals_sota = {} #np.zeros((4, len(gedi_chm_ours_df))) # 4*n
+        residuals_ours['original'] = original_residuals # n*101
+        residuals_ours['avg_bias'] = original_residuals + bias['bias'].mean() / 10 # n*101
+        for i, bias_col in enumerate(bias_cols):
+            residuals_ours[bias_col] = original_residuals + bias[bias_col] / 10 # n*101
+        
+        residuals_sota['UMD'] = gedi_chm_ours_df['RH95_UMD'].values - gedi_chm_ours_df['rh95'].values # n*1
+        residuals_sota['ETH'] = gedi_chm_ours_df['RH98_ETH'].values - gedi_chm_ours_df['rh98'].values # n*1
+        residuals_sota['UM'] = gedi_chm_ours_df['RH100_UM'].values - gedi_chm_ours_df['rh100'].values # n*1
+        residuals_sota['META'] = gedi_chm_ours_df['RH95_META'].values - gedi_chm_ours_df['rh95'].values # n*1
+        return np.concatenate([residuals_ours[col][None, :, :] for col in residuals_ours_order], axis=0), np.concatenate([residuals_sota[col][None, :] for col in residuals_sota_order], axis=0)
 
-        df = pd.DataFrame(
-            data,
-            index=['RMSE_raw', 'RMSE_linear_corrected', 'RMSE_bias_corrected', 'MAE_raw', 'MAE_linear_corrected',
-                   'MAE_bias_corrected', 'ME_raw', 'ME_linear_corrected', 'ME_bias_corrected'],
-            columns=cols)
-        df['avg'] = df.mean(axis=1)
-        df.to_csv(f'{correction_result_dir}/correction_performance_{year}_all_tiles.csv')
-        print(df)
+    tasks = []
+    for tile_id in tiles:
+        tasks.append(get_residuals_for_one_tile(tile_id))
+    with ProgressBar():
+        res = dask.compute(*tasks)
+    residuals_ours = np.concatenate([r[0] for r in res], axis=1) # 5*n*101
+    print('residuals_ours.shape:', residuals_ours.shape)
+    me_ours = residuals_ours.mean(axis=1) # 5 * 101
+    mae_ours = np.abs(residuals_ours).mean(axis=1) # 5 * 101
+    rmse_ours = (residuals_ours**2).mean(axis=1)**0.5 # 5 * 101
 
+    residuals_sota = np.concatenate([r[1] for r in res], axis=1) # 4*n
+    me_sota = residuals_sota.mean(axis=1) # 4 * 1
+    mae_sota = np.abs(residuals_sota).mean(axis=1) # 4 * 1
+    rmse_sota = (residuals_sota**2).mean(axis=1)**0.5 # 4 * 1
+    
+    rh_cols = [f'RH{i}' for i in range(101)]
+    me_ours_df = pd.DataFrame(me_ours, index=residuals_ours_order, columns=rh_cols)
+    mae_ours_df = pd.DataFrame(mae_ours, index=residuals_ours_order, columns=rh_cols)
+    rmse_ours_df = pd.DataFrame(rmse_ours, index=residuals_ours_order, columns=rh_cols)
+    me_sota_df = pd.DataFrame(index=residuals_sota_order, columns=rh_cols)
+    mae_sota_df = pd.DataFrame(index=residuals_sota_order, columns=rh_cols)
+    rmse_sota_df = pd.DataFrame(index=residuals_sota_order, columns=rh_cols)
+    
+    zip_order = [('UMD', 'RH95'), ('ETH', 'RH98'), ('UM', 'RH100'), ('META', 'RH95')]
+    for i, (product, rh) in enumerate([('UMD', 'RH95'), ('ETH', 'RH98'), ('UM', 'RH100'), ('META', 'RH95')]): # !! pay attention to the order!
+        me_sota_df.loc[product, rh] = me_sota[i]
+        mae_sota_df.loc[product, rh] = mae_sota[i]
+        rmse_sota_df.loc[product, rh] = rmse_sota[i]
+    
+    
+    # 1. Concatenate the 'Ours' metrics into one block
+    ours_all = pd.concat(
+        [me_ours_df, mae_ours_df, rmse_ours_df], 
+        keys=['ME', 'MAE', 'RMSE'], 
+        axis=0
+    )
+
+    # 2. Concatenate the 'SOTA' metrics into one block
+    sota_all = pd.concat(
+        [me_sota_df, mae_sota_df, rmse_sota_df], 
+        keys=['ME', 'MAE', 'RMSE'], 
+        axis=0
+    )
+
+    # 3. Concatenate both groups into the final DataFrame
+    df_final = pd.concat(
+        [sota_all, ours_all], 
+        keys=['SOTA', 'Ours'], 
+        axis=0
+    )
+
+    # 4. Assign clear names to the index levels for easy querying
+    df_final.index.names = ['Model', 'Metric', 'Methods']
+    # Moves 'Metric' from row index to column headers
+    df_unstacked = df_final.unstack(level='Metric')
+    print(df_unstacked)
+    df_unstacked.to_csv(save_dir / f'correction_performance_val_tiles_{year}_all.csv')
+    idx = pd.IndexSlice
+    for metric in ['ME', 'MAE', 'RMSE']:
+        df = df_unstacked.loc[('Ours'), idx[:, metric]]
+        ax = df.T.plot(figsize=(10, 6), linewidth=2)
+        plt.title(f"{metric} Curves for different bias calculation methods")
+        plt.xlabel("Relative Height (0-100)")
+        plt.ylabel(f"{metric}")
+        plt.grid(True, linestyle='--', alpha=0.6)
+        plt.legend(title="Relative Height (0-100)")
+        plt.savefig(save_dir / f'correction_performance_val_tiles_{year}_{metric}.pdf')
+        plt.close()
+    compare_with_sota_df = df_unstacked.loc[:, idx[['RH95', 'RH98', 'RH100'], :]].round(2)
+    compare_with_sota_df = compare_with_sota_df.swaplevel(0, 1, axis=1)
+    rh_labels = compare_with_sota_df.columns.get_level_values(1).unique()
+    rh_order = sorted(rh_labels, key=lambda x: int(x.replace('RH', '')))
+    # metrics_order = pd.unique(compare_with_sota_df.columns.get_level_values(0))
+    metrics_order = ['RMSE', 'MAE', 'ME']
+    new_columns = pd.MultiIndex.from_product(
+        [metrics_order, rh_order], 
+        names=compare_with_sota_df.columns.names
+    )
+    new_index = [('SOTA', var) for var in residuals_sota_order] +[('Ours', var) for var in residuals_ours_order]
+    compare_with_sota_df = compare_with_sota_df.reindex(columns=new_columns, index=new_index)
+    n_cols = compare_with_sota_df.shape[1]
+    compare_with_sota_df.to_latex(save_dir / f'correction_performance_val_tiles_{year}_compared_with_sota_chm.tex', float_format=f"%.2f", na_rep='', column_format=f'l *{{{n_cols}}}{{S}}')
 
 #
 def aggregate_correction_performance(correction_result_dir: str, year: int):
@@ -660,13 +800,12 @@ class VSMCorrection:
 class BiasCorrectionConfig:
     root_save_dir: str = '~/data/gvs/deploy/correction'
     corrected_pred_dir: str = '~/data/gvs/deploy/predictions_corrected_2020'
-    stac_collection_dir: str = '~/data/gvs/deploy/gvsm_stac_catalog/vsm_local'
+    stac_collection_dir: str = '~/data/gvs/products/gvsm_stac_catalog/vsm_local'
     tile_id: str = '20MRS'
 
     gedi_fps: str = '~/data/gvs/train_subsets/train*_filtered_v1.parquet'
     s2_fp: str = '~/data/gvs/s2_tiles_with_growing_months.parquet'
     output_dir: str = '~/data/gvs/gedi_with_biome_slope_s2_tile_train_partitions/'
-    ref_data_dir: str = '~/data/gvs/GEDI_for_correction/partitions_2020'
     sota_chm_dir: str = '~/data/gvs/GEDI_for_correction/partitions_with_sota_chm_2020'  # output dir
     sota_and_ours_dir: str = '~/data/gvs/deploy/correction_2020/partitions_with_sota_and_ours_2020'
     
@@ -678,8 +817,10 @@ class BiasCorrectionConfig:
     gedi_table_index_file: str = f'~/data/gvs/GEDI_for_correction/l2a_table_index_{year}.parquet'
 
     # test config
+    diagnose_folder: str = f'~/data/gvs/diagnostics/bias_correction/'
     mgrs_tiles: str = '20M,21M,20L,21L'
     s2_tiles: str = '20MRS,21MTM,20LRR,21LTL'
+    debug: bool = False
     task: str = 'check_correction_performance'
 
 
@@ -689,10 +830,30 @@ cs.store(name='bias_correction', node=BiasCorrectionConfig)
 
 @hydra.main(config_name='bias_correction', version_base="1.2")
 def main(cfg):
-    # agg_gedi_to_s2(cfg.gedi_fps, cfg.s2_fp, cfg.output_dir)
     time_start = time.time()
     vsm_correction = BiasCorrection(**cfg)
-    vsm_correction.get_correction_stats(cfg.tile_id)
+    if cfg.task == 'get_correction_stats':
+        save_dir = cfg.get('save_dir', f'~/data/gvs/assets/bias_correction_stats/slope_lt20_minpoints2000/{cfg.year}/stats_by_tile')
+        ref_data_dir = cfg.get('ref_data_dir', f'~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_correction/subset_4k/{cfg.year}/with_slope_col')
+        vsm_correction.get_correction_stats(cfg.tile_id, save_dir=save_dir, ref_data_dir=ref_data_dir)
+    elif cfg.task == 'plot_bias_distribution':
+        bias_dir = cfg.get('bias_dir', f'~/data/gvs/assets/bias_correction_stats/slope_lt20_minpoints2000/{cfg.year}/stats_by_tile')
+        save_dir = cfg.get('save_dir', f'~/data/gvs/assets/bias_correction_stats/slope_lt20_minpoints2000/{cfg.year}/figures')
+        rh_idxs = cfg.get('rh_idxs', [10, 25, 50, 98])
+        average_across_rhs = cfg.get('average_across_rhs', False)
+        bias_col = cfg.get('bias_col', 'bias')
+        vsm_correction.plot_bias_distribution(rh_idxs, bias_dir, bias_col, save_dir, average_across_rhs=average_across_rhs)
+    elif cfg.task == 'pair_predictions_with_gedi_ref_data':
+        gedi_chm_reference_dir = cfg.get('gedi_chm_reference_dir', f'~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_val/with_sota_chms/2020')
+        save_dir = cfg.get('save_dir', f'~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_val/with_sota_chms_ours/{cfg.year}')
+        stac_collection_dir = cfg.get('stac_collection_dir', f'~/data/gvs/products/gvsm_stac_catalog/vsm_local')
+        pair_predictions_with_gedi_ref_data(gedi_chm_reference_dir=gedi_chm_reference_dir, year=cfg.year, save_dir=save_dir, stac_collection_dir=stac_collection_dir)
+        
+    elif cfg.task == 'evaluate_bias_correction_against_sota_chm':
+        gedi_chm_ours_dir = cfg.get('gedi_chm_ours_dir', f'~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_val/with_sota_chms_ours/{cfg.year}')
+        correction_stats_dir = cfg.get('correction_stats_dir', f'~/data/gvs/assets/bias_correction_stats/slope_lt20_minpoints2000/{cfg.year}/stats_with_median_and_trimmed_5_95_by_tile')
+        save_dir = cfg.get('save_dir', f'~/data/gvs/assets/bias_correction_stats/slope_lt20_minpoints2000/{cfg.year}/figures/')
+        evaluate_bias_correction_against_sota_chm(gedi_chm_ours_dir=gedi_chm_ours_dir, year=cfg.year, correction_stats_dir=correction_stats_dir, save_dir=save_dir)
     
     # if cfg.task == 'get_tiles_covered_by_gedi':
     #     vsm_correction.get_tiles_covered_by_gedi(cfg.s2_fp, cfg.gedi_table_index_file)

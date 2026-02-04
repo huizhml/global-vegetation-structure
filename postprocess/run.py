@@ -64,6 +64,15 @@ class PairOursSotaGEDIConfig(FunctionConfig):
 
 
 @dataclass
+@dataclass
+class ExtractPredBiomeConfig(FunctionConfig):
+    gedi_ref_dir: str = '~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_cal/original/2020'
+    vsm_dir: str = '~/data/gvs/predictions/2020/blended/tiles/geotiff/'
+    save_dir: str = '~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_cal/original_with_ours_biome/2020'
+    biome_file: str = '~/data/GEDI/ecoregions/wwf_terr_ecos.shp'
+    _target_: str = "postprocess.extract_sparse_pred.extract_pred_add_biome"
+
+
 class EvaluateBiasCorrectionConfig(FunctionConfig):
     year: int = 2020
     slope_lt20: bool = False
@@ -88,6 +97,7 @@ cs.store(group='run', name='pair_ours_sota_gedi', node=PairOursSotaGEDIConfig)
 cs.store(group='run', name='evaluate_bias_correction', node=EvaluateBiasCorrectionConfig)
 cs.store(group='run', name='get_tiles_wo_enough_gedi_gt', node=GetTilesWooEnoughGEDIConfig)
 cs.store(group='run', name='run_blending', node=RunBlendingConfig)
+cs.store(group='run', name='extract_pred', node=ExtractPredBiomeConfig)
 cs.store(name='config', node=RunConfig)
 
 @hydra.main(config_name='config', version_base='1.2')

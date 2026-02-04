@@ -4,7 +4,7 @@
 ##SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
-#SBATCH --time=2-00:00:00
+#SBATCH --time=3-00:00:00
 #SBATCH --job-name=correction
 #SBATCH --output=/users/zhanghui/scratch/logs/%x-%A_%a.out
 #SBATCH --error=/users/zhanghui/scratch/logs/%x-%A_%a.err
@@ -26,6 +26,5 @@ for tile_id in $(cat $tile_id_file); do
     python -m postprocess.handle_border_artifacts year=$year task=run_correction_and_blending tile_id=$tile_id use_flash=$use_flash rhs_idx=all_rhs \
         hydra/job_logging=disabled hydra/hydra_logging=disabled \
         hydra.run.dir=.  hydra.output_subdir=null  hydra.job.chdir=false
-    s3cmd setacl --recursive --acl-public s3://${zone_name}-${year}/${tile_id}
 done
 

@@ -59,6 +59,8 @@ class SOTAChmDownloader(DaskDownloader):
         tasks = []
         for file in self.location_files:
             tasks.append(self.download_file(file))
+        if len(tasks) < self.n_parallel:
+            self.n_parallel = len(tasks)
         self.schedule_tasks(delayed_tasks=tasks)
 
     @dask.delayed
@@ -70,9 +72,9 @@ class SOTAChmDownloader(DaskDownloader):
             return
         
         try:
-            loc_df = gpd.read_parquet(file, columns=['geometry', 'rh95', 'rh98', 'rh100'])
+            loc_df = gpd.read_parquet(file)
         except ValueError as e:
-            loc_df = pd.read_parquet(file, columns=['rh95', 'rh98', 'rh100', 'lat', 'lon'])
+            loc_df = pd.read_parquet(file)
             loc_df = gpd.GeoDataFrame(loc_df, geometry=gpd.points_from_xy(loc_df.lon, loc_df.lat, crs="EPSG:4326"))
             
         if loc_df.empty:
@@ -89,7 +91,7 @@ class SOTAChmDownloader(DaskDownloader):
             'meta': []
         }
         for part in partitions:
-            eefc = part.apply(set_fc_properties, axis=1)
+            eefc = part[['geometry', 'rh98']].apply(set_fc_properties, axis=1)
             eefc = ee.FeatureCollection(eefc.tolist())
             polyCol = eefc.map(lambda f: f.buffer(12.5))
             # points = ee.Geometry.MultiPoint(partition.geometry.apply(lambda x: [x.x, x.y]).tolist())
@@ -115,7 +117,6 @@ class SOTAChmDownloader(DaskDownloader):
                 scale=10
             )
             dfs = []
-            
             if fc_eth_umd.size().getInfo() == 0 or fc_um.size().getInfo() == 0 or fc_meta.size().getInfo() == 0:
                 partition_dfs['eth_umd'].append(pd.DataFrame(np.nan, columns=['RH95_UMD', 'RH98_ETH'], index=part.index))
                 partition_dfs['um'].append(pd.DataFrame(np.nan, columns=['RH100_UM'], index=part.index))
@@ -157,6 +158,18 @@ class SOTAChmDownloader(DaskDownloader):
         loc_df[['RH95_META']] = df3s[['max']]
         loc_df.to_parquet(output_file)
         
+def download_sota_chms(location_files: str=None, save_dir: str=None , n_parallel: int=100, rewrite: bool=False, debug: bool=False):
+    cluster = LocalCluster()
+    client = Client(cluster)
+    downloader = SOTAChmDownloader(
+        location_files=location_files,
+        output_dir=save_dir,
+        n_parallel=n_parallel,
+        rewrite=rewrite,
+        debug=debug
+    )
+    downloader.download()
+
 
 @dataclass
 class MyConfig:

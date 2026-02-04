@@ -16,11 +16,14 @@ from pyproj import Transformer
 import pystac_client
 import adlfs
 import pandas as pd
+import dask.dataframe as dd
 import requests
 from io import StringIO
 from shapely.geometry import shape
 import json
+import dask
 from dask.utils import natural_sort_key
+import dask_geopandas as dgp
 
 from ._const import STAC_ITEM_KEYS
 from utils._stackstac import stack
@@ -116,6 +119,37 @@ def get_total_bounds(geom:gpd.GeoSeries):
         geom['miny'].min(),
         geom['maxx'].max(),
         geom['maxy'].max())
+
+def get_aux_df(parquet_file: str,collection_id:str, filters=None, time_col=None):
+    """
+    Retrieves auxiliary geodataframe for a specified collection (ESA world cover or DEM).
+
+    Parameter
+    ---------
+    * collection_id (str): The ID of the collection to retrieve data from.
+    * filters (dict, optional): Additional filters to apply to the data. Defaults to None.
+    * time_col (str, optional): The name of the time column to include in the retrieved data. Defaults to None.
+
+    Returns
+    -------
+    * pandas.DataFrame: The retrieved auxiliary data as a pandas DataFrame.
+    """
+    api = pystac_client.Client.open(stac_endpoint, modifier=planetary_computer.sign_inplace)
+    parquet_file = Path(parquet_file).expanduser()
+    if parquet_file.exists():
+        print(f'Loading STAC parquet files for {collection_id} from: {parquet_file}')
+        df = gpd.read_parquet(parquet_file, columns=STAC_ITEM_KEYS+[time_col])
+    else:
+        print(f'Downloading STAC parquet files for {collection_id}')
+        asset = api.get_collection(collection_id).assets["geoparquet-items"]
+        df = dgp.read_parquet(
+            asset.href, storage_options=asset.extra_fields["table:storage_options"],
+            gather_spatial_partitions=False, filters=filters, columns=STAC_ITEM_KEYS+[time_col])
+        df = df.compute()
+        df.to_parquet(parquet_file)
+    df = df.set_index('id')
+    return df
+
 
 def resign_items(items):
     """
@@ -338,3 +372,31 @@ def check_unfinished_files(input_files: Path, output_dir: Path, check_exists=Tru
             continue
         unfinished_files.append(file)
     return unfinished_files
+
+
+def get_epsg_from_tile(tile_name):
+    zone = int(tile_name[:2])
+    band = tile_name[2]
+    hemisphere = 'south' if band <= 'M' else 'north'
+    epsg = 32700 + zone if hemisphere == 'south' else 32600 + zone
+    return epsg
+
+
+def read_parquets_with_file_name(parquet_dir: Path, columns: List[str] = None):
+    """
+    Read parquets with file name
+    """
+    files = list(parquet_dir.glob('*.parquet'))
+    
+    @dask.delayed
+    def read_parquet_and_add_tile_id(file: Path):
+        df = gpd.read_parquet(file, columns=columns)
+        df['Name'] = file.stem
+        return df
+    
+    tasks = []
+    for file in files:
+        tasks.append(read_parquet_and_add_tile_id(file))
+    dfs = dask.compute(*tasks)
+    df = pd.concat(dfs)
+    return df

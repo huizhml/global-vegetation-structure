@@ -3,7 +3,9 @@ import ee
 import json
 import logging
 from pathlib import Path
+from datetime import datetime
 from collections import Counter, defaultdict
+import numpy as np
 import dask
 import dask.dataframe as dd
 import dask.array as da
@@ -19,11 +21,19 @@ from typing import Any
 import hydra
 from hydra.core.config_store import ConfigStore
 from dataclasses import dataclass, field
-from download._const import dtypes
-from download._utils import authenticate, shapely_to_geojson, ee_fc_to_gpd
-from download._dask_downloader import DaskDownloader
 from dotenv import load_dotenv
 import pyarrow.parquet as pq
+import xarray as xr
+import pystac
+import pystac_client
+import planetary_computer
+from xrspatial import slope
+from shapely.geometry import box
+
+from download._const import dtypes
+from download._utils import authenticate, shapely_to_geojson, ee_fc_to_gpd, get_aux_df, row_to_stac_item, get_patch, get_epsg_from_tile, buffer_and_snap_bounds, get_total_bounds, check_unfinished_files, read_parquets_with_file_name
+from download._dask_downloader import DaskDownloader
+
 load_dotenv()
 
 
@@ -35,7 +45,10 @@ def is_parquet_ok(path):
         return False
 
 
-authenticate()
+authenticate()  # TODO: only authenticate when needed
+
+stac_endpoint = 'https://planetarycomputer.microsoft.com/api/stac/v1'
+api = pystac_client.Client.open(stac_endpoint, modifier=planetary_computer.sign_inplace)
 
 logger = logging.getLogger(__name__)
 GEDI_START = pd.Timestamp('2018-01-01')
@@ -58,6 +71,48 @@ class GEDI(DaskDownloader):
         keepLeafOff255 (bool): Whether to keep GEDI points with leaf off flag of 255.
 
     Methods:
+        download_all_valid(s2_table_file: str, gedi_table_index_file: str, save_dir: str = None, **kwargs):
+            Download all valid GEDI points for all S2 tiles.
+            Valid: (quality flag == 1, degrade flag == 0, region class > 0, leaf off flag != 1, sensitivity >= 0.95) for the growing season
+            NOTE: keep a local copy for future use, better indexing and faster retrieval.
+            Args:
+                * s2_table_file: the path to the S2 table file, should have columns: Name, geometry, growing_months
+                * gedi_table_index_file: the path to the GEDI table index file, should have columns: system:index, table_id, start_time, end_time, geometry
+                * save_dir: the path to save the downloaded GEDI data
+            Returns:
+                * None
+
+        add_slope(s2_table_file: str, gedi_table_index_file: str, save_dir: str = None, **kwargs):
+            Add slope to the GEDI data, where the slope is calculated from the DEM data (Copernicus DEM + NASADEM).
+            NOTE: slope information indicates how representative the GEDI vertical profile is, higher slope means less representative.
+            Args:
+                * location_dir: the path to the location files
+                * dem_meta_file: the path to the DEM metadata file
+                * save_dir: the path to save the GEDI data with slope
+                NOTE: the save directory should be the same as the location files directory
+            Returns:
+                * None
+
+        sample_subset(s2_table_file: str, save_dir: str = None, correction_number_per_tile: int = 2000, exclude_used_gedi_points: bool = False, used_gedi_points_dir: str = None, **kwargs):
+            Sample GEDI points for GVS correction. 
+            NOTE: slope filter can be added here
+            Args:
+                * s2_table_file: the path to the S2 table file, should have columns: Name, geometry, growing_months
+                * save_dir: the path to save the sampled GEDI data
+                * correction_number_per_tile: the number of GEDI points to sample per tile
+                * exclude_used_gedi_points: whether to exclude used GEDI points
+                * used_gedi_points_dir: the path to the used GEDI points file
+            Returns:
+                * None
+
+        check_slope_distribution(save_dir: str):
+            Check the distribution of the slope data
+            Args:
+                * save_dir: the path to save the GEDI data with slope
+            Returns:
+                * None
+
+
         getTableAssetIds(export=False):
             Returns a list of unique table asset IDs for GEDI orbits from GEE rasterized version of GEDI within the specified year.
 
@@ -83,7 +138,8 @@ class GEDI(DaskDownloader):
     GEDI_START = pd.Timestamp('2018-01-01')
 
     def __init__(self, year=2019, save_dir='GEDI/2019', flag_dir: str = None,
-                 mgrs_file='GEDI/mgrs_with_count_and_orbits.parquet', key_file: str = None, npartitions=100,
+                 mgrs_file='GEDI/mgrs_with_count_and_orbits.parquet', 
+                 key_file: str = None, npartitions=100,
                  n_parallel=40, row_group_size=100, random_state: int = 42, rewrite: bool = False, **kwargs):
         """
         Initializes a GEDI object.
@@ -187,69 +243,21 @@ class GEDI(DaskDownloader):
         # self.download_zone(row).compute()
         self.schedule_tasks(mgrs_df, self.download_zone)
 
-    def sup_download(
-            self, mgrs_stats_file: str = None, old_gedi_dir: str = None, new_gedi_dir: str = None, flag_dir: str = None):
-        self.old_gedi_dir = Path(old_gedi_dir).expanduser()
-        self.new_gedi_dir = Path(f'{new_gedi_dir}/{self.year}').expanduser()
-        self.new_gedi_dir.mkdir(exist_ok=True, parents=True)
-        self.flag_dir = Path(flag_dir).expanduser()
-        self.flag_dir.mkdir(exist_ok=True, parents=True)
-
-        mgrs_df = gpd.read_parquet(self.mgrs_file)
-        if 'no_sup' not in mgrs_df.columns:
-            mgrs_stats = gpd.read_parquet(mgrs_stats_file)
-            mgrs_stats = mgrs_stats.reset_index()
-            mgrs_stats['no_sup'] = mgrs_stats['nwant'] - mgrs_stats[f'count_high_sens_{self.year}']
-            mgrs_df = mgrs_df.merge(mgrs_stats[['MGRS_UTM', 'no_sup']], on='MGRS_UTM')
-            mgrs_df['no_sup'] = mgrs_df['no_sup'].astype(int)
-            mgrs_df = mgrs_df[mgrs_df['no_sup'] > 0]
-        self.schedule_tasks(mgrs_df, self.download_zone_sup)
-        # self.download_zone_sup(mgrs_df[mgrs_df['MGRS_UTM']=='23J'])
-
-    @dask.delayed
-    def download_zone_sup(self, zone):
-        """
-        Get new GEDI points for S2 download
-        """
-        number = zone['no_sup']  # .item())
-        zone_name = zone['MGRS_UTM']  # .item()
-        flag = self.flag_dir / f'{zone_name}_{self.year}_done'
-        if flag.exists() and not self.rewrite:
-            logger.info(f"{flag} exists")
-            return
-        old_df = gpd.read_parquet(self.old_gedi_dir/f'{zone_name}.parquet')
-        files = list(self.save_dir.glob(f'{zone_name}/*.parquet'))
-        if len(files) == 0:
-            print(f'no files found for {zone_name}')
-            print(zone)
-            return
-        new_df = dgp.read_parquet(files)
-        old = old_df[old_df['path'].str.contains(str(self.year))]
-        new_df = new_df[~new_df['shot_number'].isin(old['shot_number'])]
-        new_df = new_df.compute()
-        new_df = dgp.from_geopandas(new_df.iloc[:number], chunksize=600)
-        new_df.to_parquet(self.new_gedi_dir/f'{zone_name}', name_function=lambda x: 'partition_' + str(x) + '.parquet')
-        flag.touch()
-
-    def get_orbit_for_s2_tiles(
-            self, s2_table_file: str, correction_number_per_tile: int = 2000, save_dir: str = None,
-            exclude_used_gedi_points: bool = False, used_gedi_points_dir: str = None, **kwargs):
+    def download_all_valid(
+            self, s2_table_file: str, gedi_table_index_file: str, save_dir: str = None, **kwargs):
         '''
         Find the orbit id from the growing season for each S2 tile
         Each orbit records ~1.5 hours of GEDI footprints
+        And download all valid GEDI points for the S2 tile
         Ags:
             * s2_table_file: the path to the S2 table file, should have columns: Name, geometry, growing_months
 
         '''
-        gedi_table_index_file = f'~/data/gvs/GEDI_for_correction/l2a_table_index_{self.year}.parquet'
         self.gedi_table_index = self.download_gedi_table_index(out_file=gedi_table_index_file)
         self.gedi_table_index = self.gedi_table_index.drop(columns=['system:index', 'time_end'])
         self.gedi_table_index['month'] = self.gedi_table_index['time_start'].str[5:7]
         self.gedi_table_index['month'] = self.gedi_table_index['month'].astype(int)
         self.gedi_table_index.set_crs(epsg=4326, inplace=True)
-        self.correction_number_per_tile = correction_number_per_tile
-        self.exclude_used_gedi_points = exclude_used_gedi_points
-        self.used_gedi_points_dir = Path(used_gedi_points_dir).expanduser()
         self.save_dir = Path(save_dir).expanduser()
         self.save_dir.mkdir(exist_ok=True, parents=True)
         s2_table_file = Path(s2_table_file).expanduser()
@@ -271,7 +279,8 @@ class GEDI(DaskDownloader):
         if file.exists() and not self.rewrite and is_parquet_ok(file):
             print(f'{file} exists and is ok')
             return
-        orbits_intersects_tile = self.gedi_table_index[self.gedi_table_index.intersects(s2_tile['geometry'])]#!!!! inside intersects it has to be a geometry object, otherwise it will try to match the index!!!
+        # !!!! inside intersects it has to be a geometry object, otherwise it will try to match the index!!!
+        orbits_intersects_tile = self.gedi_table_index[self.gedi_table_index.intersects(s2_tile['geometry'])]
         if len(orbits_intersects_tile) == 0:
             return
         growing_months = s2_tile['growing_months']
@@ -288,21 +297,143 @@ class GEDI(DaskDownloader):
             # print(f'Found {len(fc)} GEDI points for {orbit_id}')
             data.append(fc)
         if len(data) == 0:
+            print(f'No GEDI points found for {s2_tile["Name"]}')
             return
         data = pd.concat(data)
-        if self.exclude_used_gedi_points:
-            used_gedi_points_file = self.used_gedi_points_dir / f'{s2_tile["Name"]}.parquet'
-            used_gedi_points = gpd.read_parquet(used_gedi_points_file, columns=['geometry'])
-            data = data[~data.geometry.isin(used_gedi_points['geometry'])]
-
-        if len(data) > self.correction_number_per_tile:
-            print(
-                f'Sampling {self.correction_number_per_tile} GEDI points from {len(data)} GEDI points for {s2_tile["Name"]}')
-            data = data.sample(self.correction_number_per_tile)
         data = data.reset_index(drop=True)
         data['system:index'] = data['system:index'].astype(str)
         data.to_parquet(file)
-        print(f'Saved {len(data)} GEDI points for {s2_tile["Name"]} for GVS correction')
+        print(f'Saved {len(data)} GEDI points for {s2_tile["Name"]} after filtering')
+
+        # if self.exclude_used_gedi_points:
+        #     used_gedi_points_file = self.used_gedi_points_dir / f'{s2_tile["Name"]}.parquet'
+        #     used_gedi_points = gpd.read_parquet(used_gedi_points_file, columns=['geometry'])
+        #     data = data[~data.geometry.isin(used_gedi_points['geometry'])]
+
+        # if len(data) > self.correction_number_per_tile:
+        #     print(
+        #         f'Sampling {self.correction_number_per_tile} GEDI points from {len(data)} GEDI points for {s2_tile["Name"]}')
+        #     data = data.sample(self.correction_number_per_tile)
+        # data = data.reset_index(drop=True)
+        # data['system:index'] = data['system:index'].astype(str)
+        # data.to_parquet(file)
+        # print(f'Saved {len(data)} GEDI points for {s2_tile["Name"]} for GVS correction')
+
+    def add_slope(self, location_dir: str, dem_meta_file: str, save_dir: str):
+        '''
+        Add slope to the GEDI data, where the slope is calculated from the DEM data (Copernicus DEM + NASADEM).
+        NOTE: slope information indicates how representative the GEDI vertical profile is, higher slope means less representative.
+        Args:
+            * location_dir: the path to the location files
+                NOTE: the location files should be in the format of <tile_id>.parquet
+            * dem_meta_file: the path to the DEM metadata file
+                NOTE: the DEM metadata file should be in the format of <collection_id>_items.parquet
+            * save_dir: the path to save the GEDI data with slope
+                NOTE: the save directory should be the same as the location files directory
+        '''
+        self.save_dir = Path(save_dir).expanduser()
+        self.save_dir.mkdir(exist_ok=True, parents=True)
+        location_files = Path(location_dir).expanduser().glob('*.parquet')
+        dem_meta_file = Path(dem_meta_file).expanduser()
+        self.dem_df = get_aux_df(dem_meta_file, 'cop-dem-glo-30', time_col='datetime')
+        self.dem_df['datetime'] = self.dem_df['datetime'].dt.strftime('%Y-%m-%d %H:%M:%S.%f')
+
+        location_files = check_unfinished_files(location_files, self.save_dir, check_exists=True)
+        test_tile = '10TEL'
+        location_files = [file for file in location_files if test_tile in file.stem]
+        tasks = []
+        for file in location_files:
+            tasks.append(self.get_dem(file))
+        self.schedule_tasks(delayed_tasks=tasks)
+
+    # @dask.delayed
+    # @retry(requests.HTTPError, tries=10, delay=1)
+    def get_dem(self, file: Path):
+        '''
+        Get the DEM data for the GEDI points
+        #TODO: not sure how it works for large tiles (more than 40k points)
+        '''
+        output_file = self.save_dir / f'{file.stem}.parquet'
+        if output_file.exists() and not self.rewrite:
+            print(f'{output_file} exists, skipping')
+            return
+        tile_id = file.stem
+        epsg = get_epsg_from_tile(tile_id)
+        loc_df = gpd.read_parquet(file)
+        loc_ = loc_df.to_crs(epsg)
+        total_bounds = buffer_and_snap_bounds(loc_.geometry, 60, 30)  # buffer 2 pixels
+        total_bounds = get_total_bounds(total_bounds)
+        bbox = box(*loc_df.geometry.total_bounds)
+        dem_df = self.dem_df[self.dem_df.geometry.intersects(bbox)]
+
+        if not dem_df.geometry.union_all().covers(bbox):
+            dem_items = api.search(collections=['nasadem'], intersects=bbox).item_collection()
+            dem_items.asset_name = 'elevation'
+        else:
+            dem_items = row_to_stac_item(dem_df, ['datetime'])
+            dem_items = pystac.item_collection.ItemCollection(dem_items)
+            dem_items.asset_name = 'data'
+
+        if len(dem_items.items) == 0:
+            loc_df['slope'] = np.nan
+            loc_df.to_parquet(output_file)
+            print(f'{output_file} does not have DEM data, skipping')
+            return
+
+        dem_image = get_patch(
+            dem_items.items, [dem_items.asset_name],
+            resolution=30, epsg=epsg, bounds=total_bounds, dtype='float32', fill_value=np.float32(np.nan))
+        dem_image = dem_image.max(dim='time', skipna=True).squeeze()
+        if dem_image.shape[0] == 0:
+            loc_df['slope'] = np.nan
+            loc_df.to_parquet(output_file)
+            print(f'{output_file} does not have DEM data, skipping')
+            return
+        dem_image.attrs['res'] = 30
+        slope_da = slope(dem_image)
+        target_x = xr.DataArray(loc_.geometry.x.values, dims="points")
+        target_y = xr.DataArray(loc_.geometry.y.values, dims="points")
+        sampled_values = slope_da.sel(x=target_x, y=target_y, method='nearest')
+        sampled_values = sampled_values.compute()
+        loc_df['slope'] = sampled_values.values
+        loc_df.to_parquet(output_file)
+
+    def check_slope_distribution(self, input_dir: str, deploy_status_dir: str):
+        '''
+        Check the distribution of the slope data
+        '''
+        input_dir = Path(input_dir).expanduser()
+        columns = ['geometry', 'slope']
+        df = read_parquets_with_file_name(input_dir, columns)
+        before_slope_filter = df.groupby('Name')['geometry'].count().reset_index(name='count')
+        after_slope_filter = df[df['slope'] < 20].groupby('Name')['geometry'].count().reset_index(name='count')
+        valid_tiles_before = before_slope_filter[before_slope_filter['count'] > 200]['Name'].unique()
+        valid_tiles_after = after_slope_filter[after_slope_filter['count'] > 200]['Name'].unique()
+        affected_tiles = set(valid_tiles_before) - set(valid_tiles_after)
+        with open(input_dir.parent / 'figures/affected_tiles_by_slope_filter.txt', 'w') as f:
+            for tile in affected_tiles:
+                f.write(f'{tile}\n')
+        fig, axes = plt.subplots(1, 2, figsize=(10, 5))
+        before_slope_filter['count'].hist(ax=axes[0], bins=100, label='before slope filter')
+        after_slope_filter['count'].hist(ax=axes[1], bins=100, label='after slope filter')
+        for ax in axes:
+            ax.set_yscale('log')
+            ax.set_ylim(0, 1e5)
+            ax.set_xlabel('Number of GEDI points')
+            ax.set_ylabel('#tiles')
+            ax.legend()
+        plt.savefig(input_dir.parent / 'figures/slope_distribution.png')
+        
+        deploy_status_dir = Path(deploy_status_dir).expanduser()
+        s2_files = list(deploy_status_dir.glob('deploy_status_*.parquet'))
+        s2_files = sorted(s2_files, key=lambda x: pd.to_datetime(x.stem.split('_')[2]))[-1]
+        s2_df = gpd.read_parquet(s2_files)
+        after_slope_filter = after_slope_filter.set_index('Name')
+        after_slope_filter = after_slope_filter.rename(columns={'count': f'gedi_count_after_slope_filter_{self.year}'})
+        s2_df = s2_df.join(after_slope_filter)
+        s2_df[f'gedi_count_after_slope_filter_{self.year}'] = s2_df[f'gedi_count_after_slope_filter_{self.year}'].fillna(0).astype(int)
+        s2_df.to_parquet(s2_files.with_stem(f'deploy_status_{datetime.now().strftime('%Y-%m-%dT%H')}'))
+        return 
 
     def download_gedi_table_index(self, out_file: str):
         '''
@@ -381,12 +512,12 @@ class GEDI(DaskDownloader):
     def get_tiles_covered_by_gedi(self, s2_tiles_file: str, gedi_table_index_file: str = None, save_dir: str = None):
         '''
         Get the tiles covered by GEDI
-        
+
         Args:
             * s2_tiles_file: the path to the S2 tiles file, should have columns: Name, geometry
             * gedi_table_index_file: the path to the GEDI table index file, should have columns: system:index, table_id, start_time, end_time, geometry
             * save_dir: the path to save the tiles covered by GEDI
-        
+
         Output:
             * tiles_covered_by_gedi.txt: a text file with the tile names in the GEDI range
             Each line is a tile name
@@ -395,7 +526,7 @@ class GEDI(DaskDownloader):
         s2_tiles = gpd.read_parquet(s2_tiles_file)
         gedi_table_index_file = Path(gedi_table_index_file).expanduser()
         gedi_table_index = gpd.read_parquet(gedi_table_index_file)
-        
+
         tiles_covered_by_gedi = s2_tiles[s2_tiles.intersects(gedi_table_index['geometry'])]['Name'].unique()
         tiles_covered_by_gedi.to_csv(save_dir / 'tiles_covered_by_gedi.txt', header=None, index=None, sep=' ', mode='w')
 
@@ -406,7 +537,7 @@ class MyConfig:
     n_parallel: int = 100
     row_group_size: int = 100
     rewrite: bool = False
-    save_dir: str = '~/data/gvs/GEDI_high_sens'
+    root_save_dir: str = '~/data/gvs/gedi'
     mgrs_file: str = '~/data/GEDI/mgrs_stats_v3.parquet'
     mgrs_stats_file: str = '~/data/GEDI/mgrs_stats_v1.parquet'
     flag_dir: str = '~/data/gvs/GEDI_extra_flags'
@@ -432,11 +563,27 @@ def main(cfg):
     cluster = LocalCluster()
     client = Client(cluster)  # timeout
     gedi = GEDI(**cfg)
-    if cfg.task == 'download':
-        # gedi.download()
-        gedi.sup_download(cfg.mgrs_stats_file, cfg.old_gedi_dir, cfg.new_gedi_dir, flag_dir='~/data/gvs/GEDI_sup_flags')
-    elif cfg.task == 'download_gedi_for_gvs_correction':
-        gedi.get_orbit_for_s2_tiles(
+    if cfg.task == 'download_all_valid':
+        gedi_table_index_file = cfg.get('gedi_table_index_file', f'~/data/gvs/gedi/l2a_orbit_table/l2a_orbit_table_{cfg.year}.parquet')
+        save_dir = cfg.get('save_dir', f'{cfg.root_save_dir}/veg_sensitivity_gt0p95/all_valid/{cfg.year}')
+        s2_table_file = cfg.get('s2_table_file', '~/data/gvs/state/s2_tiles_with_growing_months.parquet')
+        gedi.download_all_valid(s2_table_file=s2_table_file,
+                                gedi_table_index_file=gedi_table_index_file, save_dir=save_dir)
+
+    elif cfg.task == 'add_slope':
+        location_dir = cfg.get('location_dir', f'~/data/gvs/gedi/veg_sensitivity_gt0p95/all_valid/{cfg.year}')
+        dem_meta_file = cfg.get('dem_meta_file', '~/data/gvs/assets/dem/cop-dem-glo-30_items.parquet')
+        save_dir = cfg.get('save_dir', str(Path(location_dir).parent / f'with_slope_col/{cfg.year}'))
+        gedi.add_slope(location_dir=location_dir, dem_meta_file=dem_meta_file, save_dir=save_dir)
+
+    elif cfg.task == 'check_slope_distribution':
+        input_dir = cfg.get('input_dir', f'~/data/gvs/gedi/veg_sensitivity_gt0p95/all_valid/{cfg.year}/with_slope_col')
+        deploy_status_dir = cfg.get('deploy_status_dir', f'~/data/gvs/state')
+        gedi.check_slope_distribution(input_dir=input_dir, deploy_status_dir=deploy_status_dir)
+
+    elif cfg.task == 'sample_subset':
+
+        gedi.sample_subset(
             '~/data/gvs/s2_tiles_with_growing_months.parquet', save_dir=cfg.save_dir,
             correction_number_per_tile=cfg.correction_number_per_tile,
             exclude_used_gedi_points=cfg.exclude_used_gedi_points, used_gedi_points_dir=cfg.used_gedi_points_dir)

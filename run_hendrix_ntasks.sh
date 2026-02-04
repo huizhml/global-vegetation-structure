@@ -4,7 +4,7 @@
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem-per-cpu=4G # total memory for all tasks for --mem
-#SBATCH --time=18-00:00:00
+#SBATCH --time=7-00:00:00
 #SBATCH --job-name=blending
 #SBATCH --output=./logs/%x-%A-%t.out
 #SBATCH --nodelist=hendrixgpu26fl

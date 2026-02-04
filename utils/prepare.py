@@ -232,8 +232,8 @@ def prepare_items(
                 asset_bbox is not None
                 and asset_epsg is not None
                 and item_transform is not None
-                and (asset_transform == item_transform).all()
-                and (asset_shape == item_shape).all()
+                and (asset_transform == item_transform) #.all()
+                and (asset_shape == item_shape) #.all()
                 # TODO this still misses the case where the asset overrides bbox, but not transform/shape.
                 # At that point would need to significantly restructure the code
                 # to express this complex of prioritization:

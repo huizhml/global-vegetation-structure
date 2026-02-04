@@ -1,0 +1,44 @@
+defaults:
+  - _self_
+  - vis_params: rh_vis_param
+  - scenarios: vertical_profile/dk_conifer  # Default scenario
+  
+
+# Global defaults
+year: 2020
+output_dir: "~/data/gvs/results/vis_examples"
+s2_zarr_path: "~/data/gvs/inputs/inference_${year}.zarr"
+stac_collection_dir: "~/data/gvs/products/gvsm_stac_catalog/vsm_local"
+
+task: make_vertical_profile_plot
+task_args:
+  s2_grid_file: "~/data/gvs/state/s2_tiles_with_growing_months.parquet"
+  q_idx: 1
+  max_height: 50
+  min_height: -5
+example_args:
+  name: dk_conifer
+  buffer_m: 500
+  best_image_time: "2020-06-01"
+  points:
+    - [56.106560, 9.563374]
+    - [56.108319, 9.561760]
+
+
+hydra:
+  # 1. Disable the creation of the .hydra/ directory (config dumps)
+  output_subdir: null
+  
+  # 2. Prevent creating a new directory for each run
+  run:
+    dir: .
+    
+  # 3. Disable the 'user' log file (usually main.log)
+  job_logging:
+    root:
+      handlers: [console]  # Use only the console handler, remove 'file'
+
+  # 4. Disable the 'hydra' log file (usually hydra.log)
+  hydra_logging:
+    root:
+      handlers: [console]  # Use only the console handler, remove 'file'

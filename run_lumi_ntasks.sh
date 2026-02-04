@@ -5,7 +5,7 @@
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=2
 #SBATCH --mem-per-cpu=1G # total memory for all tasks
-#SBATCH --time=2-00:00:00
+#SBATCH --time=0-08:00:00
 #SBATCH --job-name=make_public
 #SBATCH --output=/users/zhanghui/scratch/logs/%x-%A_%a.out
 #SBATCH --error=/users/zhanghui/scratch/logs/%x-%A_%a.err
@@ -31,12 +31,13 @@ srun postprocess/run.sh 4
 ;;
 1)
 # ==========================================
-#   Run postprocessing with list of tiles
+#   Calculate size for a single RH - data on LUMI-O
 # ==========================================
-unfinished_tiles=(${2:-})
-year=${3:-2020}
-srun postprocess/run.sh 1 "${unfinished_tiles[*]}" $year
-
+rh_idx=(0 10 20 25 30 40 50 60 70 75 80 90 95 98 100)
+for rhs_idx in ${rh_idx[@]}; do
+    srun postprocess/run.sh 6 0 $rhs_idx
+    bash postprocess/run.sh 7 $rhs_idx
+done
 ;;
 
 *)

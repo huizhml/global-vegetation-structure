@@ -56,6 +56,3 @@ logs/
 *.ipynb
 *.h5
 artifacts
-temp*
-*.mw
-*core

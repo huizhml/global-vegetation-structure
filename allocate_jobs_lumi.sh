@@ -4,7 +4,7 @@
 ##SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=2G
-#SBATCH --time=3-00:00:00
+#SBATCH --time=2-00:00:00
 #SBATCH --job-name=allocate
 #SBATCH --output=/users/zhanghui/scratch/logs/%x-%A_%a.out
 #SBATCH --error=/users/zhanghui/scratch/logs/%x-%A_%a.err

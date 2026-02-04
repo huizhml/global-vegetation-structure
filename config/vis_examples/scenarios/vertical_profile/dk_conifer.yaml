@@ -1,0 +1,16 @@
+# @package _global_
+example_args:
+  name: dk_conifer
+  buffer_m: 500
+  best_image_time: "2020-06-01"
+  points:
+    - loc: [56.106560, 9.563374] # oil palm, mixed with other trees
+      name: "coniferous forest"
+    - loc: [56.108319, 9.561760] # oil palm, more dense
+      name: "oil palm"
+    - loc: [56.106562, 9.564703] # oil palm early stage
+      name: "oil palm"
+    - loc: [56.105816, 9.563038] # dense forest
+      name: "dense forest"
+    - loc: [56.107865, 9.562733] # sparse trees
+      name: "sparse trees"

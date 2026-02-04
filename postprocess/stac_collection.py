@@ -9,7 +9,7 @@ from rasterio.warp import transform_bounds, transform_geom
 from dotenv import load_dotenv
 import pystac
 from tqdm import tqdm
-
+import dask
 load_dotenv('.planetarycomputer/settings.env')
 
 
@@ -163,11 +163,20 @@ class StacCatalog:
         # test = image.isel(time=0, band=0).compute() #@2025-10-02, tested, works well, can load image from tif files
         self.collection.add_item(item)   
 
+    def update_collection(self):
+        collection_dir = f'{self.catalog_dir}/{self.collection_id}'
+        collection_dir = Path(collection_dir).expanduser()
+        item_dirs = collection_dir.glob(f'*_{self.year}')
+        tasks = []
+        for item_dir in item_dirs:
+            tasks.append(dask.delayed(self.update_item)(item_dir.name.split('_')[0]))
+        dask.compute(*tasks)
+
     def update_item(self, tile_id: str):
         item_path = f'{self.catalog_dir}/{self.collection_id}/{tile_id}_{self.year}/{tile_id}_{self.year}.json'
         item = pystac.Item.from_file(item_path)
-        gtif_dir = Path(f'~/data/gvs/deploy/predictions_gtiff_{self.year}/{tile_id}').expanduser()
-        cog_dir = Path(f'~/data/gvs/deploy/predictions_{self.year}/{tile_id}').expanduser()
+        gtif_dir = Path(f'~/data/gvs/predictions/{self.year}/original/tiles/geotiff/{tile_id}').expanduser()
+        cog_dir = Path(f'~/data/gvs/predictions/{self.year}/original/tiles/cog/{tile_id}').expanduser()
         file_path = item.assets['RH98_Q1'].href.replace('file://', '')
         file_path = Path(file_path).expanduser()
         if file_path.exists() and len(list(file_path.parent.glob('*.tif'))) == 303:
@@ -179,6 +188,9 @@ class StacCatalog:
         elif cog_dir.exists() and len(list(cog_dir.glob('*.tif'))) == 303:
             pred_dir = cog_dir
             print(f'COG directory exists and is complete, updating')
+        elif self.year == 2024:
+            pred_dir = gtif_dir
+            print(f'2024 predictions directory exists and is complete, updating')
         else:
             raise ValueError(f'No predictions found for tile {tile_id} in year {self.year}')
         # Update asset hrefs
@@ -193,7 +205,7 @@ class StacCatalog:
 @dataclass
 class Config:
     collection_id: str ='vsm'
-    catalog_dir: str = '~/data/gvs/deploy/gvsm_stac_catalog'
+    catalog_dir: str = '~/data/gvs/products/gvsm_stac_catalog'
     data_source: str = 'local'
     task: str = 'create_catalog'
     tile_id: str = '32TNS'
@@ -211,6 +223,8 @@ def main(cfg):
         stac_collection.create_catalog()
     elif cfg.task == 'update_item':
         stac_collection.update_item(cfg.tile_id)
+    elif cfg.task == 'update_collection':
+        stac_collection.update_collection()
     else:
         raise ValueError(f'Invalid task: {cfg.task}')
 

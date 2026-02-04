@@ -75,6 +75,7 @@ if [ $SLURM_PROCID -eq $((SLURM_NTASKS - 1)) ]; then
 else
     task_zones=(${job_zones[@]:start_idx:n_zones_per_task})
 fi
+year=2020
 for zone in ${task_zones[@]}; do
     for tile_id in $(cat $zone); do
         echo "Processing tile $tile_id"
@@ -87,6 +88,22 @@ for zone in ${task_zones[@]}; do
     done
 done
 ;;
+
+4)
+# =======================================
+#    Run postprocessing on Hendrix, multitasks, above bash config doesn't matter
+# =======================================
+root_dir=${HOME}/data/gvs/gedi/veg_sensitivity_gt0p95/subset_cal/
+python -m postprocess.run run=extract_pred || exit $?
+python -m download.run run=check_two_partitioned_datasets \
+    run.source_dir=${root_dir}/original/2020/ \
+    run.target_dir=${root_dir}/original_with_ours_biome/2020 || exit $?
+python -m download.run run=make_manifest \
+    run.data_dir=${root_dir}/original_with_ours_biome/2020 \
+    run.dataset_name=gedi_cal_2020_with_ours_biome \
+    run.root_note=''
+;;
+
 
 *)
 echo "Invalid option"

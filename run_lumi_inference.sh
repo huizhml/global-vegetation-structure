@@ -79,7 +79,7 @@ echo "Processing tile ID: $tile_id, line $line_num from $tile_id_file"
 # fi
 # wait for input data being streamed for the first tile
 # Check if the h5 file is being used by another process
-tile_id=21MTM
+tile_id=39VWL
 h5_file="${input_dir}/${tile_id}.h5"
 stream_flag="${HOME}/data/GVS/Deploy/flags_stream_${year}/${tile_id}_best_images_done"
 if [ ! -f "$stream_flag" ] && [ "$use_flash" == "False" ]; then
@@ -130,7 +130,7 @@ echo run prediction for model $run_id for tile $tile_id;
 python run.py predict -c config/predict.yaml --model.backbone config/model/xception_mix_order.yaml \
         --data.init_args.tile_id $tile_id \
         --data.init_args.metadata_file $meta_file \
-        --data.init_args.s2_grid_file ${HOME}/data/gvs/s2_tiles_with_growing_months.parquet \
+        --data.init_args.s2_grid_file ${HOME}14080629   \
         --data.init_args.pred_fp ${input_dir} \
         --data.init_args.prediction_dir ${save_dir}/${tile_id}_GTiff \
         --data.init_args.year $year \

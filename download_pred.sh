@@ -1,7 +1,7 @@
 
 tile_id=${2:-'22UUL'}
 rh_idx=${3:-98}
-year=${4:-2024}
+year=${4:-2020}
 q_idx=${5:-1}
 
 case $1 in
@@ -9,11 +9,11 @@ case $1 in
 # =======================================
 #    DOWNLOAD One RH PREDICTION (COG) FROM Hendrix
 # =======================================
-dst_dir=${HOME}/GVS/predictions_${year}/${tile_id}_cog
+dst_dir=${HOME}/gvsm/predictions/${year}/original/tiles/cog/${tile_id}
 mkdir -p $dst_dir
-src_dir=/home/ksb781/data/gvs/deploy/predictions_${year}/${tile_id}_cog
+src_dir=/home/ksb781/data/gvs/predictions/${year}/original/tiles/cog/${tile_id}
 host=ksb781@hendrixgate02fl
-scp -r $host:$src_dir/RH${rh_idx}_Q${q_idx}.cog.tif $dst_dir/
+scp -r $host:$src_dir/RH${rh_idx}_Q${q_idx}.tif $dst_dir/
         ;;
 01)
 # =======================================
@@ -46,10 +46,11 @@ q_idx=${4:-1}
 year=${5:-2024}
 zone=$(echo ${tile_id:0:3} | tr '[:upper:]' '[:lower:]')
 bucket_name=${zone}-${year}
-dst_dir=${HOME}/gvsm/predictions_${year}/${tile_id}_GTiff
+dst_dir=${HOME}/gvsm/predictions/${year}/original/tiles/geotiff/${tile_id}
 mkdir -p $dst_dir
 src_dir=lumi-465001846-private:${bucket_name}/predictions_GTiff_${year}/${tile_id}/RH${rh_idx}_Q${q_idx}_uncompressed.tif
 rclone copy ${src_dir} ${dst_dir} --transfers=16 --checkers=16 --multi-thread-streams=4
+mv ${dst_dir}/RH${rh_idx}_Q${q_idx}_uncompressed.tif ${dst_dir}/RH${rh_idx}_Q${q_idx}.tif
 ;;
 
 03)

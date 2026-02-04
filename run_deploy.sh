@@ -27,9 +27,9 @@ echo "********************************************************************"
 
 line_num=${SLURM_ARRAY_TASK_ID:-2}
 year=${1:-2020}
-stream_input=${2:-True}
+stream_input=${2:-False}
 repredict_tiles=${3:-True}
-save_dir=~/data/gvs/deploy/predictions_GTiff_${year}
+save_dir=~/data/gvs/predictions/${year}/original/tiles/geotiff
 mkdir -p $save_dir
 # hostname=$(hostname)
 # if [ "$hostname" == "hendrixgpu26fl.unicph.domain" ] || [ "$hostname" == "hendrixgpu01fl.unicph.domain" ]; then
@@ -46,18 +46,20 @@ mkdir -p $save_dir
 # tile_id_file=${HOME}/data/gvs/deploy/unfinished_tiles_${year}.txt
 # tile_id_file=${HOME}/data/gvs/deploy/slurm_job_files_${year}/deploy_s2_items_${year}_part0.txt
 # tile_id_file=${HOME}/data/gvs/deploy/predicted_not_ordered_tiles_${year}.txt
-tile_id_file=${HOME}/data/gvs/deploy/slurm_job_files_${year}/deploy_s2_items_${year}_corrupted_predictions.txt
-line=$(sed -n "${line_num}p" $tile_id_file)
-IFS=',' read -r tile_id idx <<< "$line"
-echo "Line $line_num: Tile=$tile_id, idx=$idx"
-if [ -z "$idx" ]; then
-    echo "idx is null, no meta file"
-    meta_file='none'
-else
-    idx=$(printf "%d" $idx)
-    meta_file=${HOME}/data/gvs/deploy/slurm_job_files_${year}/deploy_s2_items_${year}_part${idx}.parquet
-fi
+# tile_id_file=${HOME}/data/gvs/deploy/slurm_job_files_${year}/deploy_s2_items_${year}_corrupted_predictions.txt
+# line=$(sed -n "${line_num}p" $tile_id_file)
+# IFS=',' read -r tile_id idx <<< "$line"
+# echo "Line $line_num: Tile=$tile_id, idx=$idx"
+# if [ -z "$idx" ]; then
+#     echo "idx is null, no meta file"
+#     meta_file='none'
+# else
+#     idx=$(printf "%d" $idx)
+#     meta_file=${HOME}/data/gvs/deploy/slurm_job_files_${year}/deploy_s2_items_${year}_part${idx}.parquet
+# fi
 
+tile_id=20LPQ
+meta_file=none
 echo "Processing tile ID: $tile_id, line $line_num from $tile_id_file"
 echo "meta_file: $meta_file"
 
@@ -67,15 +69,15 @@ echo "meta_file: $meta_file"
 #     echo "Translate flag file $translate_flag or $translate_flag_new exists. Skipping tile $tile_id"
 #     continue
 # fi
-inference_flag="${HOME}/data/gvs/deploy/inference_flags_${year}/${tile_id}_best_images_done"
-if [ "$repredict_tiles" == "True" ]; then
-# remove inference flag instead of skip checking, since the inference may fail
-    rm -f $inference_flag
-fi    
-if [ -f "$inference_flag" ]; then
-    echo "Inference flag file $inference_flag exists. Skipping tile $tile_id"
-    exit 0
-fi
+# inference_flag="${HOME}/data/gvs/deploy/inference_flags_${year}/${tile_id}_best_images_done"
+# if [ "$repredict_tiles" == "True" ]; then
+# # remove inference flag instead of skip checking, since the inference may fail
+#     rm -f $inference_flag
+# fi    
+# if [ -f "$inference_flag" ]; then
+#     echo "Inference flag file $inference_flag exists. Skipping tile $tile_id"
+#     exit 0
+# fi
 echo "Processing tile ID: $tile_id"
 echo "***************************** START INFERENCE *****************************"
 run_id=cg11fpjr
@@ -85,9 +87,9 @@ if [ "$stream_input" == "True" ]; then
     python run.py predict -c config/predict.yaml --model.backbone config/model/xception_mix_order.yaml \
             --data.init_args.tile_id $tile_id \
             --data.init_args.metadata_file $meta_file \
-            --data.init_args.s2_grid_file ${HOME}/data/gvs/s2_tiles_with_growing_months.parquet \
-            --data.init_args.pred_fp ${HOME}/data/gvs/deploy/inference_${year} \
-            --data.init_args.prediction_dir ${save_dir}/${tile_id}_GTiff \
+            --data.init_args.s2_grid_file ${HOME}/data/gvs/state/s2_tiles_with_growing_months.parquet \
+            --data.init_args.pred_fp ${HOME}/data/gvs/inputs/inference_${year} \
+            --data.init_args.prediction_dir ${save_dir}/${tile_id} \
             --data.init_args.year $year \
             --data.init_args.batch_size 1 \
             --data.init_args.cache_predictions False \
@@ -104,8 +106,8 @@ else
             --data.init_args.num_workers 4 \
             --data.init_args.tile_id $tile_id \
             --data.init_args.metadata_file $meta_file \
-            --data.init_args.pred_fp ~/data/gvs/deploy/inference_${year}.zarr \
-            --data.init_args.prediction_dir $save_dir/${tile_id}_GTiff \
+            --data.init_args.pred_fp ~/data/gvs/inputs/inference_${year}.zarr \
+            --data.init_args.prediction_dir $save_dir/${tile_id} \
             --data.init_args.year $year \
             --correct_bias True \
             --data.init_args.patch_size 544 \
@@ -121,7 +123,7 @@ fi
 exit_status=$?
 if [ $exit_status -ne 0 ]; then
     echo "Prediction command failed with exit status $exit_status for tile $tile_id"
-    rm -rf $save_dir/${tile_id}_GTiff
+    rm -rf $save_dir/${tile_id}
 else
     echo "Prediction command completed successfully"
     touch ${inference_flag}

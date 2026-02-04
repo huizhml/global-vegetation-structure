@@ -134,7 +134,7 @@ class BaseDeployDataset(Dataset):
                 df['s2:nodata_pixel_percentage'] = df['s2:nodata_pixel_percentage'].round()
                 df = df.sort_values(['s2:nodata_pixel_percentage', 'eo:cloud_cover']).iloc[:20]
                 ids = df['id']
-                idx = [np.where(ids_from_zarr == i)[0][0] for i in ids]
+                idx = [np.where(ids_from_zarr == i)[0][0] for i in ids]# there exists duplicated images in the zarr store
                 self.img_slices = [idx[:10], idx[10:]]
             else:
                 self.img_slices = [slice(0, 10), slice(10, 20)]
@@ -364,13 +364,13 @@ class CachedDeployDataset(BaseDeployDataset):
             for i in range(self.full_pred.shape[0]):
                 rh_idx = i // 3
                 q_idx = i % 3
-                pred_fp = self.prediction_fp.with_stem(f'RH{rh_idx}_Q{q_idx}_uncompressed')
+                pred_fp = self.prediction_fp.with_stem(f'RH{rh_idx}_Q{q_idx}')
                 futures.append(write_func(self.full_pred[i], src_profile, dst_profile, pred_fp))
             dask.compute(*futures)
         else:
             for i, idx in enumerate(self.rh_idx):
                 rh_idx = idx // 3
-                pred_fp = self.prediction_fp.with_stem(f'RH{rh_idx}_Q1_uncompressed')
+                pred_fp = self.prediction_fp.with_stem(f'RH{rh_idx}_Q1')
                 futures.append(write_func(self.full_pred[i], src_profile, dst_profile, pred_fp))
             dask.compute(*futures)
         print(f'Time taken to save {self.tile_id} as COG: {time.time() - t0:.2f} seconds')
@@ -412,9 +412,9 @@ class ChunkedWriteDataset(BaseDeployDataset):
             'INTERLEAVE=BAND'
         ]
         if self.predict_full_profile:
-            output_files = [self.prediction_fp.with_stem(f'RH{i}_Q{j}_uncompressed') for i in range(self.rh_dim//3) for j in range(3)]
+            output_files = [self.prediction_fp.with_stem(f'RH{i}_Q{j}') for i in range(self.rh_dim//3) for j in range(3)]
         else:
-            output_files = [self.prediction_fp.with_stem(f'RH{i//3}_Q1_uncompressed') for i in self.rh_idx]
+            output_files = [self.prediction_fp.with_stem(f'RH{i//3}_Q1') for i in self.rh_idx]
         if self.save_intermediate_tif:
             from cftime import num2date
             tvar = self.store[f'{self.tile_id}/time']
@@ -427,7 +427,7 @@ class ChunkedWriteDataset(BaseDeployDataset):
 
             # Format to YYYY-MM-DD strings
             dates = np.array([d.strftime("%Y-%m-%d") for d in decoded])
-            output_files = [self.prediction_fp.with_stem(f'{self.tile_id}_{date}_uncompressed') for date in dates]
+            output_files = [self.prediction_fp.with_stem(f'{self.tile_id}_{date}') for date in dates]
         
         self.tiff_writers = [self.init_gtiff(output_file) for output_file in output_files]
         dtype = np.dtype(
@@ -803,9 +803,9 @@ class S2DatasetStream(BaseDeployDataset):
             'INTERLEAVE=BAND'
         ]
         if self.predict_full_profile:
-            output_files = [self.prediction_fp.with_stem(f'RH{i}_Q{j}_uncompressed') for i in range(self.rh_dim//3) for j in range(3)]
+            output_files = [self.prediction_fp.with_stem(f'RH{i}_Q{j}') for i in range(self.rh_dim//3) for j in range(3)]
         else:
-            output_files = [self.prediction_fp.with_stem(f'RH{i//3}_Q1_uncompressed') for i in self.rh_idx]
+            output_files = [self.prediction_fp.with_stem(f'RH{i//3}_Q1') for i in self.rh_idx]
         
         self.tiff_writers = [self.init_gtiff(output_file) for output_file in output_files]
         dtype = np.dtype(

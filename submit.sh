@@ -114,6 +114,12 @@ python -m datasets.statistical_analysis \
 echo aggregate the GEDI data;
 python -m datasets._6_visual_check task=aggregate_gedi_by_biome beton_fps=${data_dir}/train_subsets/test*_v3.beton
 ;;
+91)
+echo aggregate GEDI data from h5 files;
+year=${2:-2019}
+python -m datasets._h5_dataset task=extract_gedi_from_h5 year=$year +save_dir=${HOME}/data/gvs/gedi/veg_sensitivity_gt0p95/subset_cal/original/$year
+;;
+
 10)
 year=2020
 echo download inference data for $year by api query;
@@ -232,6 +238,22 @@ python -m postprocess.handle_border_artifacts year=2020 task=run_correction_and_
 echo create eu mosaic;
 python -m visualization.create_global_view year=2020 rh_idx='10 25 50 98' \
     task=run_mosaic_for_key_rhs countries=${HOME}/data/gvs/deploy/eu_results/countries_list.txt
+;;
+22)
+echo subsample parquet files;
+python -m datasets._h5_dataset task=subsample_parquet_files
+;;
+23)
+echo extract gedi data from h5 files for val
+python -m datasets._h5_dataset task=extract_gedi_from_h5 year=2020 +save_dir=${HOME}/data/gvs/gedi/veg_sensitivity_gt0p95/subset_val/with_sota_chms/2020 \
+        +index_table_dir=${HOME}/data/gvs/evaluation/with_sota_chm/sota_chms__gedi/val/ \
+        +h5_dir=${HOME}/data/gvs/datasets/splits/split_test0.1_cal0.1_val0.1_seed42_v1/h5_partitions_val
+;;
+24)
+echo extract gedi data from h5 files for cal
+python -m datasets._h5_dataset task=extract_gedi_from_h5 year=2020 +save_dir=${HOME}/data/gvs/gedi/veg_sensitivity_gt0p95/subset_cal/original_with_sota_chms/2020 \
+        +index_table_dir=${HOME}/data/gvs/gedi/veg_sensitivity_gt0p95/subset_cal/original_with_sota_chm/2020 \
+        +h5_dir=${HOME}/data/gvs/datasets/splits/split_test0.1_cal0.1_val0.1_seed42_v1/h5_partitions_cal
 ;;
 *)
 echo runnning nothing ;;
