@@ -9,8 +9,6 @@ import numpy as np
 import torch
 import gc
 import psutil
-from torch.utils.data import DataLoader
-from utils import get_deep_size
 
 logger = logging.getLogger(__name__)
 
@@ -279,88 +277,3 @@ def get_number_of_open_files():
             # Skip processes that no longer exist or are inaccessible
             continue
     return total_open_files
-
-if __name__ == '__main__':
-    import hydra
-    @hydra.main(config_name='train', config_path='../config', version_base='1.2')
-    def main(cfg):
-        cfg.data.init_args.val_fp = '~/data/gvs/train_subsets/train0_filtered_v1.beton'
-        cfg.data.init_args.train_fp = '~/data/gvs/train_subsets/train*_filtered_v1.beton'
-        cfg.data.init_args.batch_size = 4096
-        cfg.data.init_args.distributed = False
-        cfg.data.init_args.order = 'SEQUENTIAL'
-
-        # ## USING DATALOADER
-        # datamodel = FFCVDataModel(**cfg.data.init_args)
-        # val_dataloader = datamodel.val_dataloader()
-        # for epoch in range(10):
-        #     batch_from_loader = []
-        #     for i, batch in enumerate(val_dataloader):
-        #         batch_from_loader.append(batch[-1].numpy().copy())
-        #     batch_from_loader = np.concatenate(batch_from_loader)
-        #     print(batch_from_loader.sum(), np.unique(batch_from_loader).shape)
-
-        # ## USING ITERATOR
-        # # cfg.data.init_args.order = 'RANDOM'
-        # datamodel = FFCVDataModel(return_iter = True, **cfg.data.init_args)
-        # for epoch in range(10):
-        #     val_dataiter = datamodel.val_dataloader()
-        #     batch_from_loader = []
-        #     for i, batch in enumerate(val_dataiter):
-        #         batch_from_loader.append(batch[-1].numpy().copy())
-        #     batch_from_loader = np.concatenate(batch_from_loader)
-        #     val_dataiter.close()
-        #     print(batch_from_loader.sum(), np.unique(batch_from_loader).shape)
-        
-        
-
-
-        # datamodel = FFCVDataModel(return_iter=False,**cfg.data.init_args)
-        # train_dataloader1 = datamodel.train_dataloader()
-        # t0 = time.time()
-        # iter1 = iter(train_dataloader1)
-        # print('time taken to get iterator: ', time.time()-t0)
-        # for epoch in range(2):
-
-        #     print('length of train_dataloader: ', len(train_dataloader1))
-        #     batch_from_loader = []
-        #     for i, batch in enumerate(train_dataloader1):
-        #         print(batch[1].mean())
-        #         batch_from_loader.append(batch[-1].numpy().copy())
-        #         if i >= 9:
-        #             break
-        #     batch_from_loader = np.concatenate(batch_from_loader)
-        #     print(batch_from_loader.sum(), np.unique(batch_from_loader).shape)
-        # print('finished loading from loader1')
-        
-        # print()
-        # print()
-        datamodel = FFCVDataModel(**cfg.data.init_args)
-        rh1_above_100_idxs = []
-        rh1_above_20_idxs = []
-        for epoch in range(20):
-            # print('length of train_dataloader2: ', len(train_dataloader2))
-            # train_dataiter = iter(train_dataloader2)
-            train_dataiter = datamodel.train_dataloader()
-            for batch in tqdm(train_dataiter):
-                import ipdb; ipdb.set_trace()
-                rh1_above_100_idx, = torch.where(batch[1][:, 1] > 100)
-                if rh1_above_100_idx.shape[0] > 0:
-                    print('abnormal batch found')
-                    rh1_above_100_idx
-                    rh1_above_100_idxs.append(rh1_above_100_idx)
-                rh1_above_20_idx, = torch.where(batch[1][:, 1] > 20)
-                if rh1_above_20_idx.shape[0] > 0:
-                    rh1_above_20_idxs.append(rh1_above_20_idx)
-        print('finished loading from iterator')
-        print(len(rh1_above_100_idxs), len(rh1_above_20_idxs))
-        print(rh1_above_20_idxs)
-        print(rh1_above_100_idxs)
-        rh1_above_20_idxs = torch.cat(rh1_above_20_idxs)
-        rh1_above_100_idxs = torch.cat(rh1_above_100_idxs)
-        torch.save(rh1_above_20_idxs, 'output/rh1_above_20_idxs.pt')
-        torch.save(rh1_above_100_idxs, 'output/rh1_above_100_idxs.pt')
-        
-
-    main()
-    

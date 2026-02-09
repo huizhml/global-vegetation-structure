@@ -19,41 +19,18 @@ from rio_cogeo.profiles import cog_profiles
 import pystac
 from tqdm import tqdm
 from omegaconf import OmegaConf, MISSING
-
-
+from config.base_config_class import FunctionConfig
 
     
 @dataclass
-class KeyRHsGlobalConfig:
-    _target_: str = "visualization.run.run_mosaic_for_key_rhs_global"
+class ResampleAndMosaicConfig(FunctionConfig):
     year: int = 2020
-    rh_idx: str = '98'
+    rh_idx: int = 98
     q_idx: int = 1
-    s2_grid_file: str = '~/data/gvs/s2_tiles_with_growing_months.parquet'
-    stac_collection_dir: str = '~/data/gvs/products/gvsm_stac_catalog/vsm_local'
-    
-
-def run_mosaic_for_key_rhs_global(year=2020, rh_idx: str = '98', q_idx=1, s2_grid_file: str = None,
-                           stac_collection_dir: str = None):
-
-    rh_idxs = [int(rh) for rh in rh_idx.split(' ')]
-    for rh_idx in rh_idxs:
-        print(rh_idx)
-        # resample_and_mosaic(year, rh_idx, q_idx, s2_grid_file, stac_collection_dir) 
-
-
-        
-@dataclass
-class FullRHsGlobalConfig:
-    year: int = 2020
-    q_idx: int = 1
-    _target_: str = "visualization.run.run_mosaic_for_full_rhs_global"
-
-def run_mosaic_for_full_rhs_global(year=2020, q_idx: int=1):
-    for rh_idx in range(0, 101):
-        print(rh_idx)
-        # resample_and_mosaic(year, rh_idx, 1, s2_grid_file, stac_collection_dir)
-
+    pred_dir: str = '~/data/gvs/predictions/2020/blended/tiles/geotiff/'
+    s2_grid_file: str = '~/data/gvs/state/s2_tiles_with_growing_months.parquet'
+    save_dir: str = '~/data/gvs/predictions/2020/blended/mosaic/'
+    _target_: str = "visualization.create_global_view.resample_and_mosaic"
 
 @dataclass
 class CheckfterBiasCorrectionConfig:
@@ -64,31 +41,35 @@ class CheckfterBiasCorrectionConfig:
     average_across_rhs: bool = False
     _target_: str = "visualization.run.check_mosaic_after_bias_correction"
     
-def check_mosaic_after_bias_correction(year=2020, rh_idx: int = 98, q_idx: int = 1, bias_dir: str = None, save_dir: str = None, bias_cutoff: Optional[float] = None, average_across_rhs: bool = False):
-    pass
-
 
 defaults = [
-    {'mosaic': 'full_global'},
+    {'run': 'full_global'},
     "_self_"
 ]
 
 @dataclass
-class MosaicConfig:
+class RunConfig:
     defaults: List[Any] = field(default_factory=lambda: defaults)
-    mosaic: Any = MISSING
+    run: Any = MISSING
     
 cs = ConfigStore.instance()
-cs.store(group='mosaic', name='full_global', node=FullRHsGlobalConfig)
-cs.store(group='mosaic', name='key_rhs_global', node=KeyRHsGlobalConfig)
-cs.store(group='mosaic', name='check_after_bias_correction', node=CheckfterBiasCorrectionConfig)
-cs.store(name='config', node=MosaicConfig)
+cs.store(group='run', name='resample_and_mosaic', node=ResampleAndMosaicConfig)
+cs.store(group='run', name='check_after_bias_correction', node=CheckfterBiasCorrectionConfig)
+# ================================ Main Config ================================
+cs.store(name='base_config', node=RunConfig) # NOTE: name here should match the default in ../config/base/no_log.yaml
 
-@hydra.main(config_name='config', version_base='1.2')
+@hydra.main(config_name='no_log', version_base='1.2', config_path='../config/base')
 def main(cfg):
     t0 = time.time()
     print(OmegaConf.to_yaml(cfg))
-    instantiate(cfg.mosaic)
+    if cfg.run.target_type == 'function':
+        instantiate(cfg.run)
+    elif cfg.run.target_type == 'class':
+        obj = instantiate(cfg.run)
+        excute_method = getattr(obj, cfg.run.target_method)
+        excute_method()
+    else:
+        raise ValueError(f"Invalid target: {cfg.run.target_type}")
     t1 = time.time()
     print(f'Time taken: {t1 - t0} seconds')
 

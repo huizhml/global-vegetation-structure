@@ -1,33 +1,20 @@
 import os
-from typing import List, Iterable, Union
 import time
 import torch
 import zarr
 from zarr.storage import LocalStore
 import numpy as np
-import math
 from pathlib import Path
 from torch.utils.data import Dataset
 import lightning as L
-import rasterio
-from rasterio.windows import Window
-from rasterio.enums import Compression
 import xarray as xr
-from pyproj import Transformer
 import random
-from tqdm import tqdm
 import torch
-import torch.distributed as dist
-from torch.utils.data import IterableDataset
-from torch.utils.data import DataLoader, IterableDataset, get_worker_info
-from utils import get_dense_latlon
-from const import LAT_MEAN, LAT_STD, LON_SIN_MEAN, LON_SIN_STD, LON_COS_MEAN, LON_COS_STD, SLOPE_MEAN, SLOPE_STD
+from download.core.utils import get_dense_latlon
+from const import MASKED_VALUE
 
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="zarr.codecs.vlen_utf8")
-MASKED_VALUE = 32767
-RH100_idx = 301
-RH98_idx = 295
 
 def zarrdataset_worker_init_fn(worker_id):
     """ZarrDataset multithread workers initialization function.

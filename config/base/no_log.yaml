@@ -1,0 +1,23 @@
+defaults:
+  - base_config
+  - _self_
+
+
+
+hydra:
+  # 1. Disable the creation of the .hydra/ directory (config dumps)
+  output_subdir: null
+  
+  # 2. Prevent creating a new directory for each run
+  run:
+    dir: .
+    
+  # 3. Disable the 'user' log file (usually main.log)
+  job_logging:
+    root:
+      handlers: [console]  # Use only the console handler, remove 'file'
+
+  # 4. Disable the 'hydra' log file (usually hydra.log)
+  hydra_logging:
+    root:
+      handlers: [console]  # Use only the console handler, remove 'file'

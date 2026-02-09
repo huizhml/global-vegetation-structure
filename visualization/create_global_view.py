@@ -240,16 +240,12 @@ def check_mosaic_after_bias_correction(
 
 
 def resample_and_mosaic(year=2020, rh_idx=98, q_idx=1, countries: str = None, s2_grid_file: str = None,
-                        stac_collection_dir: str = None):
-
-    # stac_collection_dir = Path(stac_collection_dir).expanduser()
-    if year == 2024:
-        pred_dir = Path('~/data/gvs/deploy/predictions_gtiff_2024').expanduser()
-    else:
-        pred_dir = Path(f'~/data/gvs/deploy/predictions_corrected_blended_v1_2020_cog/').expanduser()
-
-    save_dir = pred_dir.parent / f"global_mosaic_{year}"
+                        pred_dir: str = None, save_dir: str = None, **kwargs):
+    pred_dir = Path(pred_dir).expanduser()
+    save_dir = Path(save_dir).expanduser()
+    save_dir.mkdir(parents=True, exist_ok=True)
     tiles = os.listdir(pred_dir)
+    tiles = [tile for tile in tiles if (pred_dir / f'{tile}/RH{rh_idx}_Q{q_idx}.tif').exists()]
     if countries is not None:
         countries = Path(countries).expanduser()
         tiles, regions = get_tiles_in_countries(countries, s2_grid_file)
@@ -266,8 +262,8 @@ def resample_and_mosaic(year=2020, rh_idx=98, q_idx=1, countries: str = None, s2
         )
 
     save_dir.mkdir(parents=True, exist_ok=True)
-    temp_dir = save_dir / f"tiles_res_1km_RH{rh_idx}_Q{q_idx}"
-    thumb_path = save_dir / f"thumb_RH{rh_idx}_Q{q_idx}.tif"
+    temp_dir = save_dir / f"tmp_tiles_resampled_1km_RH{rh_idx}_Q{q_idx}"
+    thumb_path = save_dir / f"global_mosaic_{year}_RH{rh_idx}_Q{q_idx}.tif"
     temp_dir = Path(temp_dir).expanduser()
     temp_dir.mkdir(parents=True, exist_ok=True)
 
@@ -348,56 +344,3 @@ def resample_and_mosaic(year=2020, rh_idx=98, q_idx=1, countries: str = None, s2
     )
     cog_translate(thumb_path, cog_path, output_profile, config=config, in_memory=False, quiet=True, use_cog_driver=True)
     print(f"✅ Global mosaic written to {cog_path}")
-
-
-def run_mosaic_for_key_rhs(year=2020, rh_idxs: str = '98', q_idx=1, countries: str = None, s2_grid_file: str = None,
-                           stac_collection_dir: str = None):
-    print(rh_idx)
-    rh_idxs = [int(rh) for rh in rh_idxs.split(' ')]
-    for rh_idx in rh_idxs:
-        resample_and_mosaic(year, rh_idx, q_idx, countries, s2_grid_file, stac_collection_dir)
-
-
-def run_mosaic_for_all_rhs(year=2020):
-    for rh_idx in range(0, 101):
-        resample_and_mosaic(year, rh_idx, 1)
-
-
-@dataclass
-class MosaicConfig:
-    year: int = 2020
-    rh_idxs: str = '98,100'
-    rh_idx: int = 98
-    q_idx: int = 1
-    countries: Optional[str] = None
-    s2_grid_file: str = '~/data/gvs/s2_tiles_with_growing_months.parquet'
-    stac_collection_dir: str = '~/data/gvs/products/gvsm_stac_catalog/vsm_local'
-    task: str = 'run_mosaic_for_key_rhs'
-
-
-cs = ConfigStore.instance()
-cs.store(name='mosaic', node=MosaicConfig)
-
-
-@hydra.main(config_name='mosaic', version_base='1.2')
-def main(cfg):
-    if cfg.task == 'run_mosaic_for_key_rhs':
-        run_mosaic_for_key_rhs(cfg.year, cfg.rh_idxs, cfg.q_idx, cfg.countries,
-                               cfg.s2_grid_file, cfg.stac_collection_dir)
-    elif cfg.task == 'run_mosaic_for_all_rhs':
-        run_mosaic_for_all_rhs(cfg.year)
-    elif cfg.task == 'check_mosaic_after_bias_correction':
-        save_dir = cfg.get(
-            'save_dir', f'~/data/gvs/predictions/{cfg.year}/bias_corrected_slope_lt20_minpoints2000/mosaic')
-        bias_dir = cfg.get(
-            'bias_dir', f'~/data/gvs/assets/bias_correction_stats/slope_lt20_minpoints2000/{cfg.year}/stats_by_tile')
-        bias_cutoff = cfg.get('bias_cutoff', None)
-        average_across_rhs = cfg.get('average_across_rhs', False)
-        bias_col = cfg.get('bias_col', 'bias')
-        check_mosaic_after_bias_correction(
-            cfg.year, cfg.rh_idx, cfg.q_idx, cfg.stac_collection_dir, bias_dir=bias_dir, save_dir=save_dir, bias_cutoff=bias_cutoff,
-            bias_col=bias_col, average_across_rhs=average_across_rhs)
-
-
-if __name__ == "__main__":
-    main()
