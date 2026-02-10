@@ -1,0 +1,41 @@
+Name: "GVSM: A Global Vegetation Structure Model of the Earth"
+Description: |
+  To better support carbon and biodiversity monitoring and to support the SDGs, 30x30, and EUDR, we have developed a global vertical vegetation structure model (VSM) to describe the full 3D-structure of vegetation at high spatial resolution (10m GSD). The data is organized as Cloud Optimized Geotifs (COG) and the data is approx 720TB (approx 360 TB per year). We have computed the global VSM at 10meter spatial resolution for two years (2020, 2024).
+Documentation:
+Contact: huzh@di.ku.dk,nila@di.ku.dk, igel@di.ku.dk
+ManagedBy: "[University of Copenhagen](https://www.ku.dk)"
+UpdateFrequency: Not applicable
+Tags:
+  - aws-pds
+  - vegetation-structure
+  - computer-vision
+  - remote-sensing
+License: "[Creative Commons Attribution 4.0 International](https://creativecommons.org/licenses/by/4.0/)"
+Citation:
+Resources:
+  - Description:
+    ARN: arn:aws:s3:::gvsm-data
+    Region: us-west-2
+    Type: s3
+    Explore:
+DataAtWork:
+  Tutorials:
+    - Title:
+      URL:
+      NotebookURL:
+      AuthorName:
+      AuthorURL:
+      Services:
+  Tools & Applications:
+    - Title:
+      URL:
+      AuthorName:
+      AuthorURL:
+  Publications:
+    - Title:
+      URL:
+      AuthorName:
+      AuthorURL:
+DeprecatedNotice:
+ADXCategories:
+  -    

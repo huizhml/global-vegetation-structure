@@ -20,7 +20,7 @@ from lightning.pytorch.loggers import Logger
 from lightning.pytorch.utilities.rank_zero import rank_zero_warn
 from lightning.pytorch.cli import LightningArgumentParser
 from torch.optim.optimizer import Optimizer
-from utils import create_shared_array
+from download.core.utils import create_shared_array
 
 
 ArgsType = Optional[Union[List[str], Dict[str, Any], Namespace]]

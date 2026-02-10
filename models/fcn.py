@@ -1,14 +1,10 @@
 import torch
 import torch.nn as nn
 from typing import Any, List
-import lightning as L
 from torchsummary import summary
 from .modules.util import ConvNormActivation
-from utils import get_class
+from download.core.utils import get_class
 from ._base_pl_model import BaseModel
-from models.modules.util import get_nonveg_mask
-from const import LAT_MEAN, LAT_STD, LON_SIN_MEAN, LON_SIN_STD, LON_COS_MEAN, LON_COS_STD, SLOPE_MEAN, SLOPE_STD
-
 
 class DoubleConvSkip(nn.Module):
     def __init__(self, in_channels, out_channels, activation_layer, norm_layer, pool: bool = False,

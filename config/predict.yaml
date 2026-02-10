@@ -14,7 +14,7 @@ lr_scheduler:
     # step_size: 30
 
 data:
-  class_path: datasets._zarr_dataset_deploy.DeployDataModel
+  class_path: datasets.zarr_dataset_deploy.DeployDataModel
   init_args: 
     pred_fp: ~/data/gvs/deploy/inference_2020.zarr 
     tile_id: 32MQE

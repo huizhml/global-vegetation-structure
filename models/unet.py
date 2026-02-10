@@ -6,7 +6,7 @@ from torchsummary import summary
 
 from .modules.unet_blocks import UnetBlockDeep, CatResBlock, PassBlock, get_upscaler
 from .modules.util import CustomPixelShuffle_ICNR, icnr_init
-from utils import get_class
+from download.core.utils import get_class
 
 class UNet(nn.Module):
 

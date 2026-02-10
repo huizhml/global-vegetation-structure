@@ -16,7 +16,6 @@ from pyproj import Transformer
 import pystac_client
 import adlfs
 import pandas as pd
-import dask.dataframe as dd
 import requests
 from io import StringIO
 from shapely.geometry import shape

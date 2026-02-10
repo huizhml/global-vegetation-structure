@@ -1,17 +1,12 @@
-import time
-import copy
 import torchmetrics
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import numpy as np
-from typing import Any, Dict
-from lightning import Trainer, LightningModule
-import kornia.augmentation as K
+from typing import Any
+from lightning import LightningModule
 from kornia.enhance import normalize
 from pathlib import Path
-from models.metrics import MAE, RMSE, MAPE, ME
-from utils import print_size_of_model
+from models.metrics import MAE, RMSE, ME
 from models.modules.util import get_veg_mask
 from const import LAT_MEAN, LAT_STD, LON_SIN_MEAN, LON_SIN_STD, LON_COS_MEAN, LON_COS_STD, SLOPE_MEAN, SLOPE_STD
 

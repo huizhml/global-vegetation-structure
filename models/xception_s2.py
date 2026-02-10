@@ -3,14 +3,8 @@ from typing import List
 from collections import OrderedDict
 import torch
 import torch.nn as nn
-import lightning as L
-from torch.hub import download_url_to_file
-from torch.ao.quantization import QuantStub, DeQuantStub
-import torchmetrics
-import wandb
-from wandb.plot.custom_chart import plot_table
 from models.modules.xception_blocks import PointwiseBlock, DoubleSepConvBlock, conv1x1
-from utils import get_class
+from download.core.utils import get_class
 
 
 class ResLayer(nn.Module):

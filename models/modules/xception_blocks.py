@@ -1,7 +1,7 @@
 
 import torch.nn as nn
 from typing import List
-from utils import get_class
+from download.core.utils import get_class
 
 def conv3x3(in_channels, out_channels, stride=1, groups=1, dilation=1):
     """3x3 convolution with padding"""
