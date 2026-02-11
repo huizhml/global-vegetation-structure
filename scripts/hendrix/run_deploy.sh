@@ -58,7 +58,7 @@ mkdir -p $save_dir
 #     meta_file=${HOME}/data/gvs/deploy/slurm_job_files_${year}/deploy_s2_items_${year}_part${idx}.parquet
 # fi
 
-tile_id=34UDC
+tile_id=16SBA
 meta_file=none
 echo "Processing tile ID: $tile_id, line $line_num from $tile_id_file"
 echo "meta_file: $meta_file"
