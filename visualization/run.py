@@ -21,7 +21,16 @@ from tqdm import tqdm
 from omegaconf import OmegaConf, MISSING
 from config.base_config_class import FunctionConfig
 
-    
+@dataclass
+class CreatePdfThumbConfig(FunctionConfig):
+    tif_dir: str = '~/data/gvs/predictions/2020/blended/tiles/cog/'
+    tile_id_file: str = '~/data/gvs/assets/worklists/tiles_system_biased.txt'
+    pdf_file: str = '~/data/gvs/diagnostics/pred_thumbs/issue_tiles.pdf'
+    overview_level: int = 2
+    top_rh: int = 98
+    low_rh: int = 25
+    _target_: str = "visualization.core.create_pdf_thumb.make_pdf_thumb"
+
 @dataclass
 class ResampleAndMosaicConfig(FunctionConfig):
     year: int = 2020
@@ -55,6 +64,7 @@ class RunConfig:
 cs = ConfigStore.instance()
 cs.store(group='run', name='resample_and_mosaic', node=ResampleAndMosaicConfig)
 cs.store(group='run', name='check_after_bias_correction', node=CheckfterBiasCorrectionConfig)
+cs.store(group='run', name='create_pdf_thumb', node=CreatePdfThumbConfig)
 # ================================ Main Config ================================
 cs.store(name='base_config', node=RunConfig) # NOTE: name here should match the default in ../config/base/no_log.yaml
 
