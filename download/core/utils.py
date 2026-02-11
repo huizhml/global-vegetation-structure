@@ -657,7 +657,7 @@ def harmonize_to_old(data):
         A DataArray with all values harmonized to the old
         processing baseline.
     """
-    cutoff = datetime.datetime(2022, 1, 25)
+    cutoff = datetime(2022, 1, 25)
     offset = 1000
     bands = [
         "B01",

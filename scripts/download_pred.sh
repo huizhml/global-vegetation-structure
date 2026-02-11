@@ -7,12 +7,12 @@ q_idx=${5:-1}
 case $1 in
 00)
 # =======================================
-#    DOWNLOAD One RH PREDICTION (COG) FROM Hendrix
+#    DOWNLOAD One RH PREDICTION (COG, original) FROM Hendrix
 # =======================================
 dst_dir=${HOME}/gvsm/predictions/${year}/original/tiles/cog/${tile_id}
 mkdir -p $dst_dir
 src_dir=/home/ksb781/data/gvs/predictions/${year}/original/tiles/cog/${tile_id}
-host=ksb781@hendrixgate02fl
+host=ksb781@hendrixgate01fl
 scp -r $host:$src_dir/RH${rh_idx}_Q${q_idx}.tif $dst_dir/
         ;;
 01)
@@ -29,11 +29,11 @@ rsync -avz --progress "$host:$src_dir/RH*_Q${q_idx}.cog.tif" $dst_dir/
 # =======================================
 #    DOWNLOAD ONE RH PREDICTION (uncompressed GTiff) FROM Hendrix
 # =======================================
-dst_dir=${HOME}/GVS/predictions_${year}/${tile_id}_GTiff
+dst_dir=${HOME}/gvsm/predictions/${year}/original/tiles/geotiff/${tile_id}
 mkdir -p $dst_dir
-src_dir=/home/ksb781/data/gvs/deploy/predictions_GTiff_${year}/${tile_id}_GTiff
-host=ksb781@hendrixgate02fl
-scp -r $host:$src_dir/RH${rh_idx}_Q${q_idx}_uncompressed.tif $dst_dir/
+src_dir=/home/ksb781/data/gvs/predictions/${year}/original/tiles/geotiff/${tile_id}
+host=ksb781@hendrixgate01fl
+rsync -avz --progress "$host:$src_dir/RH${rh_idx}_Q${q_idx}.tif" $dst_dir/
         ;;
 
 02)
@@ -82,5 +82,15 @@ for tile_id in $(cat temp.txt); do
     scp -r $host:$src_dir/RH${rh_idx}_Q${q_idx}.tif $dst_dir/
 done
 ;;
+05)
+# =======================================
+#    DOWNLOAD One RH PREDICTION (COG, Blended) FROM Hendrix
+# =======================================
+dst_dir=${HOME}/gvsm/predictions/${year}/blended/tiles/cog/${tile_id}
+mkdir -p $dst_dir
+src_dir=/home/ksb781/data/gvs/predictions/${year}/blended/tiles/cog/${tile_id}
+host=ksb781@hendrixgate01fl
+scp -r $host:$src_dir/RH${rh_idx}_Q${q_idx}.tif $dst_dir/
+        ;;
 
 esac

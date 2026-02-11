@@ -116,7 +116,7 @@ def main(cfg: DictConfig):
     from kornia.enhance import normalize
     from datasets.transforms import MEAN, STD
     import matplotlib.pyplot as plt
-    from datasets._zarr_dataset_deploy import S2DatasetStream
+    from datasets.zarr_dataset_deploy import S2DatasetStream
     
     model = get_model(cfg.model, cfg.run_id, cfg.wandb_project, cfg.bias_correction_column, cfg.model_alias)
     model = model.to('cuda')
