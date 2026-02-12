@@ -20,13 +20,14 @@ logging.getLogger("rasterio").setLevel(logging.ERROR)
 logging.getLogger('rasterio._env').setLevel(logging.ERROR)
 
 from .utils import authenticate
-authenticate()
+# authenticate()
 
 class GEEDownloader:
     """
     A class for downloading GEDI data from Google Earth Engine.
     
     """
+    _ee_initialized = False
     def __init__(self, s2_grid_file: str=None, output_dir: str=None, patch_size: int=15, out_res: int=10, **kwargs):
         self.buffer_size = (patch_size * out_res) // 2  # in meters
         self.patch_size = patch_size
@@ -44,6 +45,14 @@ class GEEDownloader:
                 "chunksizes": (1, 64, self.patch_size, self.patch_size)
             }
         }
+        self._ensure_authenticated()
+
+    def _ensure_authenticated(self):
+        """Ensures Earth Engine is initialized exactly once per process."""
+        if not GEEDownloader._ee_initialized:
+            authenticate()  # Your existing utility function
+            # Or directly: ee.Initialize(project='your-project')
+            GEEDownloader._ee_initialized = True
 
     def assign_s2_grid_cells(self, locations: gpd.GeoDataFrame):
         '''
