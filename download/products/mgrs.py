@@ -73,6 +73,7 @@ class MGRS:
         update_mgrs(mgrs_df, missing_file:Path)
             Update the MGRS data to include all GEDI assets.
     """
+    _ee_initialized = False
 
     def __init__(self, mgrs_file:str,zone_count_tmp:str=None, version:int=1, missing_file:str=None, gee_asset:str=None, use_dask:bool=False, npartitions=60, **kwargs):
         """
@@ -92,6 +93,14 @@ class MGRS:
         self.npartitions = npartitions
         self.missing_file = missing_file
         self.version = version
+        self._ensure_authenticated()
+
+    def _ensure_authenticated(self):
+        """Ensures Earth Engine is initialized exactly once per process."""
+        if not MGRS._ee_initialized:
+            authenticate()  # Your existing utility function
+            # Or directly: ee.Initialize(project='your-project')
+            MGRS._ee_initialized = True
 
     def get_mgrs(self):
         """
@@ -196,4 +205,3 @@ class MGRS:
         return row
         
 
-authenticate()

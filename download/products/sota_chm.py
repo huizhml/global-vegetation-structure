@@ -12,7 +12,7 @@ from dask.distributed import Client, LocalCluster
 
 from download.core import DaskDownloader
 from download.core.utils import authenticate, check_unfinished_files 
-authenticate()
+# authenticate()
 
 def set_fc_properties(row):
     geom = row.geometry
@@ -33,6 +33,8 @@ class SOTAChmDownloader(DaskDownloader):
         n_parallel: The number of parallel tasks to download the SOTA CHM data.
         debug: Whether to print debug information.
     """
+    _ee_initialized = False
+    
     def __init__(self, 
                  location_files: str=None,
                  save_dir: str=None, 
@@ -51,6 +53,14 @@ class SOTAChmDownloader(DaskDownloader):
         self.canopy_height_umd = ee.ImageCollection("users/potapovpeter/GEDI_V27")
         self.canopy_height_meta = ee.ImageCollection("projects/meta-forest-monitoring-okw37/assets/CanopyHeight")
         self.canopy_height_eth = ee.Image('users/nlang/ETH_GlobalCanopyHeight_2020_10m_v1').rename('RH98_ETH')
+        self._ensure_authenticated()
+
+    def _ensure_authenticated(self):
+        """Ensures Earth Engine is initialized exactly once per process."""
+        if not SOTAChmDownloader._ee_initialized:
+            authenticate()  # Your existing utility function
+            # Or directly: ee.Initialize(project='your-project')
+            SOTAChmDownloader._ee_initialized = True
 
     def download(self):
         cluster = LocalCluster()

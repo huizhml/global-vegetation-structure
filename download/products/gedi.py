@@ -39,7 +39,7 @@ def is_parquet_ok(path):
         return False
 
 
-authenticate()  # TODO: only authenticate when needed
+# authenticate()  # TODO: only authenticate when needed
 
 stac_endpoint = 'https://planetarycomputer.microsoft.com/api/stac/v1'
 api = pystac_client.Client.open(stac_endpoint, modifier=planetary_computer.sign_inplace)
@@ -163,6 +163,7 @@ class GEDI(DaskDownloader):
     # this is obtained from the total number of points we want to sample per year(75M) and the total landmass in the world
     nSampledPerKm2 = 0.7033933006651656
     GEDI_START = pd.Timestamp('2018-01-01')
+    _ee_initialized = False
 
     def __init__(self, year=2019, 
                  # all needed
@@ -211,6 +212,15 @@ class GEDI(DaskDownloader):
         self.random_state = random_state
         self.rewrite = rewrite
         self.key_file = key_file
+        
+        self._ensure_authenticated()
+
+    def _ensure_authenticated(self):
+        """Ensures Earth Engine is initialized exactly once per process."""
+        if not GEDI._ee_initialized:
+            authenticate()  # Your existing utility function
+            # Or directly: ee.Initialize(project='your-project')
+            GEDI._ee_initialized = True
 
     @dask.delayed
     def download_zone(self, zone):

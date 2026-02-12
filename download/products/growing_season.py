@@ -16,7 +16,7 @@ from download.core.utils import get_s2_tiles_by_landmass
 
 from dotenv import load_dotenv
 load_dotenv()
-authenticate()
+# authenticate()
 
 def drop_z(x, y, z=None):
     return (x, y)
@@ -34,6 +34,7 @@ class GrowingSeason:
     default_end_north = pd.to_datetime('2020-10-30')
     default_onset_south = pd.to_datetime('2020-10-01')
     default_end_south = pd.to_datetime('2021-04-30')
+    _ee_initialized = False
 
     def __init__(self, year, asset_id:str=None, save_dir:str=None, **kwargs):
         self.year = year
@@ -41,7 +42,14 @@ class GrowingSeason:
         self.base_date = pd.Timestamp(f'{year}-01-01')
         self.asset_id = asset_id
         self.save_dir = Path(save_dir).expanduser()
+        self._ensure_authenticated()
 
+    def _ensure_authenticated(self):
+        """Ensures Earth Engine is initialized exactly once per process."""
+        if not GrowingSeason._ee_initialized:
+            authenticate()  # Your existing utility function
+            # Or directly: ee.Initialize(project='your-project')
+            GrowingSeason._ee_initialized = True
 
     def get_growing_months_per_tile(self):
         '''Number of growing pixels for each month has been aggregated to Sentinel-2 tile in GEE'''
