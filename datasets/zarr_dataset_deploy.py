@@ -575,7 +575,7 @@ class S2DatasetStream(BaseDeployDataset):
         self.save_intermediate_tif = save_intermediate_tif
         if download_data and not self.h5_file.exists():
             print(f'{self.h5_file} does not exist, downloading...')
-            if self.metadata_file != 'none':
+            if self.metadata_file is None:
                 self.download_tile_by_api()
             else:
                 self.download_tile()
@@ -742,6 +742,7 @@ class S2DatasetStream(BaseDeployDataset):
             self.h5_file.with_name(f'{tile}_no_images_in_growing_months').touch()
             raise RuntimeError(f'{tile} has no images in growing months, bbox={bbox}, skipping...')
         # get top 30 images, 10 from the best orbits and 20 from the rest
+        df['s2:nodata_pixel_percentage'] = df['s2:nodata_pixel_percentage'].round()
         if (df['s2:nodata_pixel_percentage']==0).sum() > 0:
             best_orbits = df[df['s2:nodata_pixel_percentage']==0]['sat:relative_orbit'].unique()
             best = df[df['sat:relative_orbit'].isin(best_orbits)]
@@ -765,7 +766,7 @@ class S2DatasetStream(BaseDeployDataset):
         # get top 20 images
         df = df.drop_duplicates(subset='id')
         if len(df)>self.n_iamges_per_tile:
-            df['s2:nodata_pixel_percentage'] = df['s2:nodata_pixel_percentage'].round() # NOTE： maybe we should do this earlier, when getting top 30 images
+            # df['s2:nodata_pixel_percentage'] = df['s2:nodata_pixel_percentage'].round() # NOTE： maybe we should do this earlier, when getting top 30 images
             df = df.sort_values(['s2:nodata_pixel_percentage', 'eo:cloud_cover'])
             if (df['s2:nodata_pixel_percentage']==0).sum() > 0:
                 df = df.head(self.n_iamges_per_tile)

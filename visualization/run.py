@@ -21,16 +21,37 @@ from tqdm import tqdm
 from omegaconf import OmegaConf, MISSING
 from config.base_config_class import FunctionConfig
 
+
 @dataclass
-class CreatePdfThumbConfig(FunctionConfig):
-    tif_dir: str = '~/data/gvs/predictions/2020/blended/tiles/cog/'
+class CreateCloudCoverBoxplotConfig(FunctionConfig):
+    h5_dir: str = '~/data/gvs/inputs/inference_2020/'
     tile_id_file: str = '~/data/gvs/assets/worklists/tiles_system_biased.txt'
+    pdf_file: str = '~/data/gvs/diagnostics/pred_thumbs/system_biased_tiles_cloud_cover.pdf'
+    s2_grid_file: str = '~/data/gvs/state/s2_tiles_with_growing_months.parquet'
+    year: int = 2020
+    max_cloud_cover: int = 90
+    _target_: str = "visualization.core.create_boxplot.make_cloud_cover_boxplot"
+    
+    
+@dataclass
+class CreateRhPairPdfConfig(FunctionConfig):
+    tif_dir: str = '~/data/gvs/predictions/2020/blended/tiles/cog/'
+    tile_id_file: str = '~/data/gvs/assets/worklists/tiles_intile_abnormal.txt'
     pdf_file: str = '~/data/gvs/diagnostics/pred_thumbs/issue_tiles.pdf'
     overview_level: int = 2
     top_rh: int = 98
     low_rh: int = 25
-    _target_: str = "visualization.core.create_pdf_thumb.make_pdf_thumb"
-
+    _target_: str = "visualization.core.create_pdf_thumb.make_rh_pair_pdf"
+@dataclass
+class CreateTileGroupPdfConfig(FunctionConfig):
+    tif_dir: str = '~/data/gvs/predictions/2020/blended/tiles/cog/'
+    tile_id_file: str = '~/data/gvs/assets/worklists/tiles_system_biased.txt'
+    pdf_file: str = '~/data/gvs/diagnostics/pred_thumbs/system_biased_tiles.pdf'
+    s2_grid_file: str = '~/data/gvs/state/s2_tiles_with_growing_months.parquet'
+    stac_collection_dir: str = '~/data/gvs/products/gvsm_stac_catalog/vsm_local'
+    year: int = 2020
+    resolution: int = 100
+    _target_: str = "visualization.core.create_pdf_thumb.make_tile_group_pdf"
 @dataclass
 class ResampleAndMosaicConfig(FunctionConfig):
     year: int = 2020
@@ -64,7 +85,9 @@ class RunConfig:
 cs = ConfigStore.instance()
 cs.store(group='run', name='resample_and_mosaic', node=ResampleAndMosaicConfig)
 cs.store(group='run', name='check_after_bias_correction', node=CheckfterBiasCorrectionConfig)
-cs.store(group='run', name='create_pdf_thumb', node=CreatePdfThumbConfig)
+cs.store(group='run', name='create_pdf_thumb', node=CreateRhPairPdfConfig)
+cs.store(group='run', name='create_tile_group_pdf', node=CreateTileGroupPdfConfig)
+cs.store(group='run', name='create_cloud_cover_boxplot', node=CreateCloudCoverBoxplotConfig)
 # ================================ Main Config ================================
 cs.store(name='base_config', node=RunConfig) # NOTE: name here should match the default in ../config/base/no_log.yaml
 

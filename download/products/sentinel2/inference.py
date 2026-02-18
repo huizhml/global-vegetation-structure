@@ -40,6 +40,79 @@ warnings.filterwarnings("ignore",
                         message=".*vlen-utf8.*")
 
 
+def query_growing_season_images_by_api(tile_id: str, s2_grid: gpd.GeoDataFrame, year: int = 2020, max_cloud_cover: int = 90):
+    '''
+    Query the growing season images by API for the given tile.
+    Args:
+        tile_id: str, the tile ID
+        s2_grid: gpd.GeoDataFrame, the S2 grid
+        year: int, the year
+        max_cloud_cover: int, the maximum cloud cover
+    Returns:
+        df: gpd.GeoDataFrame, the growing season images
+    '''
+    datetime = f'{year}-01-01/{year}-12-31'
+    row = s2_grid[s2_grid['Name'] == tile_id]#.iloc[0]
+    if len(row) == 0:
+        raise RuntimeError(f'{tile_id} not found in s2_grid')
+    bbox = row.geometry.total_bounds
+    row = row.iloc[0]
+    bbox = [bbox[0], bbox[1], min(bbox[2], 180), bbox[3]]
+    search = api.search(collections='sentinel-2-l2a', bbox=bbox, datetime=datetime, 
+                        query={'eo:cloud_cover': {'lt': max_cloud_cover},
+                                's2:nodata_pixel_percentage': {'lt': 90},
+                                's2:mgrs_tile': {'eq': tile_id}})
+    items = search.item_collection()
+    
+    if len(items) == 0:
+        print(f'{tile_id} has no images, bbox={bbox}, skipping...')
+        raise RuntimeError(f'{tile_id} has no images, bbox={bbox}, skipping...')
+    df = gpd.GeoDataFrame.from_features(items.to_dict(), crs='epsg:4326')
+    df['id'] = df['s2:product_uri'].str.replace(r'_[A-Z]\d{4}', '', regex=True).str.replace('.SAFE', '')
+    month = pd.to_datetime(df['datetime']).dt.month
+    df = df[month.isin(row.growing_months)]
+    if len(df) == 0:
+        print(f'{tile_id} has no images in growing months, bbox={bbox}, skipping...')
+        raise RuntimeError(f'{tile_id} has no images in growing months, bbox={bbox}, skipping...')
+    return df
+
+
+def get_top_20_images(df, n_images_per_tile: int = 20):
+    # get top 30 images, 10 from the best orbits and 20 from the rest
+    df['s2:nodata_pixel_percentage'] = df['s2:nodata_pixel_percentage'].round()
+    if (df['s2:nodata_pixel_percentage']==0).sum() > 0:
+        best_orbits = df[df['s2:nodata_pixel_percentage']==0]['sat:relative_orbit'].unique()
+        best = df[df['sat:relative_orbit'].isin(best_orbits)]
+        rest = df[~df['sat:relative_orbit'].isin(best_orbits)]
+    else:
+        rest = df
+        best = pd.DataFrame([], columns=df.columns)
+        
+    unique_orbits = rest['sat:relative_orbit'].unique()
+    if len(unique_orbits) >= 2:
+        top_orbits = rest.groupby('sat:relative_orbit').min('s2:nodata_pixel_percentage').sort_values('s2:nodata_pixel_percentage').head(2)
+        rest = rest[rest['sat:relative_orbit'].isin(top_orbits.index)]
+        idx = rest.groupby('sat:relative_orbit')['eo:cloud_cover'].nsmallest(10).index.get_level_values(1)
+        rest = rest.loc[idx]
+        df = pd.concat([best, rest])
+    else:
+        rest = rest.sort_values('eo:cloud_cover').head(10)
+        best = best.sort_values('eo:cloud_cover').head(20)
+    df = pd.concat([best, rest])
+    
+    # get top 20 images
+    df = df.drop_duplicates(subset='id')
+    if len(df)> n_images_per_tile:
+        # df['s2:nodata_pixel_percentage'] = df['s2:nodata_pixel_percentage'].round() # NOTE： maybe we should do this earlier, when getting top 30 images
+        df = df.sort_values(['s2:nodata_pixel_percentage', 'eo:cloud_cover'])
+        if (df['s2:nodata_pixel_percentage']==0).sum() > 0:
+            df = df.head(n_images_per_tile)
+        else:
+            idx = df.groupby('orbit')['eo:cloud_cover'].nsmallest(n_images_per_tile//2).index.get_level_values(1)
+            df = df.loc[idx]
+    df = gpd.GeoDataFrame(df, geometry='geometry', crs='EPSG:4326')
+    return df
+
 class WorldS2(DaskDownloader):
     def __init__(self, year:int=2020, 
                     s2_parquet:str=None,
