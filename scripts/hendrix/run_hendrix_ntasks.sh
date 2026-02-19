@@ -21,24 +21,23 @@ fi
 # source setup_env.sh
 # module load lumio
 
-chmod +x postprocess/run.sh
+chmod +x postprocessing/run.sh
 
 case $1 in
 0)
 # ==========================================
-#   Run postprocessing with config file
+#   Run postprocessing with config files
 # ==========================================
 job_offset=${2:0}
 rhs_idx=${3:-key_rhs}
-srun postprocess/run.sh 3 $job_offset $rhs_idx
+srun postprocessing/run.sh 3 $job_offset $rhs_idx
 ;;
 1)
 # ==========================================
 #   Run postprocessing with list of tiles
 # ==========================================
-unfinished_tiles=(${2:-})
-year=${3:-2020}
-srun run_hendrix_correction.sh 1 "${unfinished_tiles[*]}" $year
+year=${2:-2020}
+srun postprocessing/run.sh 4 $year
 
 ;;
 

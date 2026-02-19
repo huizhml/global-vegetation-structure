@@ -41,7 +41,7 @@ def _translate(src_path, dst_path, profile="ZSTD", profile_options={}, **options
     )
     return True
 
-def translate_tile(src_dir, dst_dir, profile="ZSTD"):
+def translate_tile(src_dir, dst_dir, profile="ZSTD", **kwargs):
     src_dir = Path(src_dir).expanduser()
     dst_dir = Path(dst_dir).expanduser()
     dst_dir.mkdir(exist_ok=True)

@@ -14,7 +14,7 @@
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=huzh@di.ku.dk
 ##SBATCH --exclude hendrixgpu26fl
-#SBATCH --exclude hendrixgpu12fl,hendrixgpu11fl,hendrixgpu26fl
+#SBATCH --exclude hendrixgpu12fl,hendrixgpu11fl
 echo "***************************** JOB INFO *****************************"
 echo "Host: $HOSTNAME"
 echo "Job Name: $SLURM_JOB_NAME"
@@ -25,115 +25,34 @@ echo "Time requested: $SLURM_TIMELIMIT"
 scontrol show job $SLURM_JOB_ID | grep "TRES="
 echo "********************************************************************"
 
+source scripts/hendrix/utils.sh
+
+case $1 in
+1) 
+# **************************************************************
+#    Predict one tile in one job, get tile_id from txt file
+# **************************************************************
 line_num=${SLURM_ARRAY_TASK_ID:-2}
-year=${1:-2020}
 stream_input=${2:-False}
-repredict_tiles=${3:-True}
+year=${3:-2020}
+repredict_tiles=${4:-True}
 save_dir=~/data/gvs/predictions/${year}/original/tiles/geotiff
 mkdir -p $save_dir
-# hostname=$(hostname)
-# if [ "$hostname" == "hendrixgpu26fl.unicph.domain" ] || [ "$hostname" == "hendrixgpu01fl.unicph.domain" ]; then
-#     save_dir=~/data/gvs/deploy/predictions_GTiff_${year}
-#     echo "Host is $hostname (disk dead). Write to $save_dir"
-# else
-#     save_dir=/scratch/predictions_${year}
-#     echo "Host is $hostname. Write to $save_dir"
-# fi
 
-# **************************************************************
-#              Predict one tile in one job
-# **************************************************************
-# tile_id_file=${HOME}/data/gvs/deploy/unfinished_tiles_${year}.txt
-# tile_id_file=${HOME}/data/gvs/deploy/slurm_job_files_${year}/deploy_s2_items_${year}_part0.txt
-# tile_id_file=${HOME}/data/gvs/deploy/predicted_not_ordered_tiles_${year}.txt
-# tile_id_file=${HOME}/data/gvs/deploy/slurm_job_files_${year}/deploy_s2_items_${year}_corrupted_predictions.txt
-# line=$(sed -n "${line_num}p" $tile_id_file)
-# IFS=',' read -r tile_id idx <<< "$line"
-# echo "Line $line_num: Tile=$tile_id, idx=$idx"
-# if [ -z "$idx" ]; then
-#     echo "idx is null, no meta file"
-#     meta_file='none'
-# else
-#     idx=$(printf "%d" $idx)
-#     meta_file=${HOME}/data/gvs/deploy/slurm_job_files_${year}/deploy_s2_items_${year}_part${idx}.parquet
-# fi
-
-tile_id=16RCV
+tile_id_file=${HOME}/data/gvs/assets/worklists/tiles_duplicated.txt
+tile_id=$(sed -n "${line_num}p" $tile_id_file)
 meta_file=none
 echo "Processing tile ID: $tile_id, line $line_num from $tile_id_file"
 echo "meta_file: $meta_file"
 
-# translate_flag="${HOME}/data/gvs/deploy/flags_translate_update_${year}/${tile_id}_done"
-# translate_flag_new="${HOME}/data/gvs/deploy/flags_inference_update_${year}/${tile_id}_best_images_done"
-# if [ -f "$translate_flag" ] || [ -f "$translate_flag_new" ]; then
-#     echo "Translate flag file $translate_flag or $translate_flag_new exists. Skipping tile $tile_id"
-#     continue
-# fi
-# inference_flag="${HOME}/data/gvs/deploy/inference_flags_${year}/${tile_id}_best_images_done"
-# if [ "$repredict_tiles" == "True" ]; then
-# # remove inference flag instead of skip checking, since the inference may fail
-#     rm -f $inference_flag
-# fi    
-# if [ -f "$inference_flag" ]; then
-#     echo "Inference flag file $inference_flag exists. Skipping tile $tile_id"
-#     exit 0
-# fi
-echo "Processing tile ID: $tile_id"
-echo "***************************** START INFERENCE *****************************"
-run_id=cg11fpjr
-echo run prediction for model $run_id for tile $tile_id;
-if [ "$stream_input" == "True" ]; then
-    echo "Stream input"
-    python run.py predict -c config/predict.yaml --model.backbone config/model/xception_mix_order.yaml \
-            --data.init_args.tile_id $tile_id \
-            --data.init_args.metadata_file $meta_file \
-            --data.init_args.s2_grid_file ${HOME}/data/gvs/state/s2_tiles_with_growing_months.parquet \
-            --data.init_args.pred_fp ${HOME}/data/gvs/inputs/inference_${year} \
-            --data.init_args.prediction_dir ${save_dir}/${tile_id} \
-            --data.init_args.year $year \
-            --data.init_args.batch_size 1 \
-            --data.init_args.cache_predictions False \
-            --data.init_args.stream_input True \
-            --data.init_args.download_data True \
-            --data.init_args.debug False \
-            --trainer.logger.init_args.resume False \
-            --trainer.logger.init_args.offline True \
-            --trainer.logger.init_args.save_dir /tmp \
-            --trainer.logger.init_args.id $run_id 
-else
-    python run.py predict -c config/predict.yaml --model.backbone config/model/xception_mix_order.yaml \
-            --data.init_args.input_lat_lon True \
-            --data.init_args.num_workers 4 \
-            --data.init_args.tile_id $tile_id \
-            --data.init_args.metadata_file $meta_file \
-            --data.init_args.pred_fp ~/data/gvs/inputs/inference_${year}.zarr \
-            --data.init_args.prediction_dir $save_dir/${tile_id} \
-            --data.init_args.year $year \
-            --correct_bias True \
-            --data.init_args.patch_size 544 \
-            --data.init_args.chunk_size 512 \
-            --data.init_args.debug False \
-            --data.init_args.predict_full_profile True \
-            --data.init_args.output_format gtiff \
-            --trainer.logger.init_args.resume False \
-            --trainer.logger.init_args.offline True \
-            --trainer.logger.init_args.id $run_id 
-fi
-# Capture the exit status of the command
-exit_status=$?
-if [ $exit_status -ne 0 ]; then
-    echo "Prediction command failed with exit status $exit_status for tile $tile_id"
-    rm -rf $save_dir/${tile_id}
-else
-    echo "Prediction command completed successfully"
-    touch ${inference_flag}
-fi
-echo "***************************** END INFERENCE *****************************"
+run_inference $tile_id $stream_input $save_dir $meta_file $year
 
-
-
-
-
+;;
+*)
+echo "Invalid option"
+exit 1
+;;
+esac
 # # **************************************************************
 # #              Predict multiple tiles in one job
 # # **************************************************************

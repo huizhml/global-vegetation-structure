@@ -160,12 +160,12 @@ done
 #   Run postprocessing with list of tiles
 # ==========================================
 year=${2:-2020}
-unfinished_tiles_file=${3:-${HOME}/data/gvs/assets/worklists/tiles_unblended_${year}.txt}
+unfinished_tiles_file=${3:-${HOME}/data/gvs/assets/worklists/tiles_reblend_${year}.txt}
 unfinished_tiles=($(cat $unfinished_tiles_file))
 flag_dir=${HOME}/data/gvs/state/${year}/blended/key_rhs #TODO: make it a parameter
 task_tiles=($(get_subtask_tiles $unfinished_tiles))
 for tile_id in ${task_tiles[@]}; do
-    processed=$(check_if_processed $tile_id $flag_dir rewrite_flag=True)
+    processed=$(check_if_processed $tile_id $flag_dir true)
     if [ $processed -eq 0 ]; then # this is also checked inside the python script
         echo "Tile $tile_id already processed, skipping"
         continue
