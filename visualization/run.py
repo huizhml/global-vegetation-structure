@@ -43,7 +43,7 @@ class CreateRhPairPdfConfig(FunctionConfig):
     low_rh: int = 25
     _target_: str = "visualization.core.create_pdf_thumb.make_rh_pair_pdf"
 @dataclass
-class CreateTileGroupPdfConfig(FunctionConfig):
+class CreatePredNeighborPdfConfig(FunctionConfig):
     tif_dir: str = '~/data/gvs/predictions/2020/blended/tiles/cog/'
     tile_id_file: str = '~/data/gvs/assets/worklists/tiles_system_biased.txt'
     pdf_file: str = '~/data/gvs/diagnostics/pred_thumbs/system_biased_tiles.pdf'
@@ -51,7 +51,7 @@ class CreateTileGroupPdfConfig(FunctionConfig):
     stac_collection_dir: str = '~/data/gvs/products/gvsm_stac_catalog/vsm_local'
     year: int = 2020
     resolution: int = 100
-    _target_: str = "visualization.core.create_pdf_thumb.make_tile_group_pdf"
+    _target_: str = "visualization.core.create_pdf_thumb.make_pred_neighbor_pdf"
 @dataclass
 class ResampleAndMosaicConfig(FunctionConfig):
     year: int = 2020
@@ -86,7 +86,7 @@ cs = ConfigStore.instance()
 cs.store(group='run', name='resample_and_mosaic', node=ResampleAndMosaicConfig)
 cs.store(group='run', name='check_after_bias_correction', node=CheckfterBiasCorrectionConfig)
 cs.store(group='run', name='create_pdf_thumb', node=CreateRhPairPdfConfig)
-cs.store(group='run', name='create_tile_group_pdf', node=CreateTileGroupPdfConfig)
+cs.store(group='run', name='create_pred_neighbor_pdf', node=CreatePredNeighborPdfConfig)
 cs.store(group='run', name='create_cloud_cover_boxplot', node=CreateCloudCoverBoxplotConfig)
 # ================================ Main Config ================================
 cs.store(name='base_config', node=RunConfig) # NOTE: name here should match the default in ../config/base/no_log.yaml
