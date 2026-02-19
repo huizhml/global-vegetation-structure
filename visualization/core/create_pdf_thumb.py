@@ -258,7 +258,7 @@ def make_pred_neighbor_pdf(
     print(f'saved to {pdf_file}')
 
 def make_rh_pair_pdf(
-        tif_dir: str, tile_id_file: str, pdf_file: Path, overview_level: int = 0, top_rh: int = 98, low_rh: int = 25, 
+        tif_dir: str, tile_id_file: str, pdf_file: Path, overview_level: int = 0, top_rh: int = 98, low_rh: int = 25, black_background: bool = False,
         **kwargs):
     '''
     Make a PDF file where each page renders a pair of RH metrics in lower resolution for one tile
@@ -270,7 +270,8 @@ def make_rh_pair_pdf(
     pdf_file.parent.mkdir(parents=True, exist_ok=True)
     pdf_file = pdf_file.with_stem(f'{pdf_file.stem}_{timestamp}')
     my_cmap = copy.copy(plt.get_cmap('inferno'))
-    my_cmap.set_bad(color='black')
+    if black_background:
+        my_cmap.set_bad(color='black')
     tile_ids = np.loadtxt(tile_id_file, dtype=str)
     with PdfPages(pdf_file) as pdf:
         fig_cover = plot_pdf_cover(locals(), timestamp)
