@@ -9,7 +9,77 @@
 #SBATCH --output=/users/zhanghui/scratch/logs/%x-%A_%a.out
 #SBATCH --error=/users/zhanghui/scratch/logs/%x-%A_%a.err
 
+run_blending() {
+    local year=$1
+    local tile_id=$2
+    python -m postprocessing.run run=run_blending \
+        run.year=$year \
+        run.tile_id=$tile_id \
+        run.flag_dir=${HOME}/data/gvs/state/${year}/blended/ \
+        run.output_dir=${HOME}/data/gvs/predictions/2020/blended/tiles \
+        run.total_tiles_file=${HOME}/data/gvs/assets/worklists/total_tiles_2020.txt
+}
+
+get_subtask_config_files() {
+    # get the list of config files for the current task when running ntasks in one slurm job
+    local job_offset=${1:0}
+    local rhs_idx=${2:-key_rhs}
+    local n_zones_per_task=${3:-24}
+    local task_zones=()
+
+    n_zones=$((SLURM_NTASKS * n_zones_per_task))
+    all_zones=($(ls ${HOME}/data/gvs/assets/worklists/tiles_by_mgrs_zone/*.txt | sort))
+    job_zones=(${all_zones[@]:job_offset:n_zones})
+    start_idx=$((SLURM_PROCID * n_zones_per_task))
+    if [ $SLURM_PROCID -eq $((SLURM_NTASKS - 1)) ]; then
+        task_zones=(${job_zones[@]:start_idx}) # take the rest of the zones
+    else
+        task_zones=(${job_zones[@]:start_idx:n_zones_per_task})
+    fi
+    echo ${task_zones[@]}
+}
+
+get_subtask_tiles() {
+    # get the list of tiles for the current task when running ntasks in one slurm job
+    local unfinished_tiles=(${1:-})
+    local task_tiles=()
+    n_tiles=${#unfinished_tiles[@]}
+    n_tiles_per_task=$((n_tiles / SLURM_NTASKS))
+
+    start_idx=$((SLURM_PROCID * n_tiles_per_task))
+    if [ $SLURM_PROCID -eq $((SLURM_NTASKS - 1)) ]; then
+        task_tiles=(${unfinished_tiles[@]:start_idx}) # take the rest of the tiles
+    else
+        task_tiles=(${unfinished_tiles[@]:start_idx:n_tiles_per_task}) # take the next n_tiles_per_task tiles
+    fi
+    echo ${task_tiles[@]}
+}
+
+check_if_processed() {
+    local tile_id=$1
+    local flag_dir=$2
+    local rewrite_flag=$3
+    if [ ! $rewrite_flag ]; then
+        if [ -f "${flag_dir}/${tile_id}_done" ]; then
+            return 0
+        else
+            return 1
+        fi
+    else
+        rm -f "${flag_dir}/${tile_id}_done"
+        return 1
+    fi
+}
+
+
 case $1 in
+0)
+# =======================================
+#    Create distance maps
+# =======================================
+python -m postprocessing.run run=create_distance_maps
+;;
+
 
 1)
 # =======================================
@@ -54,7 +124,7 @@ split=${2:-cal}
 echo "Evaluating bias correction performance for ${split} split..."
 input_dir=${HOME}/data/gvs/gedi/veg_sensitivity_gt0p95/subset_${split}/original_with_sota_chms_ours/${year}
 bias_correct_dir=${HOME}/assets/bias_correction_stats/slope_lt20_minpoints2000/${year}
-python -m postprocess.run run=evaluate_bias_correction \
+python -m postprocessing.run run=evaluate_bias_correction \
     run.slope_lt20=True \
     run.year=$year \
     run.gedi_chm_ours_dir=${input_dir} \
@@ -68,30 +138,44 @@ python -m postprocess.run run=evaluate_bias_correction \
 job_offset=${2:0}
 rhs_idx=${3:-key_rhs}
 n_zones_per_task=24
-n_zones=$((SLURM_NTASKS * n_zones_per_task))
-all_zones=($(ls ${HOME}/data/gvs/assets/worklists/tiles_by_mgrs_zone/*.txt | sort))
-job_zones=(${all_zones[@]:job_offset:n_zones})
-start_idx=$((SLURM_PROCID * n_zones_per_task))
-if [ $SLURM_PROCID -eq $((SLURM_NTASKS - 1)) ]; then
-    task_zones=(${job_zones[@]:start_idx}) # take the rest of the zones
-else
-    task_zones=(${job_zones[@]:start_idx:n_zones_per_task})
-fi
 year=2020
-for zone in ${task_zones[@]}; do
-    for tile_id in $(cat $zone); do
+flag_dir=${HOME}/data/gvs/state/${year}/blended/key_rhs #TODO: make it a parameter
+task_config_files=($(get_subtask_config_files $job_offset $rhs_idx $n_zones_per_task))
+
+for config_file in ${task_config_files[@]}; do
+    for tile_id in $(cat $config_file); do
+        processed=$(check_if_processed $tile_id $flag_dir)
+        if [ $processed -eq 0 ]; then
+            echo "Tile $tile_id already processed, skipping"
+            continue
+        fi
         echo "Processing tile $tile_id"
-        python -m postprocess.run run=run_blending \
-            run.year=$year \
-            run.tile_id=$tile_id \
-            run.flag_dir=${HOME}/data/gvs/state/${year}/blended/ \
-            run.output_dir=${HOME}/data/gvs/predictions/2020/blended/tiles \
-            run.total_tiles_file=${HOME}/data/gvs/assets/worklists/total_tiles_2020.txt
+        run_blending $year $tile_id
     done
 done
 ;;
-
 4)
+
+# ==========================================
+#   Run postprocessing with list of tiles
+# ==========================================
+year=${2:-2020}
+unfinished_tiles_file=${3:-${HOME}/data/gvs/assets/worklists/tiles_unblended_${year}.txt}
+unfinished_tiles=($(cat $unfinished_tiles_file))
+flag_dir=${HOME}/data/gvs/state/${year}/blended/key_rhs #TODO: make it a parameter
+task_tiles=($(get_subtask_tiles $unfinished_tiles))
+for tile_id in ${task_tiles[@]}; do
+    processed=$(check_if_processed $tile_id $flag_dir rewrite_flag=True)
+    if [ $processed -eq 0 ]; then # this is also checked inside the python script
+        echo "Tile $tile_id already processed, skipping"
+        continue
+    fi
+    echo "Processing tile $tile_id"
+    run_blending $year $tile_id
+done
+;;
+
+5)
 # =======================================
 #   Extract sparse predictions and add biome
 # =======================================
@@ -107,7 +191,7 @@ python -m download.run run=make_manifest \
     run.root_note=''
 ;;
 
-5)
+6)
 # ===== Repartition Data =====
 split=${2:-val}
 root_dir=${HOME}/data/gvs/datasets/splits/split_test0.1_cal0.1_val0.1_seed42_v1/
@@ -142,7 +226,7 @@ python -m download.run run=check_two_partitioned_datasets \
     run.target_dir=${root_dir}/index_tables_by_splitted_tile/${split} \
     run._target_=download.sanity_check.check_total_points_for_two_partitioned_datasets
 ;;
-2)
+7)
 # ===== Extract GEDI from H5  =====
 
 split=${2:-val}

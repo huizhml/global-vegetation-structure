@@ -9,6 +9,13 @@ from omegaconf import OmegaConf, MISSING
 from config.base_config_class import ClassConfig, FunctionConfig
 
 @dataclass
+class CreateDistanceMapsConfig(FunctionConfig):
+    stac_collection_dir: str = '~/data/gvs/products/gvsm_stac_catalog/vsm_local'
+    save_dir: str = '~/data/gvs/assets/blending/distance_maps'
+    _target_: str = "postprocessing.corrections.blending.create_distance_map_for_all_tiles"
+    
+
+@dataclass
 class RepartitionDataConfig(FunctionConfig):
     based_on_col: str = 'assigned_tile'
     parquet_dir: str = '~/data/gvs/datasets/splits/split_test0.1_cal0.1_val0.1_seed42_v1/index_tables/val'
@@ -116,6 +123,7 @@ cs.store(group='run', name='evaluate_bias_correction', node=EvaluateBiasCorrecti
 cs.store(group='run', name='get_tiles_wo_enough_gedi_gt', node=GetTilesWooEnoughGEDIConfig)
 cs.store(group='run', name='run_blending', node=RunBlendingConfig)
 cs.store(group='run', name='extract_pred', node=ExtractPredBiomeConfig)
+cs.store(group='run', name='create_distance_maps', node=CreateDistanceMapsConfig)
 cs.store(name='config', node=RunConfig)
 
 @hydra.main(config_name='config', version_base='1.2')

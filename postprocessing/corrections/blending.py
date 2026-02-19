@@ -20,7 +20,7 @@ import time
 NO_DATA = 32767
 
 @lru_cache(maxsize=16)
-def create_distance_arr(shape):
+def create_distance_arr(shape: tuple):
     rows = np.arange(shape[0], dtype=np.uint16)
     cols = np.arange(shape[1], dtype=np.uint16)
 
@@ -32,8 +32,8 @@ def create_distance_arr(shape):
 
 def create_distance_map(item_file: Path, output_file: Path):
     item = pystac.Item.from_file(str(item_file))
-    distance_arr = create_distance_arr(item.assets['RH98'].extra_fields['proj:shape'])
-    shape = item.assets['RH98'].extra_fields['proj:shape']
+    distance_arr = create_distance_arr(tuple(item.assets['RH98_Q1'].extra_fields['proj:shape']))
+    shape = item.assets['RH98_Q1'].extra_fields['proj:shape']
     profile = {
         "driver": "GTiff",
         "dtype": np.uint16,
@@ -41,7 +41,7 @@ def create_distance_map(item_file: Path, output_file: Path):
         "width": shape[1],
         "height": shape[0],
         "crs": CRS.from_epsg(item.properties['proj:epsg']),
-        "transform": rasterio.Affine(*item.assets['RH98'].extra_fields['proj:transform']),
+        "transform": rasterio.Affine(*item.assets['RH98_Q1'].extra_fields['proj:transform']),
         "compress": "zstd",
         "predictor": 2,
         "blockxsize": 256,
@@ -53,7 +53,7 @@ def create_distance_map(item_file: Path, output_file: Path):
         dst.write(distance_arr)
     print(f'Saved distance map to {output_file}')
 
-def create_distance_map_for_all_tiles(stac_collection_dir: str, save_dir: str):
+def create_distance_map_for_all_tiles(stac_collection_dir: str, save_dir: str, **kwargs):
     '''
     Create distance maps for all tiles in the S2 grid
     '''
