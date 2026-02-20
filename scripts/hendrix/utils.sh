@@ -59,6 +59,12 @@ run_translate() {
     echo "Translating predictions for tile $tile_id in year $year"
     scr_dir=${HOME}/data/gvs/predictions/${year}/original/tiles/geotiff/${tile_id}
     dst_dir=${HOME}/data/gvs/predictions/${year}/original/tiles/cog/${tile_id}
+    if [ -d $scr_dir ]; then
+        echo "Source directory $scr_dir exists"
+    else
+        echo "Source directory $scr_dir does not exist"
+        return 1
+    fi
     python -m postprocessing.run run=translate_predictions run.src_dir=$scr_dir run.dst_dir=$dst_dir
     exit_status=$?
     if [ $exit_status -ne 0 ]; then
