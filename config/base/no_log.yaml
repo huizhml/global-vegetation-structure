@@ -12,12 +12,24 @@ hydra:
   run:
     dir: .
     
-  # 3. Disable the 'user' log file (usually main.log)
-  job_logging:
-    root:
-      handlers: [console]  # Use only the console handler, remove 'file'
+  sweep:
+    dir: .
+    subdir: .
 
-  # 4. Disable the 'hydra' log file (usually hydra.log)
-  hydra_logging:
+  # 4. Disable logging completely
+  job_logging:
+    version: 1
+    disable_existing_loggers: false
     root:
-      handlers: [console]  # Use only the console handler, remove 'file'
+      level: OFF
+    handlers:
+      console:
+        class: logging.NullHandler
+  
+  hydra_logging:
+    version: 1
+    root:
+      level: OFF
+    handlers:
+      console:
+        class: logging.NullHandler
