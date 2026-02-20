@@ -131,9 +131,11 @@ cs.store(group='run', name='run_blending', node=RunBlendingConfig)
 cs.store(group='run', name='extract_pred', node=ExtractPredBiomeConfig)
 cs.store(group='run', name='create_distance_maps', node=CreateDistanceMapsConfig)
 cs.store(group='run', name='translate_predictions', node=TranslatePredictionsConfig)
-cs.store(name='config', node=RunConfig)
 
-@hydra.main(config_name='config', version_base='1.2')
+# ================================ Main Config ================================
+cs.store(name='base_config', node=RunConfig) # NOTE: name here should match the default in ../config/base/no_log.yaml
+
+@hydra.main(config_name='no_log', version_base='1.2', config_path='../config/base')
 def main(cfg):
     t0 = time.time()
     print(OmegaConf.to_yaml(cfg))
@@ -147,7 +149,6 @@ def main(cfg):
         raise ValueError(f"Invalid target: {cfg.run.target_type}")
     t1 = time.time()
     print(f'Time taken: {t1 - t0} seconds')
-    return obj
 
 if __name__ == "__main__":
     main()
