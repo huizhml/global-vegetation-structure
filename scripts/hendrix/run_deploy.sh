@@ -14,7 +14,7 @@
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=huzh@di.ku.dk
 ##SBATCH --exclude hendrixgpu26fl
-#SBATCH --exclude hendrixgpu12fl,hendrixgpu11fl
+#SBATCH --exclude hendrixgpu12fl,hendrixgpu11fl,hendrixgpu26fl
 echo "***************************** JOB INFO *****************************"
 echo "Host: $HOSTNAME"
 echo "Job Name: $SLURM_JOB_NAME"
@@ -26,6 +26,7 @@ scontrol show job $SLURM_JOB_ID | grep "TRES="
 echo "********************************************************************"
 
 source scripts/hendrix/utils.sh
+root_data_dir=/projects/dereeco/data/gvs
 
 case $1 in
 1) 
@@ -34,12 +35,12 @@ case $1 in
 # **************************************************************
 line_num=${SLURM_ARRAY_TASK_ID:-2}
 stream_input=${2:-False}
-year=${3:-2020}
+year=${4:-2020}
 repredict_tiles=${4:-True}
-save_dir=~/data/gvs/predictions/${year}/original/tiles/geotiff
+save_dir=${root_data_dir}/predictions/${year}/original/tiles/geotiff
 mkdir -p $save_dir
 
-tile_id_file=${HOME}/data/gvs/assets/worklists/tiles_duplicated.txt
+tile_id_file=${3:-${root_data_dir}/assets/worklists/tiles_duplicated.txt}
 tile_id=$(sed -n "${line_num}p" $tile_id_file)
 meta_file=none
 echo "Processing tile ID: $tile_id, line $line_num from $tile_id_file"
