@@ -26,6 +26,7 @@ import shutil
 from pystac_client.stac_api_io import StacApiIO
 from postprocessing.core.translate import translate_tile
 from postprocessing.corrections.blending import Blending
+from const import NO_DATA
 import warnings
 warnings.filterwarnings(
     "ignore",
@@ -251,7 +252,7 @@ class VSMCorrection(Blending):
             
         if self.is_costal_tile:
             snow_water_mask = self.get_water_snow_mask(current_tile)
-            blended = blended.where(~snow_water_mask, 32767)
+            blended = blended.where(~snow_water_mask, NO_DATA)
             
         tile_shape = current_tile.assets['RH98_Q1'].extra_fields['proj:shape']
         profile = {
@@ -269,7 +270,7 @@ class VSMCorrection(Blending):
             'num_threads': 1,
             'predictor': 2,
             'interleave': 'BAND',
-            'nodata': 32767,
+            'nodata': NO_DATA,
         }
         
         

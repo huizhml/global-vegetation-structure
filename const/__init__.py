@@ -1,4 +1,4 @@
-
+NO_DATA = 32767
 # From train*_filtered_v1
 LAT_MEAN = 12.7596
 LAT_STD = 25.6075

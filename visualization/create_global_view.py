@@ -15,6 +15,7 @@ from rio_cogeo.cogeo import cog_translate
 from rio_cogeo.profiles import cog_profiles
 import pystac
 from tqdm import tqdm
+from const import NO_DATA
 try:
     import resource  # Posix: bump soft limit for open files if possible
     soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
@@ -87,7 +88,7 @@ def downsample_tile(
         item_file: str, save_dir: Union[str, Path], rh_idx:int=98,
         vrt_dir: Union[str, Path] = None, bias_dir: Union[str, Path] = None, bias_cutoff: float = None,
         bias_col: str = 'bias',
-        average_across_rhs: bool = False, dst_srs="EPSG:4326", xRes=0.01, yRes=0.01, dst_nodata=32767,
+        average_across_rhs: bool = False, dst_srs="EPSG:4326", xRes=0.01, yRes=0.01, dst_nodata=NO_DATA,
         resampleAlg="average"):
     '''
     Downsample a tile to 1km resolution
@@ -225,7 +226,7 @@ def check_mosaic_after_bias_correction(
     warp_options = dict(
         dstSRS="EPSG:4326",
         resampleAlg="average",
-        dstNodata=32767,
+        dstNodata=NO_DATA,
         creationOptions=["COMPRESS=LERC_ZSTD", "TILED=YES"],
         warpOptions=["WRAP_DATELINE=YES", "INIT_DEST=NO_DATA"],
     )
@@ -267,7 +268,7 @@ def resample_and_mosaic(year=2020, rh_idx=98, q_idx=1, countries: str = None, s2
     temp_dir = Path(temp_dir).expanduser()
     temp_dir.mkdir(parents=True, exist_ok=True)
 
-    def warp_tile(tile_id: str, dst_srs="EPSG:4326", xRes=0.01, yRes=0.01, dst_nodata=32767, resampleAlg="average"):
+    def warp_tile(tile_id: str, dst_srs="EPSG:4326", xRes=0.01, yRes=0.01, dst_nodata=NO_DATA, resampleAlg="average"):
         # item = pystac.Item.from_file(str(stac_collection_dir / f'{tile_id}_{year}/{tile_id}_{year}.json'))
         # src_path = Path(item.assets[f'RH{rh_idx}_Q{q_idx}'].href.replace('file://', '')).expanduser()
         src_path = pred_dir / f'{tile_id}/RH{rh_idx}_Q{q_idx}.tif'
@@ -308,7 +309,7 @@ def resample_and_mosaic(year=2020, rh_idx=98, q_idx=1, countries: str = None, s2
     warp_options = dict(
         dstSRS="EPSG:4326",
         resampleAlg="average",
-        dstNodata=32767,
+        dstNodata=NO_DATA,
         creationOptions=["COMPRESS=LERC_ZSTD", "TILED=YES"],
         warpOptions=["WRAP_DATELINE=YES", "INIT_DEST=NO_DATA"],
     )

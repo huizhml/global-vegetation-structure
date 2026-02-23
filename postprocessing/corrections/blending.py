@@ -16,8 +16,7 @@ import dask.array as da
 from rasterio.crs import CRS
 import dask
 import time
-
-NO_DATA = 32767
+from const import NO_DATA
 
 @lru_cache(maxsize=16)
 def create_distance_arr(shape: tuple):

@@ -23,6 +23,7 @@ import xarray as xr
 import numpy as np
 import dask.dataframe as dd
 from rasterio.crs import CRS
+from const import NO_DATA
 
 
 def sample_locs_for_all_rhs(tile_id: str, stac_collection_dir: str = None, gedi_ref_df: pd.DataFrame = None, rh_size: int = 101, chunks: int = 1024):
@@ -84,7 +85,7 @@ class BiasCorrection:
         self.corrected_pred_dir = Path(corrected_pred_dir).expanduser()
         self.stac_collection_dir = Path(stac_collection_dir).expanduser()
         self.min_n_points = min_n_points
-        self.nodata = 32767
+        self.nodata = NO_DATA
         self.year = year
         self.debug = debug
         self.diagnose_folder = Path(diagnose_folder).expanduser()
@@ -646,7 +647,7 @@ def correct_s2_tile_prediction(ref_data_dir: str, tile_id: str, save_dir: str, y
         pred = np.concatenate(rhs, axis=0)
         rhs = gedi_ref[f'rh{rh_idx}'].values
         pred = pred.astype(np.float64)
-        mask = pred != 32767
+        mask = pred != NO_DATA
         pred = pred[mask]
         rhs = rhs[mask]
         # pred += np.random.uniform(-1, 1, pred.shape)

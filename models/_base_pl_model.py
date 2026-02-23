@@ -10,9 +10,9 @@ from lightning import Trainer, LightningModule
 from models.metrics import MAE, RMSE, MAPE, ME
 from utils import print_size_of_model
 from models.modules.util import get_veg_mask
-from const import LAT_MEAN, LAT_STD, LON_SIN_MEAN, LON_SIN_STD, LON_COS_MEAN, LON_COS_STD, SLOPE_MEAN, SLOPE_STD
+from const import LAT_MEAN, LAT_STD, LON_SIN_MEAN, LON_SIN_STD, LON_COS_MEAN, LON_COS_STD, SLOPE_MEAN, SLOPE_STD, NO_DATA
 
-MASKED_VALUE = 32767
+MASKED_VALUE = NO_DATA
 
 class BaseModel(LightningModule):
 

@@ -11,9 +11,9 @@ import xarray as xr
 import rioxarray
 import rasterio
 
-from const import ESA_WC_s
+from const import ESA_WC_s, NO_DATA
 
-MASKED_VALUE = 32767
+MASKED_VALUE = NO_DATA
 RH100_idx = 301
 RH98_idx = 295
 
@@ -28,7 +28,7 @@ class ImageWriter(Callback):
         self.mask_with_scl = mask_with_scl
         self.rh_idx = slice(0, 303) if predict_full_profile else (RH100_idx, RH98_idx)
         self.prediction_cache = {}
-        self.nodata_value = 32767
+        self.nodata_value = NO_DATA
         self.scl_exclude_labels = np.array([0, 3, 8, 9, 11, 6, self.nodata_value], dtype=np.uint16)
         self.scl_exclude_labels_tensor = None
 
