@@ -16,8 +16,7 @@ run_blending() {
         run.year=$year \
         run.tile_id=$tile_id \
         run.flag_dir=${HOME}/data/gvs/state/${year}/blended/ \
-        run.output_dir=${HOME}/data/gvs/predictions/2020/blended/tiles \
-        run.total_tiles_file=${HOME}/data/gvs/assets/worklists/total_tiles_2020.txt
+        run.output_dir=${HOME}/data/gvs/predictions/2020/blended/tiles
 }
 
 get_subtask_config_files() {
@@ -39,13 +38,26 @@ get_subtask_config_files() {
     echo ${task_zones[@]}
 }
 
+get_subtask_tiles_for_array_jobs() {
+    # get the list of tiles for the current task when running ntasks in an array slurm job
+    # this works for one config file (txt file with tiles) for all jobs in the array job, each job in the array job has the same ntasks
+    local unfinished_tiles=("$@")
+    local task_tiles=()
+    n_tiles_total=${#unfinished_tiles[@]}
+    n_tiles_per_task=$((n_tiles_total / SLURM_NTASKS / SLURM_ARRAY_TASK_COUNT))
+    UNIVERSAL_TASK_ID=$((SLURM_ARRAY_TASK_ID * SLURM_NTASKS + SLURM_PROCID))
+    start_idx=$((UNIVERSAL_TASK_ID * n_tiles_per_task))
+    task_tiles=(${unfinished_tiles[@]:start_idx:n_tiles_per_task})
+    echo ${task_tiles[@]}
+}
+
 get_subtask_tiles() {
     # get the list of tiles for the current task when running ntasks in one slurm job
+    # this works for one config file (txt file with tiles) per slurm job
     local unfinished_tiles=(${1:-})
     local task_tiles=()
     n_tiles=${#unfinished_tiles[@]}
     n_tiles_per_task=$((n_tiles / SLURM_NTASKS))
-
     start_idx=$((SLURM_PROCID * n_tiles_per_task))
     if [ $SLURM_PROCID -eq $((SLURM_NTASKS - 1)) ]; then
         task_tiles=(${unfinished_tiles[@]:start_idx}) # take the rest of the tiles
@@ -61,13 +73,13 @@ check_if_processed() {
     local rewrite_flag=$3
     if [ ! $rewrite_flag ]; then
         if [ -f "${flag_dir}/${tile_id}_done" ]; then
-            return 0
+            echo 0
         else
-            return 1
+            echo 1
         fi
     else
         rm -f "${flag_dir}/${tile_id}_done"
-        return 1
+        echo 1
     fi
 }
 
@@ -154,16 +166,37 @@ for config_file in ${task_config_files[@]}; do
     done
 done
 ;;
-4)
+31)
 
 # ==========================================
-#   Run postprocessing with list of tiles
+#   Run postprocessing with list of tiles, each job has it's own list of tiles
 # ==========================================
 year=${2:-2020}
 unfinished_tiles_file=${3:-${HOME}/data/gvs/assets/worklists/tiles_reblend_${year}.txt}
 unfinished_tiles=($(cat $unfinished_tiles_file))
 flag_dir=${HOME}/data/gvs/state/${year}/blended/key_rhs #TODO: make it a parameter
 task_tiles=($(get_subtask_tiles $unfinished_tiles))
+for tile_id in ${task_tiles[@]}; do
+    processed=$(check_if_processed $tile_id $flag_dir true)
+    if [ $processed -eq 0 ]; then # this is also checked inside the python script
+        echo "Tile $tile_id already processed, skipping"
+        continue
+    fi
+    echo "Processing tile $tile_id"
+    run_blending $year $tile_id
+done
+;;
+32)
+
+# ==========================================
+#   Run postprocessing with list of tiles, all jobs in the array job have the same list of tiles
+# ==========================================
+echo running array job $SLURM_ARRAY_TASK_ID, task $SLURM_PROCID
+year=${2:-2020}
+unfinished_tiles_file=${3:-${HOME}/data/gvs/assets/worklists/tiles_reblend_${year}_with_neighbors.txt}
+unfinished_tiles=($(cat $unfinished_tiles_file))
+flag_dir=${HOME}/data/gvs/state/${year}/blended/key_rhs #TODO: make it a parameter
+task_tiles=($(get_subtask_tiles_for_array_jobs "${unfinished_tiles[@]}"))
 for tile_id in ${task_tiles[@]}; do
     processed=$(check_if_processed $tile_id $flag_dir true)
     if [ $processed -eq 0 ]; then # this is also checked inside the python script

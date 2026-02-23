@@ -66,8 +66,7 @@ class RunBlendingConfig(ClassConfig):
     stac_collection_dir: str = '~/data/gvs/products/gvsm_stac_catalog/vsm_local'
     distance_map_dir: str = '~/data/gvs/assets/blending/distance_maps'
     s2_grid_file: str = '~/data/gvs/state/s2_tiles_with_growing_months.parquet'
-    total_tiles_file: str = '~/data/gvs/assets/worklists/total_tiles_2020.txt'
-    costal_tiles_file: str = '~/data/gvs/assets/worklists/tiles_coastal_regions.txt'
+    costal_tiles_file: str = '~/data/gvs/assets/worklists/tiles_coastal_snow_regions.txt'
     chunksize: int = 1024
     use_flash: bool = False
     rhs_idx: str = 'key_rhs'

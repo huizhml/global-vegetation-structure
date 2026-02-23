@@ -52,7 +52,6 @@ class VSMCorrection(Blending):
                  s2_grid_file:str=None, 
                  distance_map_dir:str=None, 
                  chunksize:int=1024,
-                 total_tiles_file:str=None,
                  costal_tiles_file:str=None,
                  use_flash: bool = False,
                  rhs_idx: str = 'all_rhs',
@@ -66,7 +65,7 @@ class VSMCorrection(Blending):
         self.flag_dir.mkdir(parents=True, exist_ok=True)
         
         self.geotiff_dir, self.cog_dir = self._init_output_dir(output_dir)
-        self.total_tiles = self._load_total_tiles(total_tiles_file)
+        # self.total_tiles = self._load_total_tiles(total_tiles_file)
         self.is_costal_tile = self._check_if_costal_tile(costal_tiles_file)
         self.key_rhs = self._init_rhs_idx(rhs_idx)
         
