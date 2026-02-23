@@ -8,6 +8,8 @@ from shapely.geometry import shape, box
 import dask
 import geopandas as gpd
 import subprocess
+import numpy as np
+
 
 def convert_parquet_to_fgb(s2_grid_file):
     s2_grid_file = Path(s2_grid_file).expanduser()
@@ -174,6 +176,24 @@ def reorder_tiles_by_circle(tiles_dir: str):
             for tile in ordered:
                 f.write(tile + '\n')
 
+def get_tiles_reblend(tiles_list_file: str, s2_grid_file: str, **kwargs):
+    tiles_list_file = Path(tiles_list_file).expanduser()
+    s2_grid_file = Path(s2_grid_file).expanduser()
+    s2_grid = gpd.read_parquet(s2_grid_file)
+    with open(tiles_list_file, 'r') as f:
+        tiles = f.read().splitlines()
+        
+    reblend_tiles = []
+    for tile in tiles:
+        intersecting_tiles = find_intersecting_s2_tiles(s2_grid, tile)
+        reblend_tiles.append(intersecting_tiles)
+    reblend_tiles = np.hstack(reblend_tiles)
+    reblend_tiles = np.unique(reblend_tiles)
+    with open(tiles_list_file.with_name(f"{tiles_list_file.stem}_with_neighbors.txt"), 'w') as f:
+        for tile in reblend_tiles:
+            f.write(tile + '\n')
+    
+    
 
 
 @dataclass

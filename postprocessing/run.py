@@ -8,6 +8,13 @@ import hydra
 from omegaconf import OmegaConf, MISSING
 from config.base_config_class import ClassConfig, FunctionConfig
 
+
+@dataclass
+class GetTilesReblendConfig(FunctionConfig):
+    tiles_list_file: str = '~/data/gvs/assets/worklists/tiles_reblend_2020.txt'
+    s2_grid_file: str = '~/data/gvs/state/s2_tiles_with_growing_months.parquet'
+    _target_: str = "postprocessing.core.s2_tiling.get_tiles_reblend"
+
 @dataclass
 class TranslatePredictionsConfig(FunctionConfig):
     src_dir: str = '~/data/gvs/predictions/2020/original/tiles/geotiff'
@@ -121,6 +128,7 @@ class RunConfig:
     run: Any = MISSING
     
 cs = ConfigStore.instance()
+cs.store(group='run', name='get_tiles_reblend', node=GetTilesReblendConfig)
 cs.store(group='run', name='repartition_data', node=RepartitionDataConfig)
 cs.store(group='run', name='extract_gedi_from_h5', node=ExtractGEDIFromH5Config)
 cs.store(group='run', name='check_after_bias_correction', node=CheckfterBiasCorrectionConfig)
