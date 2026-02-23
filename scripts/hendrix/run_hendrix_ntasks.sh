@@ -6,8 +6,8 @@
 #SBATCH --mem-per-cpu=4G # total memory for all tasks for --mem
 #SBATCH --time=7-00:00:00
 #SBATCH --job-name=blending
-#SBATCH --output=./logs/%x-%A-%t.out
-#SBATCH --nodelist=hendrixgpu26fl
+#SBATCH --output=./logs/%x-%A-%a.out
+##SBATCH --nodelist=hendrixgpu26fl
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=huzh@di.ku.dk
 
@@ -38,6 +38,12 @@ srun postprocessing/run.sh 3 $job_offset $rhs_idx
 # ==========================================
 year=${2:-2020}
 srun postprocessing/run.sh 4 $year
+;;
+2)
+# ==========================================
+#   Run postprocessing with list of tiles, all jobs in the array job have the same list of tiles
+# ==========================================
+srun postprocessing/run.sh 32
 
 ;;
 

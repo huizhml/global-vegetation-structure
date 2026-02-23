@@ -27,8 +27,16 @@ case $1 in
 # ==========================================
 #   Run postprocessing with config file
 # ==========================================
-srun postprocess/run.sh 4
+srun postprocess/run.sh 31
 ;;
+01)
+# ==========================================
+#   Run postprocessing with list of tiles, all jobs in the array job have the same list of tiles
+# ==========================================
+srun postprocess/run.sh 32
+;;
+
+
 1)
 # ==========================================
 #   Calculate size for a single RH - data on LUMI-O
