@@ -59,7 +59,7 @@ class CheckfterBiasCorrectionConfig:
     
 
 defaults = [
-    {'run': 'full_global'},
+    {'run': 'resample_and_mosaic'},
     "_self_"
 ]
 
