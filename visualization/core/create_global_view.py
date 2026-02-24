@@ -345,3 +345,5 @@ def resample_and_mosaic(year=2020, rh_idx=98, q_idx=1, countries: str = None, s2
     )
     cog_translate(thumb_path, cog_path, output_profile, config=config, in_memory=False, quiet=True, use_cog_driver=True)
     print(f"✅ Global mosaic written to {cog_path}")
+
+
