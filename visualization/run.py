@@ -5,8 +5,18 @@ from hydra.utils import instantiate
 from dataclasses import dataclass, field
 import hydra
 from omegaconf import OmegaConf, MISSING
-from config.base_config_class import FunctionConfig
+from config.base_config_class import FunctionConfig, ClassConfig
 
+@dataclass
+class CreateGlobalDiffMosaicConfig(ClassConfig):
+    tiles_dir: str = '~/data/gvs/predictions/2020/blended/tiles/geotiff/'
+    save_dir: str = '~/data/gvs/predictions/2020/blended/mosaic/'
+    tile_id_list_file: str = '~/data/gvs/assets/worklists/total_tiles_2020.txt'
+    rh_idx: int = 98
+    left_q_idx: int = 0
+    right_q_idx: int = 2
+    _target_: str = "visualization.core.create_global_view.GlobalMosaicker"
+    target_method: str = 'create_global_diff_mosaic'
 
 @dataclass
 class CreateCloudCoverBoxplotConfig(FunctionConfig):
@@ -46,7 +56,7 @@ class ResampleAndMosaicConfig(FunctionConfig):
     pred_dir: str = '~/data/gvs/predictions/2020/blended/tiles/geotiff/'
     s2_grid_file: str = '~/data/gvs/state/s2_tiles_with_growing_months.parquet'
     save_dir: str = '~/data/gvs/predictions/2020/blended/mosaic/'
-    _target_: str = "visualization.create_global_view.resample_and_mosaic"
+    _target_: str = "visualization.core.create_global_view.resample_and_mosaic"
 
 @dataclass
 class CheckfterBiasCorrectionConfig:
@@ -55,7 +65,7 @@ class CheckfterBiasCorrectionConfig:
     save_dir: str = '~/data/gvs/predictions/2020/bias_corrected_slope_lt20_minpoints2000/mosaic'
     bias_cutoff: Optional[float] = None
     average_across_rhs: bool = False
-    _target_: str = "visualization.run.check_mosaic_after_bias_correction"
+    _target_: str = "visualization.core.create_global_view.check_mosaic_after_bias_correction"
     
 
 defaults = [
@@ -74,6 +84,7 @@ cs.store(group='run', name='check_after_bias_correction', node=CheckfterBiasCorr
 cs.store(group='run', name='create_pdf_thumb', node=CreateRhPairPdfConfig)
 cs.store(group='run', name='create_pred_neighbor_pdf', node=CreatePredNeighborPdfConfig)
 cs.store(group='run', name='create_cloud_cover_boxplot', node=CreateCloudCoverBoxplotConfig)
+cs.store(group='run', name='create_global_diff_mosaic', node=CreateGlobalDiffMosaicConfig)
 # ================================ Main Config ================================
 cs.store(name='base_config', node=RunConfig) # NOTE: name here should match the default in ../config/base/no_log.yaml
 
