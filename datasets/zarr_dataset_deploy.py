@@ -402,7 +402,7 @@ class ChunkedWriteDataset(BaseDeployDataset):
             'TILED=YES',
             'BLOCKXSIZE={}'.format(self.chunk_size), # a different block size than the actual patch size is slow
             'BLOCKYSIZE={}'.format(self.chunk_size),
-            'PREDICTOR=2',
+            # 'PREDICTOR=2',
             'NUM_THREADS=ALL_CPUS',
             'COMPRESS=None',
             'INTERLEAVE=BAND'
@@ -427,9 +427,9 @@ class ChunkedWriteDataset(BaseDeployDataset):
         
         self.tiff_writers = [self.init_gtiff(output_file) for output_file in output_files]
         dtype = np.dtype(
-            [("raster_writer", gdal.Dataset), ("array", 'float16', (self.patch_size_no_border, self.patch_size_no_border))]
+            [("raster_writer", gdal.Dataset), ("array", np.int16, (self.patch_size_no_border, self.patch_size_no_border))]
         )
-        self.pred_table = np.full((len(output_files)), None, dtype=dtype)
+        self.pred_table = np.empty((len(output_files)), dtype=dtype)
         
     def write_patch_predictions(self, prediction,scl, idx):
         y_topleft, x_topleft = self.patch_coords_dict[idx][1:]
@@ -467,9 +467,7 @@ class ChunkedWriteDataset(BaseDeployDataset):
 def write_patch_predictions(entry, x_topleft, y_topleft, nodata_value):
     raster_writer, array = entry[0]
     band = raster_writer.GetRasterBand(1)
-    band.WriteArray(array, 
-                    xoff=x_topleft, 
-                    yoff=y_topleft)
+    band.WriteArray(array, xoff=x_topleft, yoff=y_topleft)
     filename = raster_writer.GetDescription()
     filename = Path(filename)
     if 'uncompressed' in filename.stem:
@@ -806,9 +804,9 @@ class S2DatasetStream(BaseDeployDataset):
         
         self.tiff_writers = [self.init_gtiff(output_file) for output_file in output_files]
         dtype = np.dtype(
-            [("raster_writer", gdal.Dataset), ("array", 'float16', (self.patch_size_no_border, self.patch_size_no_border))]
+            [("raster_writer", gdal.Dataset), ("array", np.int16, (self.patch_size_no_border, self.patch_size_no_border))]
         )
-        self.pred_table = np.full((self.rh_dim), None, dtype=dtype)
+        self.pred_table = np.empty((self.rh_dim), dtype=dtype)
         
     def write_patch_predictions(self, prediction,scl, idx):
         y_topleft, x_topleft = self.patch_coords_dict[idx][1:]
