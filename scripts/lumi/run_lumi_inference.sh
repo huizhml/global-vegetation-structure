@@ -13,153 +13,27 @@
 #SBATCH --mail-user=huzh@di.ku.dk
 ##SBATCH --exclude hendrixgpu26fl
 ##SBATCH --exclude hendrixgpu04fl,hendrixgpu03fl,hendrixgpu08fl,hendrixgpu11fl,hendrixgpu12fl,hendrixgpu14fl,hendrixgpu15fl,hendrixgpu18fl #for using /scratch
-echo "***************************** JOB INFO *****************************"
-echo "Host: $HOSTNAME"
-echo "Job Name: $SLURM_JOB_NAME"
-echo "Partition: $SLURM_JOB_PARTITION"
-echo "CPUs per task: $SLURM_CPUS_PER_TASK"
-echo "Number of tasks: $SLURM_NTASKS"
-echo "Time requested: $SLURM_TIMELIMIT"
-scontrol show job $SLURM_JOB_ID | grep "TRES="
-echo "********************************************************************"
 
+source scripts/lumi/utils.sh
+echo_job_info
+init_env
 
-export MIOPEN_USER_DB_PATH="/tmp/$(whoami)-miopen-cache-$SLURM_NODEID"
-export MIOPEN_CUSTOM_CACHE_DIR=$MIOPEN_USER_DB_PATH
-## Set MIOpen cache to a temporary folder.
-if [ $SLURM_LOCALID -eq 0 ] ; then
-rm -rf $MIOPEN_USER_DB_PATH
-mkdir -p $MIOPEN_USER_DB_PATH
-fi
-source setup_env.sh
-
-# part=${SLURM_ARRAY_TASK_ID:-0}
-# line_num=${1:-0}
 line_num=${SLURM_ARRAY_TASK_ID:-0}
 tile_id_file=$1
-year=${3:-2024}
-use_flash=${4:-True}
+year=${2:-2024}
+use_flash=${3:-True}
+meta_file=${5:-null}
 echo "use_flash=$use_flash"
-if [ "$use_flash" == "True" ]; then
-    input_dir=${HOME}/flash/data/GVS/Deploy/inference_${year}
-    save_dir=${HOME}/flash/data/GVS/Deploy/predictions_GTiff_${year}
-    download_data=True # Download data in inference pipeline
-else
-    input_dir=${HOME}/data/GVS/Deploy/inference_${year}
-    save_dir=${HOME}/data/GVS/Deploy/predictions_GTiff_${year}
-    download_data=False
-fi
 
-config_dir=${HOME}/data/GVS/Deploy/slurm_job_files_${year}
-# tile_id_file=${config_dir}/deploy_s2_items_${year}_part${part}.txt
-## Check if processed before submitting job
-# tile_id=$(sed -n "${line_num}p" "$tile_id_file")
-line=$(sed -n "${line_num}p" $tile_id_file)
-IFS=',' read -r tile_id idx <<< "$line"
-echo "Line $line_num: Tile=$tile_id, idx=$idx"
-if [ -z "$idx" ]; then
-    echo "idx is null, no meta file"
-    meta_file='none'
-else
-    idx=$(printf "%d" $idx)
-    meta_file=${config_dir}/deploy_s2_items_${year}_part${idx}.parquet
-fi
-echo "Processing tile ID: $tile_id, line $line_num from $tile_id_file"
+data_root_dir=$(get_data_root_dir $use_flash)
+tile_id=22NCJ
+save_dir=${data_root_dir}/predictions/${year}/original/tiles/geotiff/
+mkdir -p $save_dir
+run_inference $tile_id $save_dir $meta_file $year || exit $?
+run_translate $tile_id $save_dir $meta_file $year || exit $?
+sync_to_lumi $tile_id $save_dir $year || exit $?
+exit 0
 
-
-# if [ -f "${HOME}/data/GVS/Deploy/translate_flags_${year}/${tile_id}_done" ]; then
-#     echo "Tile $tile_id already translated, skip"
-#     exit 0
-# fi
-
-# translate_flag_new="${HOME}/data/GVS/Deploy/translate_flags_${year}/${tile_id}_best_images_done"  
-# if [ -f "$translate_flag_new" ]; then
-#     echo "Translate flag file $translate_flag_new exists. Skipping tile $tile_id"
-#     exit 0
-# fi
-# wait for input data being streamed for the first tile
-# Check if the h5 file is being used by another process
-tile_id=39VWL
-h5_file="${input_dir}/${tile_id}.h5"
-stream_flag="${HOME}/data/GVS/Deploy/flags_stream_${year}/${tile_id}_best_images_done"
-if [ ! -f "$stream_flag" ] && [ "$use_flash" == "False" ]; then
-    echo "Failed: tile $tile_id doesn't exist" >&2
-    exit 1
-fi
-
-sync_to_lumi() {
-    echo "***************************** SYNC DATA TO LUMI-O *****************************"
-    ## since we'll apply correction and blending to the data, we don't translate the data to cog 
-    module load lumio
-
-    lumi_project=465001846
-    remote=lumi-${lumi_project}-private:
-
-    # Get bucket name and check if it exists
-    zone=$(echo ${tile_id:0:3} | tr '[:upper:]' '[:lower:]')
-    bucket_name=${zone}-${year}
-    echo "bucket_name: ${bucket_name}"
-
-    if rclone lsd ${remote} | grep "^.*${bucket_name}.*"; then
-        echo "Bucket ${bucket_name} exists"
-    else
-        echo "Bucket ${bucket_name} does not exist, creating..."
-        rclone mkdir ${remote}${bucket_name}
-    fi
-
-    SRC=${save_dir}/${tile_id}_GTiff
-    DST=${remote}${bucket_name}/predictions_GTiff_${year}/${tile_id}
-    # e.g. remote="lumi-${lumi_project}-private:"  ← note the trailing colon
-    rclone sync "$SRC" "$DST" --transfers=16 --checkers=16 --multi-thread-streams=4
-    # rclone sync ${HOME}/data/GVS/Deploy/predictions_${year}/${tile_id}_cog ${remote}${bucket_name}/predictions_${year}/${tile_id}_cog --local-no-check-updated
-    count=$(rclone ls "${DST}" | wc -l)
-    echo "Number of files in ${DST}: $count"
-    if [ $count -lt 303 ]; then
-        echo "Number of files in ${DST} is less than 303, deleting..."
-        echo "Error: Number of files in ${DST} is less than 303" >&2
-        exit 1
-    fi
-        rm -rf ${save_dir}/${tile_id}_GTiff
-        touch ${HOME}/data/GVS/Deploy/flags_inference_${year}/${tile_id}_best_images_done
-        echo "***************************** END SYNC DATA TO LUMI-O *****************************"
-}
-
-echo "***************************** START INFERENCE *****************************"
-run_id=cg11fpjr
-echo run prediction for model $run_id for tile $tile_id;
-python run.py predict -c config/predict.yaml --model.backbone config/model/xception_mix_order.yaml \
-        --data.init_args.tile_id $tile_id \
-        --data.init_args.metadata_file $meta_file \
-        --data.init_args.s2_grid_file ${HOME}14080629   \
-        --data.init_args.pred_fp ${input_dir} \
-        --data.init_args.prediction_dir ${save_dir}/${tile_id}_GTiff \
-        --data.init_args.year $year \
-        --data.init_args.batch_size 1 \
-        --data.init_args.cache_predictions False \
-        --data.init_args.stream_input True \
-        --data.init_args.download_data $download_data \
-        --data.init_args.debug False \
-        --trainer.logger.init_args.resume False \
-        --trainer.logger.init_args.offline True \
-        --trainer.logger.init_args.save_dir /tmp \
-        --trainer.logger.init_args.id $run_id 
-
-# Capture the exit status of the command
-exit_status=$?
-if [ $exit_status -ne 0 ]; then
-    echo "Prediction command failed with exit status $exit_status for tile $tile_id"
-    rm -rf $save_dir/${tile_id}_GTiff
-    if [ "$use_flash" == "True" ]; then
-        echo "Process may be interrupted during streaming, delete input h5 file..."
-        rm -f ${h5_file}
-    fi
-else
-    echo "Prediction command completed successfully"
-    echo "Delete input h5 file..."
-    rm -f ${h5_file}
-    sync_to_lumi
-fi
-echo "***************************** END INFERENCE *****************************"
 
 # ===============================================================================================
 # ============================ One slurm job predicting several tiles ===========================

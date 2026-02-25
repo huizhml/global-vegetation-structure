@@ -33,3 +33,14 @@ module load LUMI
 module load lumi-container-wrapper
 conda-containerize new --prefix $ENV_PREFIX scripts/lumi/env_cnr.yml
 conda-containerize update $ENV_PREFIX --post-install scripts/lumi/update_env.sh
+
+# =========================== Load gdal ===========================
+export EBU_USER_PREFIX=/projappl/project_${NEW_PROJECT}/EasyBuild
+module load LUMI/24.03 EasyBuild-user
+eb GDAL-3.9.0-cpeGNU-24.03-cray-python-3.11.7.eb -r
+
+module load LUMI partition/G
+module load GDAL/3.12.0-cpeGNU-25.03-cray-python-3.11.7
+
+module load LUMI/24.03 partition/C
+module load GDAL/3.9.0-cpeGNU-24.03-cray-python-3.11.7
