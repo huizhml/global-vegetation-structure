@@ -420,7 +420,7 @@ class GlobalMosaicker:
         diff_paths = dask.compute(*tasks, scheduler="processes", num_workers=8)
 
         # Step 2: Mosaic the tiles
-        mosaic_path = self.save_dir / f"global_mosaic_RH{self.rh_idx}_Q{self.left_q_idx}-Q{self.right_q_idx}.tif"
+        mosaic_path = self.save_dir / f"global_mosaic_{self.year}_RH{self.rh_idx}_Q{self.left_q_idx}-Q{self.right_q_idx}.tif"
         self._mosaic_tiles(diff_paths, mosaic_path)
 
         # Step 3: Translate the mosaic to cog
