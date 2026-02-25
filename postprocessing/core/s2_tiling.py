@@ -1,3 +1,5 @@
+import os
+import re
 import geopandas as gpd
 from pathlib import Path
 from dataclasses import dataclass
@@ -194,6 +196,74 @@ def get_tiles_reblend(tiles_list_file: str, s2_grid_file: str, **kwargs):
             f.write(tile + '\n')
     
     
+def get_tiles_redundant(s2_grid_file: str, cog_dir: str, save_dir: str, **kwargs):
+    '''
+    Get redundant tiles
+    1. tiles that are completely covered by other tiles
+    2. tiles that are covered by non-vegetated areas, nodata percentage == 100%
+    Save the tiles to a text file
+    Args:
+        s2_grid_file: path to the s2 grid file, in fgb format
+        cog_dir: path to the cog directory
+        save_dir: path to the save directory
+        kwargs: keyword arguments
+    Returns:
+        None
+    '''
+    cog_dir = Path(cog_dir).expanduser()
+    save_dir = Path(save_dir).expanduser()
+    s2_grid_file = Path(s2_grid_file).expanduser()
+    s2_grid = gpd.read_file(s2_grid_file)
+    redundant_tiles = s2_grid[s2_grid['redundant']]
+    redundant_pairs = []
+    for idx, tile in redundant_tiles.iterrows():
+        geom = tile['geometry']
+        intersecting_tiles = redundant_tiles[redundant_tiles.intersects(tile['geometry'])]
+        intersecting_tiles = intersecting_tiles[intersecting_tiles['Name'] != tile['Name']]
+        intersecting_tiles['intersection_area'] = intersecting_tiles.geometry.intersection(geom).area
+        if len(intersecting_tiles) == 0:
+            continue
+        redundant_tile = intersecting_tiles.sort_values('intersection_area', ascending=False).iloc[0]
+        redundant_pairs.append(set([tile['Name'], redundant_tile['Name']]))
+    remove = [min(pair) for pair in redundant_pairs]
+    remove = set(remove)
+    
+    with open(save_dir / 'tiles_redundant.txt', 'w') as f:
+        for tile in remove:
+            f.write(tile + '\n')
+            
+def get_tiles_nodata(cog_dir: str, save_dir: str, s2_grid_file: str, **kwargs):
+    '''
+    Get tiles that are completely covered by nodata, e.g, covered by snow or ice
+    simply by checking the file size, which seems to be 124K in size for a cog file.
+    So if all files are smaller than 124K, then the tile is likely to be nodata.
+    Args:
+        s2_grid_file: path to the s2 grid file, in fgb format
+        cog_dir: path to the cog directory
+    Returns:
+        None
+    '''
+    cog_dir = Path(cog_dir).expanduser()
+    save_dir = Path(save_dir).expanduser()
+    s2_grid_file = Path(s2_grid_file).expanduser()
+    s2_grid = gpd.read_file(s2_grid_file)
+    match = re.search(r'(20\d{2})', str(cog_dir))
+    year = match.group(1) if match else ''
+    tiles = os.listdir(cog_dir)
+    nodata_tiles = []
+    for tile in tiles:
+        files = list((cog_dir / tile).glob('*.tif'))
+        nodata_files = 0
+        for file in files:
+            if file.stat().st_size > 126976:
+                break
+            nodata_files += 1
+        if nodata_files == len(files):
+            nodata_tiles.append(tile)
+
+    with open(save_dir / f'tiles_nodata_{year}.txt', 'w') as f:
+        for tile in nodata_tiles:
+            f.write(tile + '\n')   
 
 
 @dataclass

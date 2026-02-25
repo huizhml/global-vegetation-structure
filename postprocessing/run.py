@@ -8,6 +8,18 @@ import hydra
 from omegaconf import OmegaConf, MISSING
 from config.base_config_class import ClassConfig, FunctionConfig
 
+@dataclass
+class GetTilesNodataConfig(FunctionConfig):
+    cog_dir: str = '~/data/gvs/predictions/2020/blended/tiles/cog'
+    _target_: str = "postprocessing.core.s2_tiling.get_tiles_nodata"
+
+@dataclass
+class GetTilesRedundantConfig(FunctionConfig):
+    s2_grid_file: str = '~/data/gvs/state/deploy_status.fgb'
+    cog_dir: str = '~/data/gvs/predictions/2020/blended/tiles/cog'
+    save_dir: str = '~/data/gvs/assets/worklists/'
+    _target_: str = "postprocessing.core.s2_tiling.get_tiles_redundant"
+
 
 @dataclass
 class GetTilesReblendConfig(FunctionConfig):
@@ -138,7 +150,8 @@ cs.store(group='run', name='run_blending', node=RunBlendingConfig)
 cs.store(group='run', name='extract_pred', node=ExtractPredBiomeConfig)
 cs.store(group='run', name='create_distance_maps', node=CreateDistanceMapsConfig)
 cs.store(group='run', name='translate_predictions', node=TranslatePredictionsConfig)
-
+cs.store(group='run', name='get_tiles_redundant', node=GetTilesRedundantConfig)
+cs.store(group='run', name='get_tiles_nodata', node=GetTilesNodataConfig)
 # ================================ Main Config ================================
 cs.store(name='base_config', node=RunConfig) # NOTE: name here should match the default in ../config/base/no_log.yaml
 
