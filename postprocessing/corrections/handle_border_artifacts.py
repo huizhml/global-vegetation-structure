@@ -251,7 +251,8 @@ class VSMCorrection(Blending):
             
         if self.is_costal_tile:
             snow_water_mask = self.get_water_snow_mask(current_tile)
-            blended = blended.where(~snow_water_mask, NO_DATA)
+            if snow_water_mask is not None:
+                blended = blended.where(~snow_water_mask, NO_DATA)
             
         tile_shape = current_tile.assets['RH98_Q1'].extra_fields['proj:shape']
         profile = {
