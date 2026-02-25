@@ -8,6 +8,12 @@ from omegaconf import OmegaConf, MISSING
 from config.base_config_class import FunctionConfig, ClassConfig
 
 @dataclass
+class CreateGlobalMosaicPdfConfig(FunctionConfig):
+    mosaic_dir: str = '~/data/gvs/predictions/2020/blended/mosaic/'
+    pdf_file: str = '~/data/gvs/results/pred_thumbs/global_mosaic.pdf'
+    _target_: str = "visualization.core.create_pdf_thumb.make_global_mosaic_pdf"
+
+@dataclass
 class CreateGlobalDiffMosaicConfig(ClassConfig):
     tiles_dir: str = '~/data/gvs/predictions/2020/blended/tiles/geotiff/'
     save_dir: str = '~/data/gvs/predictions/2020/blended/mosaic/'
@@ -85,6 +91,7 @@ cs.store(group='run', name='create_pdf_thumb', node=CreateRhPairPdfConfig)
 cs.store(group='run', name='create_pred_neighbor_pdf', node=CreatePredNeighborPdfConfig)
 cs.store(group='run', name='create_cloud_cover_boxplot', node=CreateCloudCoverBoxplotConfig)
 cs.store(group='run', name='create_global_diff_mosaic', node=CreateGlobalDiffMosaicConfig)
+cs.store(group='run', name='create_global_mosaic_pdf', node=CreateGlobalMosaicPdfConfig)
 # ================================ Main Config ================================
 cs.store(name='base_config', node=RunConfig) # NOTE: name here should match the default in ../config/base/no_log.yaml
 

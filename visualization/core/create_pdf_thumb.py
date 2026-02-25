@@ -1,6 +1,7 @@
 from pathlib import Path
 import pandas as pd
 import rasterio
+import re
 import rioxarray as rio
 import h5py
 import xarray as xr
@@ -8,15 +9,18 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.colors import Colormap
+from matplotlib.ticker import FuncFormatter
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 from typing import Union
 import copy
 import os
-os.environ['HYDRA_FULL_ERROR'] = '1'
-import geopandas as gpd
-from postprocessing.core.s2_tiling import find_intersecting_s2_tiles
 import pystac
 import stackstac
+import geopandas as gpd
+from postprocessing.core.s2_tiling import find_intersecting_s2_tiles
+from const import rh_vis_params
 
+os.environ['HYDRA_FULL_ERROR'] = '1'
 
 # --------- I/O Functions ---------
 def rio_read(tif_file: Path, overview_level: int = 0):
@@ -63,6 +67,13 @@ def read_s2_images_from_zarr(zarr_dir: Path, tile_id: str, time_stamp: str=None,
     ds = ds.sel(x=slice(0, resolution), y=slice(0, resolution))
     return ds
 
+def get_vis_params(tif_file: Path):
+    q_idx = re.search(r'Q(\d+)', tif_file.stem)
+    if q_idx is None: # for Qskewness
+        return -150, 150, 'RdBu_r'
+    else:
+        rh_idx = re.search(r'RH(\d+)', tif_file.stem).group(1)
+        return rh_vis_params[f'RH{rh_idx}']['cmin'], rh_vis_params[f'RH{rh_idx}']['cmax'], 'inferno'
 
 # --------- Plotting Functions ---------
 def plot_xr_rgb(image: xr.DataArray, *, title: str = None):
@@ -159,6 +170,33 @@ def plot_pdf_cover(params: dict, timestamp: str):
     )
     
     return fig_cover
+
+
+def plot_tiff_image(tif_file: Path):
+    cmin, cmax, cmap = get_vis_params(tif_file)
+    fig = plt.figure(figsize=(6, 5))
+    image = rio_read(tif_file)
+    # with rasterio.open(tif_file) as src:
+    #     image = src.read(1)
+    #     nodata = src.nodata
+    # # image = image.astype(np.float32)
+    # image[image == nodata] = 0
+    ax = plt.gca()
+    ax.imshow(image, cmap=cmap, vmin=cmin, vmax=cmax)
+    im = ax.get_images()[0]
+    ax.set_title(tif_file.stem)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_xlabel('')
+    ax.set_ylabel('')
+    fig.tight_layout()
+    cax = fig.add_axes([0.06, 0.3, 0.02, 0.15])
+    cbar = fig.colorbar(im, cax=cax, orientation='vertical')
+    cbar.set_ticks([cmin, cmax])
+    cbar.set_ticklabels([f'{cmin / 10:.0f}', f'{cmax / 10:.0f}'])
+    cbar.ax.tick_params(size=0, pad=2)
+    cbar.outline.set_visible(False)
+    return fig
 
 
 # --------- Main Functions ---------
@@ -288,5 +326,23 @@ def make_rh_pair_pdf(
             plt.close(fig)
     print(f'saved to {pdf_file}')
     
-    
-    
+def make_global_mosaic_pdf(mosaic_dir: str, pdf_file: Path, **kwargs):
+    '''
+    Make a PDF file where each page renders a global mosaic of a TIFF image
+    '''
+    timestamp = pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')
+    mosaic_dir = Path(mosaic_dir).expanduser()
+    tif_files = list(mosaic_dir.glob('global_mosaic_*RH*Q*.cog.tif'))
+    pdf_file = Path(pdf_file).expanduser()
+    pdf_file.parent.mkdir(parents=True, exist_ok=True)
+    pdf_file = pdf_file.with_stem(f'{pdf_file.stem}_{timestamp}')
+    with PdfPages(pdf_file) as pdf:
+        fig_cover = plot_pdf_cover(locals(), timestamp)
+        pdf.savefig(fig_cover)
+        plt.close(fig_cover)
+        for tif_file in tif_files:
+            fig = plot_tiff_image(tif_file)
+            pdf.savefig(fig, bbox_inches='tight')
+            plt.close(fig)
+            
+    print(f'saved to {pdf_file}')
