@@ -34,10 +34,13 @@ python -m visualization.run run=create_global_diff_mosaic \
 
 2)
 # ----------------------------------------
-#    Calculate the difference between two tif files
+#    Calculate the skewness of the upper span(Q0-Q1) and lower span(Q1-Q2)
 # ----------------------------------------
 data_root_dir=${HOME}/data/gvs/predictions/2020/blended/mosaic/
-gdal_calc.py -A ${data_root_dir}/${2}.tif -B ${data_root_dir}/${3}.tif --outfile=${data_root_dir}/${4}.tif \
+a_filename_pattern=global_mosaic_2020_RH${2}_Q0-Q1.cog.tif
+b_filename_pattern=global_mosaic_2020_RH${2}_Q1-Q2.cog.tif
+out_filename=global_mosaic_2020_RH${2}_Qskewness
+gdal_calc.py -A ${data_root_dir}/${a_filename_pattern} -B ${data_root_dir}/${b_filename_pattern} --outfile=${data_root_dir}/${out_filename}.tif \
     --calc="A-B" --format=GTiff \
     --co="TILED=YES" \
     --co="COPY_SRC_OVERVIEWS=YES" \
@@ -46,12 +49,12 @@ gdal_calc.py -A ${data_root_dir}/${2}.tif -B ${data_root_dir}/${3}.tif --outfile
     --NoDataValue=32767 \
     --overwrite
 
-gdal_translate ${data_root_dir}/${4}.tif ${data_root_dir}/${4}.cog.tif \
+gdal_translate ${data_root_dir}/${out_filename}.tif ${data_root_dir}/${out_filename}.cog.tif \
     -of COG \
     -co COMPRESS=LERC_ZSTD \
     -co MAX_Z_ERROR=0
     
-rm ${data_root_dir}/${4}.tif
+rm ${data_root_dir}/${out_filename}.tif
 ;;
 
 *)
