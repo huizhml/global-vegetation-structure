@@ -70,7 +70,7 @@ def read_s2_images_from_zarr(zarr_dir: Path, tile_id: str, time_stamp: str=None,
 def get_vis_params(tif_file: Path):
     q_idx = re.search(r'Q(\d+)', tif_file.stem)
     if q_idx is None: # for Qskewness
-        return -150, 150, 'RdBu_r'
+        return -120, 120, 'RdBu_r'
     else:
         rh_idx = re.search(r'RH(\d+)', tif_file.stem).group(1)
         return rh_vis_params[f'RH{rh_idx}']['cmin'], rh_vis_params[f'RH{rh_idx}']['cmax'], 'inferno'
@@ -333,6 +333,7 @@ def make_global_mosaic_pdf(mosaic_dir: str, pdf_file: Path, **kwargs):
     timestamp = pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')
     mosaic_dir = Path(mosaic_dir).expanduser()
     tif_files = list(mosaic_dir.glob('global_mosaic_*RH*Q*.cog.tif'))
+    tif_files = sorted(tif_files)
     pdf_file = Path(pdf_file).expanduser()
     pdf_file.parent.mkdir(parents=True, exist_ok=True)
     pdf_file = pdf_file.with_stem(f'{pdf_file.stem}_{timestamp}')
