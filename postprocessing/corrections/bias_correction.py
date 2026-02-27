@@ -257,74 +257,7 @@ def create_vrt_for_rhs(file_paths: list[str]):
     </VRTRasterBand>
     """
     vrt_xml += "</VRTDataset>"
-    return vrt_xml
-
-def pair_predictions_with_gedi_ref_data(
-        gedi_chm_reference_dir: str = None, year: int = None, tiles_list_file: str = None, save_dir: str = None,
-        stac_collection_dir: str = None, **kwargs):
-    '''
-    Check the correction performance (RMSE, MAE and ME) with GEDI reference data and sota chm
-    Split the correction data into 2 parts:
-    - Part 1: used for correction
-    - Part 2: used for evaluation
-    '''
-    gedi_chm_reference_dir = Path(f'{gedi_chm_reference_dir}').expanduser()
-    stac_collection_dir = Path(f'{stac_collection_dir}').expanduser()
-    
-    save_dir = Path(save_dir).expanduser()
-    save_dir.mkdir(parents=True, exist_ok=True)
-    if tiles_list_file is not None: # for european tiles
-        with open(tiles_list_file, 'r') as f:
-            all_tiles = f.read().splitlines()
-    else:
-        all_tiles = [tile.stem for tile in gedi_chm_reference_dir.glob('*.parquet')]
-    # all_tiles = ['32SNA']
-    print(f'{len(all_tiles)} tiles have predictions')
-    rh_size = 101
-    ours_rh_cols = [f'RH{i}_Q1_raw' for i in range(rh_size)]
-
-    @dask.delayed
-    def test_correction_for_one_tile(tile_id: str):
-        if not (stac_collection_dir/f'{tile_id}_{year}').exists():
-            print(f'{tile_id} not found in stac collection')
-            return None, None, None
-        
-        gedi_chm_ref_df = gpd.read_parquet(gedi_chm_reference_dir / f'{tile_id}.parquet')
-        lon = gedi_chm_ref_df.lon.values
-        lat = gedi_chm_ref_df.lat.values
-        stac_item = pystac.Item.from_file(str(stac_collection_dir / f'{tile_id}_{year}/{tile_id}_{year}.json'))
-
-        pred_fp0 = stac_item.assets[f'RH0_Q1'].href.replace('file://', '')
-        with rasterio.open(pred_fp0) as src:
-            xs, ys = transform('EPSG:4326', src.crs, lon, lat)
-            coords = list(zip(xs, ys))
-            nodata = src.nodata
-        
-        preds = []
-        for rh_idx in range(rh_size):
-            pred_fp = stac_item.assets[f'RH{rh_idx}_Q1'].href.replace('file://', '')
-            with rasterio.open(pred_fp) as src:
-                # xs, ys = transform('EPSG:4326', src.crs, lon, lat)
-                # coords = list(zip(xs, ys))
-                rh = list(rasterio.sample.sample_gen(src, coords))
-                pred = np.concatenate(rh, axis=0).reshape(-1, 1)
-                preds.append(pred)  # (n_points, 1)
-                
-        preds = np.concatenate(preds, axis=1)  # (n_points, rh_size)
-        preds = preds.astype(np.float32)
-        preds = np.where(preds == nodata, np.nan, preds) # mask nodata (non-vegetation) for pred and ref
-        
-        # apply bias correction for all rhs
-        _df = pd.DataFrame(preds/10, index=gedi_chm_ref_df.index, columns=ours_rh_cols)
-        gedi_chm_ref_df = gedi_chm_ref_df.join(_df)
-        gedi_chm_ref_df.to_parquet(save_dir / f'{tile_id}.parquet')
-
-    # all_tiles = ['48RWN']
-    tasks = []
-    for tile_id in all_tiles:
-        tasks.append(test_correction_for_one_tile(tile_id))
-    with ProgressBar():
-        res = dask.compute(*tasks)
+    return vrt_xml       
         
     
 def evaluate_bias_correction_against_sota_chm(

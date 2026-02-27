@@ -26,7 +26,7 @@ import shutil
 from pystac_client.stac_api_io import StacApiIO
 from postprocessing.core.translate import translate_tile
 from postprocessing.corrections.blending import Blending
-from const import NO_DATA
+from const import NO_DATA, KEY_RHS
 import warnings
 warnings.filterwarnings(
     "ignore",
@@ -39,7 +39,7 @@ gdal.UseExceptions()
 stac_api_io = StacApiIO()
 stac_endpoint = 'https://planetarycomputer.microsoft.com/api/stac/v1'
 
-KEY_RHS = (0, 10, 25, 50, 75, 95, 98, 100)
+# KEY_RHS = (0, 10, 25, 50, 75, 95, 98, 100)
 ESA_WORLD_COVER_WATER_SNOW_MASK = (0, 70, 80) # nodata, snow and ice, water
 
 
