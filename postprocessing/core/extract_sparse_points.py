@@ -159,4 +159,108 @@ def extract_gedi_from_h5(h5_file: str, index_table_dir: str, save_dir: str, year
     # unfinished_files = [fp for fp in unfinished_files if '37T' in fp.stem]
     tasks = [_extract(index_table_fp, year) for index_table_fp in unfinished_files]
     dask.compute(*tasks)
+
+    
+# ------------------------------------------------------------
+#  Helpers
+
+def _extract_rh_profile_from_tif(Pred_dir: Path, lon: np.ndarray, lat: np.ndarray, rh_idxs: list[int] = [98]):
+    '''
+    Extract the RH profile from the tif files
+    Args:
+        Pred_dir: list of tif files
+        lon: longitude array
+        lat: latitude array
+        rh_size: number of RHs
+    Returns:
+        preds: array of shape (n_points, rh_size)
+    '''
+    
+    with rasterio.open(Pred_dir / f'RH{rh_idxs[0]}_Q1.tif') as src:
+        xs, ys = transform('EPSG:4326', src.crs, lon, lat)
+        coords = list(zip(xs, ys))
+        nodata = src.nodata
+    
+    preds = []
+    for rh_idx in rh_idxs:
+        with rasterio.open(Pred_dir / f'RH{rh_idx}_Q1.tif') as src:
+            # xs, ys = transform('EPSG:4326', src.crs, lon, lat)
+            # coords = list(zip(xs, ys))
+            rh = list(rasterio.sample.sample_gen(src, coords))
+            pred = np.concatenate(rh, axis=0).reshape(-1, 1)
+            preds.append(pred)  # (n_points, 1)
+            
+    preds = np.concatenate(preds, axis=1)  # (n_points, rh_size)
+    preds = preds.astype(np.float32)
+    preds = np.where(preds == nodata, np.nan, preds) # mask nodata (non-vegetation) for pred and ref
+    return preds
+
+
+# ------------------------------------------------------------
+#  Main functions
+# ------------------------------------------------------------
+
+
+def pair_predictions_with_gedi_ref_data(
+        gedi_chm_reference_dir: str = None, year: int = None, tiles_list_file: str = None, save_dir: str = None,
+        stac_collection_dir: str = None, pred_dir: str = None, rh_idxs: list[int] = [98], **kwargs):
+    '''
+    Check the correction performance (RMSE, MAE and ME) with GEDI reference data and sota chm
+    Split the correction data into 2 parts:
+    - Part 1: used for correction
+    - Part 2: used for evaluation
+    '''
+    gedi_chm_reference_dir = Path(f'{gedi_chm_reference_dir}').expanduser()
+    pred_dir = pred_dir and Path(f'{pred_dir}').expanduser()
+    stac_collection_dir = stac_collection_dir and Path(f'{stac_collection_dir}').expanduser()
+    
+    save_dir = Path(save_dir).expanduser()
+    save_dir.mkdir(parents=True, exist_ok=True)
+    if tiles_list_file is not None: # for european tiles
+        with open(tiles_list_file, 'r') as f:
+            all_tiles = f.read().splitlines()
+    else:
+        all_tiles = [tile.stem for tile in gedi_chm_reference_dir.glob('*.parquet')]
+        
+    
+    # all_tiles = ['32SNA']
+    print(f'{len(all_tiles)} tiles have predictions')
+
+    ours_rh_cols = [f'RH{i}_Q1_raw' for i in rh_idxs]
+    
+    @dask.delayed
+    def _get_tile_pred_dir(tile_id: str, stac_collection_dir: str = None, pred_dir: str = None):
+        if pred_dir is not None and (pred_dir/f'{tile_id}').exists():
+            return pred_dir / f'{tile_id}'
+
+        if stac_collection_dir is not None and (stac_collection_dir / f'{tile_id}_{year}').exists():
+            stac_item = pystac.Item.from_file(str(stac_collection_dir / f'{tile_id}_{year}/{tile_id}_{year}.json'))
+            tile_pred_dir = Path(stac_item.assets[f'RH98_Q1'].href.replace('file://', '')).parent
+            return tile_pred_dir
+        return None
+
+    @dask.delayed
+    def _process_tile(pred_dir: Path):
+        if pred_dir is None:
+            return None
+        tile_id = pred_dir.stem
+        gedi_chm_ref_df = gpd.read_parquet(gedi_chm_reference_dir / f'{tile_id}.parquet')
+        lon = gedi_chm_ref_df.lon.values
+        lat = gedi_chm_ref_df.lat.values
+
+        preds = _extract_rh_profile_from_tif(pred_dir, lon, lat, rh_idxs)
+
+        # apply bias correction for all rhs
+        _df = pd.DataFrame(preds/10, index=gedi_chm_ref_df.index, columns=ours_rh_cols)
+        gedi_chm_ref_df = gedi_chm_ref_df.join(_df)
+        gedi_chm_ref_df.to_parquet(save_dir / f'{tile_id}.parquet')
+
+    # all_tiles = ['35NLJ']
+    tasks = []
+    for tile_id in all_tiles:
+        pred_file = _get_tile_pred_dir(tile_id, stac_collection_dir, pred_dir)
+        tasks.append(_process_tile(pred_file))
+    with ProgressBar():
+        res = dask.compute(*tasks)
+ 
     

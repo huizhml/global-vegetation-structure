@@ -3,10 +3,11 @@ import time
 from typing import List, Optional, Any
 from hydra.core.config_store import ConfigStore
 from hydra.utils import instantiate
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 import hydra
 from omegaconf import OmegaConf, MISSING
 from config.base_config_class import ClassConfig, FunctionConfig
+from const import KEY_RHS
 
 @dataclass
 class GetTilesNodataConfig(FunctionConfig):
@@ -103,13 +104,23 @@ class CheckfterBiasCorrectionConfig(FunctionConfig):
     _target_: str = "visualization.create_global_view.check_mosaic_after_bias_correction"
 
 @dataclass
-class PairOursSotaGEDIConfig(FunctionConfig):
+class AddOursToSOTAGEDIConfig(FunctionConfig):
     year: int = 2020
     gedi_chm_reference_dir: str = '~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_cal/original_with_sota_chms/2020'
     save_dir: str = '~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_cal/original_with_sota_chms_ours/2020'
     stac_collection_dir: str = '~/data/gvs/products/gvsm_stac_catalog/vsm_local'
-    _target_: str = "postprocessing.corrections.bias_correction.pair_predictions_with_gedi_ref_data"
+    rh_idxs: list[int] = field(default_factory=lambda: list(range(101)))
+    _target_: str = "postprocessing.core.extract_sparse_points.pair_predictions_with_gedi_ref_data"
     
+@dataclass
+class AddOursBlendedToSOTAGEDIConfig(FunctionConfig):
+    year: int = 2020
+    gedi_chm_reference_dir: str = '~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_test/original_with_sota_chms/2020'
+    save_dir: str = '~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_test/original_with_sota_chms_ours_blended/2020'
+    pred_dir: str = '~/data/gvs/predictions/2020/blended/tiles/cog'
+    rh_idxs: list[int] = field(default_factory=lambda: KEY_RHS)
+    _target_: str = "postprocessing.core.extract_sparse_points.pair_predictions_with_gedi_ref_data"
+
 
 @dataclass
 class ExtractPredBiomeConfig(FunctionConfig):
@@ -129,7 +140,7 @@ class EvaluateBiasCorrectionConfig(FunctionConfig):
     _target_: str = "postprocessing.corrections.bias_correction.evaluate_bias_correction_against_sota_chm"
 
 defaults = [
-    {'run': 'pair_ours_sota_gedi'}, # default group
+    {'run': 'add_ours_to_sota_gedi'}, # default group
     "_self_"
 ]
 
@@ -143,7 +154,8 @@ cs.store(group='run', name='get_tiles_reblend', node=GetTilesReblendConfig)
 cs.store(group='run', name='repartition_data', node=RepartitionDataConfig)
 cs.store(group='run', name='extract_gedi_from_h5', node=ExtractGEDIFromH5Config)
 cs.store(group='run', name='check_after_bias_correction', node=CheckfterBiasCorrectionConfig)
-cs.store(group='run', name='pair_ours_sota_gedi', node=PairOursSotaGEDIConfig)
+cs.store(group='run', name='add_ours_to_sota_gedi', node=AddOursToSOTAGEDIConfig)
+cs.store(group='run', name='add_ours_blended_to_sota_gedi', node=AddOursBlendedToSOTAGEDIConfig)
 cs.store(group='run', name='evaluate_bias_correction', node=EvaluateBiasCorrectionConfig)
 cs.store(group='run', name='get_tiles_wo_enough_gedi_gt', node=GetTilesWooEnoughGEDIConfig)
 cs.store(group='run', name='run_blending', node=RunBlendingConfig)
