@@ -1,6 +1,6 @@
 import os
 from osgeo import gdal
-from typing import List
+from typing import List, Union
 import geopandas as gpd
 import pandas as pd
 from dataclasses import dataclass
@@ -203,7 +203,7 @@ def _extract_rh_profile_from_tif(Pred_dir: Path, lon: np.ndarray, lat: np.ndarra
 
 def pair_predictions_with_gedi_ref_data(
         gedi_chm_reference_dir: str = None, year: int = None, tiles_list_file: str = None, save_dir: str = None,
-        stac_collection_dir: str = None, pred_dir: str = None, rh_idxs: list[int] = [98], **kwargs):
+        stac_collection_dir: str = None, pred_parent_dir: str = None, rh_idxs: list[int] = [98], **kwargs):
     '''
     Check the correction performance (RMSE, MAE and ME) with GEDI reference data and sota chm
     Split the correction data into 2 parts:
@@ -211,7 +211,7 @@ def pair_predictions_with_gedi_ref_data(
     - Part 2: used for evaluation
     '''
     gedi_chm_reference_dir = Path(f'{gedi_chm_reference_dir}').expanduser()
-    pred_dir = pred_dir and Path(f'{pred_dir}').expanduser()
+    pred_parent_dir = pred_parent_dir and Path(f'{pred_parent_dir}').expanduser()
     stac_collection_dir = stac_collection_dir and Path(f'{stac_collection_dir}').expanduser()
     
     save_dir = Path(save_dir).expanduser()
@@ -229,9 +229,9 @@ def pair_predictions_with_gedi_ref_data(
     ours_rh_cols = [f'RH{i}_Q1_raw' for i in rh_idxs]
     
     @dask.delayed
-    def _get_tile_pred_dir(tile_id: str, stac_collection_dir: str = None, pred_dir: str = None):
-        if pred_dir is not None and (pred_dir/f'{tile_id}').exists():
-            return pred_dir / f'{tile_id}'
+    def _get_tile_pred_dir(tile_id: str):
+        if pred_parent_dir is not None and (pred_parent_dir/f'{tile_id}').exists():
+            return pred_parent_dir / f'{tile_id}'
 
         if stac_collection_dir is not None and (stac_collection_dir / f'{tile_id}_{year}').exists():
             stac_item = pystac.Item.from_file(str(stac_collection_dir / f'{tile_id}_{year}/{tile_id}_{year}.json'))
@@ -240,8 +240,9 @@ def pair_predictions_with_gedi_ref_data(
         return None
 
     @dask.delayed
-    def _process_tile(pred_dir: Path):
+    def _process_tile(pred_dir: Union[Path, None]):
         if pred_dir is None:
+            print(f'{tile_id} not found in {pred_parent_dir}, or in stac collection')
             return None
         tile_id = pred_dir.stem
         gedi_chm_ref_df = gpd.read_parquet(gedi_chm_reference_dir / f'{tile_id}.parquet')
@@ -258,7 +259,7 @@ def pair_predictions_with_gedi_ref_data(
     # all_tiles = ['35NLJ']
     tasks = []
     for tile_id in all_tiles:
-        pred_file = _get_tile_pred_dir(tile_id, stac_collection_dir, pred_dir)
+        pred_file = _get_tile_pred_dir(tile_id)
         tasks.append(_process_tile(pred_file))
     with ProgressBar():
         res = dask.compute(*tasks)
