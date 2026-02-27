@@ -237,12 +237,12 @@ def pair_predictions_with_gedi_ref_data(
             stac_item = pystac.Item.from_file(str(stac_collection_dir / f'{tile_id}_{year}/{tile_id}_{year}.json'))
             tile_pred_dir = Path(stac_item.assets[f'RH98_Q1'].href.replace('file://', '')).parent
             return tile_pred_dir
+        print(f'{tile_id} not found in {pred_parent_dir}, or in stac collection')
         return None
 
     @dask.delayed
     def _process_tile(pred_dir: Union[Path, None]):
         if pred_dir is None:
-            print(f'{tile_id} not found in {pred_parent_dir}, or in stac collection')
             return None
         tile_id = pred_dir.stem
         gedi_chm_ref_df = gpd.read_parquet(gedi_chm_reference_dir / f'{tile_id}.parquet')
