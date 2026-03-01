@@ -36,7 +36,7 @@ def get_nrows(parquet_dir: Path):
     return pq.ParquetFile(parquet_dir).metadata.num_rows
     
 
-def check_npoints_for_two_datasets(source_dir: str = None, target_dir: str = None):
+def check_npoints_for_two_datasets(source_dir: str = None, target_dir: str = None, **kwargs):
     '''
     Check the number of files and points for two parquetdatasets
     The two datasets should have the same file naming
@@ -88,7 +88,7 @@ def check_npoints_for_two_datasets(source_dir: str = None, target_dir: str = Non
             logger.warning(f'The total number of points is not identical in the common files of the source and target datasets: \n{source_nrows} != {target_nrows}\n')
 
 
-def check_total_points_for_two_partitioned_datasets(source_dir: str = None, target_dir: str = None):
+def check_total_points_for_two_partitioned_datasets(source_dir: str = None, target_dir: str = None, **kwargs):
     '''
     Check the total number of points for two partitioned datasets
     The two datasets doesn't have the same file naming  
@@ -119,7 +119,7 @@ def check_total_points_for_two_partitioned_datasets(source_dir: str = None, targ
         logger.info(f'The total number of points is identical in the common files of the source and target datasets: \n{source_n} == {target_n}\n')
 
 
-def check_total_points_for_two_partitioned_data_hiarchy(source_dir: str = None, target_dir: str = None):
+def check_total_points_for_two_partitioned_data_hiarchy(source_dir: str = None, target_dir: str = None, **kwargs):
     '''
     Check the total number of points for two partitioned datasets
     The two datasets doesn't have the same file naming  

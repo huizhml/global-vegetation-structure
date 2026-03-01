@@ -117,7 +117,7 @@ class AddOursBlendedToSOTAGEDIConfig(FunctionConfig):
     year: int = 2020
     gedi_chm_reference_dir: str = '~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_test/original_with_sota_chms/2020'
     save_dir: str = '~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_test/original_with_sota_chms_ours_blended/2020'
-    pred_dir: str = '~/data/gvs/predictions/2020/blended/tiles/cog'
+    pred_parent_dir: str = '~/data/gvs/predictions/2020/blended/tiles/cog'
     rh_idxs: list[int] = field(default_factory=lambda: KEY_RHS)
     _target_: str = "postprocessing.core.extract_sparse_points.pair_predictions_with_gedi_ref_data"
 

@@ -211,21 +211,21 @@ class DownloadSOTAChmConfig(ClassConfig):
 class CheckTwoDatasetsConfig(FunctionConfig):
     source_dir: str = '~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_cal/original/2020/'
     target_dir: str = '~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_cal/original_with_sota_chms/2020/'
-    _target_: str = "download.tools.check_npoints_for_two_datasets"
+    _target_: str = "tools.sanity_check.check_npoints_for_two_datasets"
     
 
 @dataclass
 class CheckTwoPartitionedDatasetsConfig(FunctionConfig):
     source_dir: str = '~/data/gvs/datasets/splits/split_test0.1_cal0.1_val0.1_seed42_v1/index_tables/cal'
     target_dir: str = '~/data/gvs/datasets/splits/split_test0.1_cal0.1_val0.1_seed42_v1/index_tables_by_splitted_tile/cal'
-    _target_: str = "download.tools.check_total_points_for_two_partitioned_datasets"
+    _target_: str = "tools.sanity_check.check_total_points_for_two_partitioned_datasets"
 
 @dataclass
 class MakeManifestConfig(FunctionConfig):
     data_dir: str = '~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_cal/original/2020/'
     dataset_name: str = 'gedi_cal_2020'
     root_note: str = ''
-    _target_: str = "download.tools.make_manifest"
+    _target_: str = "tools.make_manifest.make_manifest"
 
 defaults = [
     {'run': 'check_two_datasets'},
