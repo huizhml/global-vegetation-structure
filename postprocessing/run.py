@@ -11,6 +11,13 @@ from const import KEY_RHS, CHM_COLS
 
 
 @dataclass
+class SampleForestTempConfig(FunctionConfig):
+    tif_dir: str = '~/data/gvs/downstream_tasks/forest_temp/'
+    p: float = 1e-4
+    seed: int = 42
+    _target_: str = "postprocessing.core.sample_raster.sample_forest_temp"
+
+@dataclass
 class MakeParqSubcolumnsConfig(FunctionConfig):
     parq_dir: str = '~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_test/original_with_sota_chms_ours_blended/2020'
     subcolumns: list[str] = field(default_factory=lambda: CHM_COLS)
@@ -173,6 +180,7 @@ cs.store(group='run', name='create_distance_maps', node=CreateDistanceMapsConfig
 cs.store(group='run', name='translate_predictions', node=TranslatePredictionsConfig)
 cs.store(group='run', name='get_tiles_redundant', node=GetTilesRedundantConfig)
 cs.store(group='run', name='get_tiles_nodata', node=GetTilesNodataConfig)
+cs.store(group='run', name='sample_forest_temp', node=SampleForestTempConfig)
 # ================================ Main Config ================================
 cs.store(name='base_config', node=RunConfig) # NOTE: name here should match the default in ../config/base/no_log.yaml
 

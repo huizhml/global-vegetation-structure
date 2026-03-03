@@ -8,6 +8,12 @@ import hydra
 from omegaconf import OmegaConf, MISSING
 from config.base_config_class import ClassConfig, FunctionConfig
 
+@dataclass
+class DownloadForestTempConfig(FunctionConfig):
+    url: str = 'https://figshare.com/ndownloader/files/39528400'
+    out_dir: str = '~/data/gvs/downstream_tasks/forest_temp'
+    _target_: str = "download.products.forest_temp.download_forest_temp"
+
 # ================================ Download MGRS Configs ================================
 @dataclass
 class DownloadMGRSConfig(ClassConfig):
@@ -242,7 +248,7 @@ cs.store(group='run', name='check_two_datasets', node=CheckTwoDatasetsConfig)
 cs.store(group='run', name='check_two_partitioned_datasets', node=CheckTwoPartitionedDatasetsConfig)
 cs.store(group='run', name='make_manifest', node=MakeManifestConfig)
 cs.store(group='run', name='download_sota_chms', node=DownloadSOTAChmConfig)
-
+cs.store(group='run', name='download_forest_temp', node=DownloadForestTempConfig)
 # ================================ MGRS Configs ================================
 cs.store(group='run', name='get_mgrs', node=DownloadMGRSConfig)
 cs.store(group='run', name='add_gedi_count', node=AddGediCountToMGRSConfig)
