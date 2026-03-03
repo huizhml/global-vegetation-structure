@@ -85,7 +85,7 @@ def make_manifest(
     dataset_name: str,
     include_hidden: bool = False,
     root_note: Optional[str] = None,
-    **kwargs: Any
+    **kwargs
 ) -> dict:
     data_dir = Path(data_dir).expanduser().resolve()
     if not data_dir.exists() or not data_dir.is_dir():

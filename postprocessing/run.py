@@ -7,7 +7,15 @@ from dataclasses import dataclass, field, fields
 import hydra
 from omegaconf import OmegaConf, MISSING
 from config.base_config_class import ClassConfig, FunctionConfig
-from const import KEY_RHS
+from const import KEY_RHS, CHM_COLS
+
+
+@dataclass
+class MakeParqSubcolumnsConfig(FunctionConfig):
+    parq_dir: str = '~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_test/original_with_sota_chms_ours_blended/2020'
+    subcolumns: list[str] = field(default_factory=lambda: CHM_COLS)
+    save_fp: str = '~/data/gvs/evaluation/sota_chm_gedi_ours_test.parquet'
+    _target_: str = "tools.make_parq_subcolumns.make_parq_subcolumns"
 
 @dataclass
 class GetTilesNodataConfig(FunctionConfig):
@@ -150,6 +158,7 @@ class RunConfig:
     run: Any = MISSING
     
 cs = ConfigStore.instance()
+cs.store(group='run', name='make_parq_subcolumns', node=MakeParqSubcolumnsConfig)
 cs.store(group='run', name='get_tiles_reblend', node=GetTilesReblendConfig)
 cs.store(group='run', name='repartition_data', node=RepartitionDataConfig)
 cs.store(group='run', name='extract_gedi_from_h5', node=ExtractGEDIFromH5Config)

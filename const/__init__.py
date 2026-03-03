@@ -78,6 +78,7 @@ MASKED_VALUE = 32767
 RH100_INDEX = 301
 RH98_INDEX = 295
 KEY_RHS = (0, 10, 25, 50, 75, 95, 98, 100)
+CHM_COLS=['rh98', 'rh95', 'rh100', 'lc', 'slope', 'lat', 'lon', 'shot_number', 'RH95_UMD', 'RH98_ETH', 'RH100_UM', 'RH95_META', 'RH95_Q1_raw', 'RH98_Q1_raw', 'RH100_Q1_raw']
 
 coverage_beams = ['BEAM0000', 'BEAM0001', 'BEAM0010', 'BEAM0011']
 power_beams = ['BEAM0101', 'BEAM0110', 'BEAM1000', 'BEAM1011']
