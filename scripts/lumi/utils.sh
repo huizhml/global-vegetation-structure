@@ -25,6 +25,7 @@ init_env() {
 
 get_data_root_dir() {
     local use_flash=$1
+    echo "use_flash=$use_flash" >&2 # debug the line to stderr
     if [ "$use_flash" == "True" ]; then
         data_root_dir=${HOME}/flash/data/gvs
     else
@@ -63,6 +64,7 @@ run_inference() {
     local meta_file=$3
     local year=$4
     download_data=True
+    h5_file=${data_root_dir}/inputs/inference_${year}/${tile_id}.h5
 
 
     printf '>%.0s' {1..20}
@@ -73,7 +75,7 @@ run_inference() {
             --data.init_args.metadata_file none
             --data.init_args.s2_grid_file ${HOME}/data/gvs/state/s2_tiles_with_growing_months.parquet
             --data.init_args.pred_fp ${data_root_dir}/inputs/inference_${year}
-            --data.init_args.prediction_dir ${save_dir}/${tile_id}
+            --data.init_args.prediction_dir ${save_dir}/geotiff/${tile_id}
             --data.init_args.year $year
             --data.init_args.stream_input True
             --data.init_args.download_data $download_data
@@ -84,7 +86,7 @@ run_inference() {
             --trainer.logger.init_args.id $run_id
     )
 
-    python run.py ${args[@]}
+    # python run.py ${args[@]}
 
     # Capture the exit status of the command
     exit_status=$?
@@ -95,14 +97,13 @@ run_inference() {
             echo "Process may be interrupted during streaming, delete input h5 file..."
             rm -f ${h5_file}
         fi
-        exit 1
     else
         echo "Prediction command completed successfully"
         echo "Delete input h5 file..."
         rm -f ${h5_file}
-        exit 0
     fi
     printf '%.0s-' {1..50}; printf '\n'
+    return $exit_status
 }
 
 
@@ -125,6 +126,7 @@ sync_to_lumi() {
     echo "Syncing data to LUMI-O for tile $tile_id"
     ## since we'll apply correction and blending to the data, we don't translate the data to cog 
     module load lumio
+    echo "cog_dir: $cog_dir"
 
     lumi_project=465002698
     remote=lumi-${lumi_project}-public:

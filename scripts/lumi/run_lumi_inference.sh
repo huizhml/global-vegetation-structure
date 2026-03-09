@@ -23,15 +23,15 @@ tile_id_file=$1
 year=${2:-2024}
 use_flash=${3:-True}
 meta_file=${5:-null}
-echo "use_flash=$use_flash"
 
 data_root_dir=$(get_data_root_dir $use_flash)
+tile_list_file=${data_root_dir}/assets/worklists/tiles_repredict_${year}.txt
 tile_id=22NCJ
-save_dir=${data_root_dir}/predictions/${year}/original/tiles/geotiff/
+save_dir=${data_root_dir}/predictions/${year}/original/tiles/
 mkdir -p $save_dir
-run_inference $tile_id $save_dir $meta_file $year || exit $?
-run_translate $tile_id $save_dir $meta_file $year || exit $?
-sync_to_lumi $tile_id $save_dir $year || exit $?
+# run_inference $tile_id $save_dir $meta_file $year || { exit $?; }
+# run_translate $tile_id $save_dir $meta_file $year || { exit $?; }
+sync_to_lumi $tile_id $save_dir $year || { exit $?; }
 exit 0
 
 

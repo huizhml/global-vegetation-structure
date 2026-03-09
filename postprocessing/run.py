@@ -201,7 +201,10 @@ def main(cfg):
     t1 = time.time()
     runtime = t1 - t0
     print(f'Time taken: {runtime} seconds')
-    generate_run_log(os.path.join(cfg.save_dir, 'run.log'), cfg, runtime)
+    if cfg.run.get('save_dir', None) is not None:
+        generate_run_log(os.path.join(cfg.run.save_dir, 'run.log'), cfg, runtime)
+    else:
+        print(f'No save_dir provided, skipping run log')
 
 if __name__ == "__main__":
     main()
