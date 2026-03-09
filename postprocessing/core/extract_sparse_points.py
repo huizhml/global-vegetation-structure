@@ -95,7 +95,7 @@ def extract_pred_add_biome(
         if len(df_ecoregions) != len(df):
             print(f'{tile_id} has {len(df_ecoregions)} points after sjoin, but {len(df)} points before sjoin')
             raise ValueError(f'{tile_id} has {len(df_ecoregions)} points after sjoin, but {len(df)} points before sjoin')
-        # df_ecoregions.to_parquet(save_dir / f'{tile_id}.parquet')
+        df_ecoregions.to_parquet(save_dir / f'{tile_id}.parquet')
 
     # all_tiles = ['48RWN']
     tasks = []

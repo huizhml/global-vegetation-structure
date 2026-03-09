@@ -1,13 +1,13 @@
 #!/bin/bash
-#SBATCH --account=project_465001846
-#SBATCH --partition=small
+##SBATCH --account=project_465001846
+#SBATCH --partition=ml4good
 ##SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=4G
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=32G
 #SBATCH --time=3-00:00:00
-#SBATCH --job-name=make_public
-#SBATCH --output=/users/zhanghui/scratch/logs/%x-%A_%a.out
-#SBATCH --error=/users/zhanghui/scratch/logs/%x-%A_%a.err
+#SBATCH --job-name=extract_pred
+#SBATCH --output=./logs/%x-%A_%a.out
+#SBATCH --error=./logs/%x-%A_%a.err
 
 run_blending() {
     local year=$1
@@ -213,14 +213,15 @@ done
 #   Extract sparse predictions and add biome
 # =======================================
 year=2020
-root_dir=${HOME}/data/gvs/gedi/veg_sensitivity_gt0p95/subset_cal/${year}
-python -m postprocess.run run=extract_pred || exit $?
+root_dir=${HOME}/data/gvs/gedi/veg_sensitivity_gt0p95/subset_cal/
+save_dir=${root_dir}/original_with_ours_blended_biome/2020
+python -m postprocessing.run run=extract_pred run.save_dir=${save_dir} || exit $?
 python -m download.run run=check_two_partitioned_datasets \
     run.source_dir=${root_dir}/original/2020/ \
-    run.target_dir=${root_dir}/original_with_ours_biome/2020 || exit $?
+    run.target_dir=${save_dir} || exit $?
 python -m download.run run=make_manifest \
-    run.data_dir=${root_dir}/original_with_ours_biome/2020 \
-    run.dataset_name=gedi_cal_2020_with_ours_biome \
+    run.data_dir=${save_dir} \
+    run.dataset_name=gedi_cal_2020_with_ours_blended_biome \
     run.root_note=''
 ;;
 
