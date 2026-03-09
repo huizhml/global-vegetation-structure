@@ -1,4 +1,5 @@
 
+import os
 import time
 from typing import List, Optional, Any
 from hydra.core.config_store import ConfigStore
@@ -8,6 +9,7 @@ import hydra
 from omegaconf import OmegaConf, MISSING
 from config.base_config_class import ClassConfig, FunctionConfig
 from const import KEY_RHS, CHM_COLS
+from postprocessing.core.utils import generate_run_log
 
 
 @dataclass
@@ -198,6 +200,7 @@ def main(cfg):
         raise ValueError(f"Invalid target: {cfg.run.target_type}")
     t1 = time.time()
     print(f'Time taken: {t1 - t0} seconds')
+    generate_run_log(os.path.join(cfg.save_dir, 'run.log'), cfg)
 
 if __name__ == "__main__":
     main()

@@ -5,6 +5,8 @@ from pathlib import Path
 import dask
 import pandas as pd
 import geopandas as gpd
+from datetime import datetime
+from omegaconf import OmegaConf
 
 
 def init_gtiff(prediction_fp: Path, tile_info: dict, options: list):
@@ -45,4 +47,16 @@ def subsample_parquet_files(parquet_dir: str, save_dir: str, n_samples: int, ran
     tasks = [_subsample(parquet_file, n_samples, random_state) for parquet_file in parquet_files]
     dask.compute(*tasks)
     
+    
+def generate_run_log(log_file: str, run_config: OmegaConf):
+    log_file = Path(log_file).expanduser()
+    date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    new_entry = f"Run on {date}\n{OmegaConf.to_yaml(run_config)}\n"
+
+    existing = log_file.read_text(encoding='utf-8') if log_file.exists() else ""
+
+    with open(log_file, 'w', encoding='utf-8') as f:
+        f.write(new_entry + existing)
+
+    return log_file
     
