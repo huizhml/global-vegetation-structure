@@ -31,6 +31,7 @@ DEFAULT_IGNORE = {
 }
 
 SECTION_HEADING = "# Directory structure"
+MAX_SUBDIRS = 100
 
 
 def get_subdirs(directory: Path, ignore: set[str]) -> list[Path]:
@@ -56,27 +57,39 @@ def build_tree_lines(
         return []
 
     # Only include directories, skip files entirely
-    entries = sorted(
-        [
-            e for e in directory.iterdir()
-            if e.is_dir()
-            and not e.name.startswith(".")
-            and e.name not in ignore
-        ],
-        key=lambda e: e.name.lower(),
-    )
+    entries = [
+        e for e in directory.iterdir()
+        if e.is_dir()
+        and not e.name.startswith(".")
+        and e.name not in ignore
+    ]
+
+    # Truncate if too many subdirs: show first, ellipsis, last
+    if len(entries) > MAX_SUBDIRS:
+        entries = entries[:1] + [None] + entries[-1:]
+    else:
+        entries.sort(key=lambda e: e.name.lower())
 
     lines = []
     for i, entry in enumerate(entries):
         is_last = i == len(entries) - 1
         connector = "└── " if is_last else "├── "
+
+        # None is the ellipsis placeholder
+        if entry is None:
+            lines.append(f"{prefix}{connector}...")
+            continue
+
         lines.append(f"{prefix}{connector}{entry.name}/")
 
-        extension = "    " if is_last else "│   "
-        subtree = build_tree_lines(
-            entry, ignore, prefix + extension, max_depth, current_depth + 1
-        )
-        lines.extend(subtree)
+        # Only recurse if the child itself is within the limit
+        child_subdirs = get_subdirs(entry, ignore)
+        if 0 < len(child_subdirs) <= MAX_SUBDIRS:
+            extension = "    " if is_last else "│   "
+            subtree = build_tree_lines(
+                entry, ignore, prefix + extension, max_depth, current_depth + 1
+            )
+            lines.extend(subtree)
 
     return lines
 
@@ -157,7 +170,7 @@ def update_readme(readme_path: Path, code_block: str) -> str:
 def has_subdirectories(directory: Path, ignore: set[str]) -> bool:
     """Check if a directory contains at least one (but no more than 1000) subdirectories."""
     subdirs = get_subdirs(directory, ignore)
-    return 0 < len(subdirs) <= 1000
+    return 0 < len(subdirs) <= MAX_SUBDIRS
 
 
 def update_all_readmes(
