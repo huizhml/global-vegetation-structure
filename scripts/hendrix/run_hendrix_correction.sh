@@ -206,13 +206,6 @@ python -m download.run run=make_manifest run.data_dir=${root_dir}/original_with_
     run.root_note='' || exit $?
 ;;
 
-11)
-# =======================================
-#    Run postprocessing on Hendrix, multitasks, above bash config doesn't matter
-# =======================================
-
-python -m postprocess.run run=extract_pred
-;;
 *)
 echo "Invalid option"
 exit 1

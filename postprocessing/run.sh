@@ -213,15 +213,16 @@ done
 #   Extract sparse predictions and add biome
 # =======================================
 year=2020
-root_dir=${HOME}/data/gvs/gedi/veg_sensitivity_gt0p95/subset_cal/
-save_dir=${root_dir}/original_with_ours_blended_biome/2020
+split=${2:-cal}
+root_dir=${HOME}/data/gvs/gedi/veg_sensitivity_gt0p95/subset_${split}/
+save_dir=${root_dir}/original_with_ours_blended_biome/${year}
 python -m postprocessing.run run=extract_pred run.save_dir=${save_dir} || exit $?
 python -m download.run run=check_two_partitioned_datasets \
-    run.source_dir=${root_dir}/original/2020/ \
+    run.source_dir=${root_dir}/original/${year}/ \
     run.target_dir=${save_dir} || exit $?
 python -m download.run run=make_manifest \
     run.data_dir=${save_dir} \
-    run.dataset_name=gedi_cal_2020_with_ours_blended_biome \
+    run.dataset_name=gedi_${split}_${year}_with_ours_blended_biome \
     run.root_note=''
 ;;
 

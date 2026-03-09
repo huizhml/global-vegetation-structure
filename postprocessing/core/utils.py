@@ -48,10 +48,10 @@ def subsample_parquet_files(parquet_dir: str, save_dir: str, n_samples: int, ran
     dask.compute(*tasks)
     
     
-def generate_run_log(log_file: str, run_config: OmegaConf):
+def generate_run_log(log_file: str, run_config: OmegaConf, runtime: float):
     log_file = Path(log_file).expanduser()
     date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    new_entry = f"Run on {date}\n{OmegaConf.to_yaml(run_config)}\n"
+    new_entry = f"Run on {date}\n{OmegaConf.to_yaml(run_config)}\nRuntime: {runtime} seconds\n"
 
     existing = log_file.read_text(encoding='utf-8') if log_file.exists() else ""
 

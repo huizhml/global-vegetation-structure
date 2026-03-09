@@ -1,5 +1,6 @@
 
-pip install lightning==2.5.2
+pip install --force-reinstall "numpy<2"
+# pip install lightning==2.5.2
 # pip install 'gdal<=3.12.0'
 # pip install "numpy<2.0"
 # pip install pybind11>=2.12

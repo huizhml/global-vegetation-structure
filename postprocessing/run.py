@@ -199,8 +199,9 @@ def main(cfg):
     else:
         raise ValueError(f"Invalid target: {cfg.run.target_type}")
     t1 = time.time()
-    print(f'Time taken: {t1 - t0} seconds')
-    generate_run_log(os.path.join(cfg.save_dir, 'run.log'), cfg)
+    runtime = t1 - t0
+    print(f'Time taken: {runtime} seconds')
+    generate_run_log(os.path.join(cfg.save_dir, 'run.log'), cfg, runtime)
 
 if __name__ == "__main__":
     main()

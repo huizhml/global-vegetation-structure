@@ -20,7 +20,7 @@ init_env() {
         rm -rf $MIOPEN_USER_DB_PATH
         mkdir -p $MIOPEN_USER_DB_PATH
     fi
-    source setup_env.sh
+    source scripts/lumi/env_init.sh
 }
 
 get_data_root_dir() {
