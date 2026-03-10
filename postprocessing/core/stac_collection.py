@@ -1,7 +1,8 @@
 import os
 import datetime
+import re
 from dataclasses import dataclass
-import hydra
+import numpy as np
 from hydra.core.config_store import ConfigStore
 from pathlib import Path
 import rasterio
@@ -10,6 +11,7 @@ from dotenv import load_dotenv
 import pystac
 from tqdm import tqdm
 import dask
+from const import LUMI_PROJECT
 load_dotenv('.planetarycomputer/settings.env')
 
 
@@ -17,14 +19,16 @@ class StacCatalog:
     '''
     Create a STAC catalog for both years.
     Predictions for different year will be organized in different items, i.e., {tile_id}_{year}
+    data_dir: 
     '''
     
-    def __init__(self, collection_id:str=None, year: int=2020, catalog_dir: str=None, data_source: str=None, **kwargs): 
+    def __init__(self, collection_id:str=None, catalog_dir: str=None, data_source: str=None, data_dir: str=None,  new_predictions_dir: str=None, **kwargs): 
         self.collection_id = f'{collection_id}_{data_source}'
-        self.year = year
         
         self.catalog_dir = Path(f'{catalog_dir}').expanduser()
         self.catalog_dir.mkdir(exist_ok=True)
+        self.data_dir = Path(f'{data_dir}').expanduser()
+        self.new_predictions_dir = new_predictions_dir
         
     def create_catalog(self):
         catalog  = pystac.Catalog(id='gvsm', description='Global Vegetation Structure Model')
@@ -40,18 +44,30 @@ class StacCatalog:
 
     def create_collection(self):
         collection = pystac.Collection(id=self.collection_id, 
-                                       description=f'Global Vegetation Structure Model - {self.year}',
+                                       description=f'Global Vegetation Structure Model',
                                        extent=pystac.Extent(
                                         spatial=pystac.SpatialExtent([[-180, -90, 180, 90]]),
-                                        temporal=pystac.TemporalExtent([[datetime.datetime(self.year,1,1), datetime.datetime(self.year,12,31)]]),
+                                        temporal=pystac.TemporalExtent([[datetime.datetime(2020,1,1), datetime.datetime(2024,12,31)]]), # TODO: would this be misleading, the temporal coverage is actually 2020 and 2024
                                         ))
         return collection
     
+    def get_tile_pred_dir(self, year: int=2024, tile: str=None):
+        if year == 2020:
+            pred_dir = self.data_dir / f'2020/original/tiles/cog/{tile}'
+            if pred_dir.exists():
+                return f'file://{str(pred_dir)}'
+            else:
+                raise ValueError(f'No predictions found for tile {tile} in year {year}')
+        elif year == 2024:
+            zone = tile[:3].lower()
+            return f'https://{LUMI_PROJECT}.lumidata.eu/{zone}-{year}/{year}/original/tiles/{tile}' # NOTE: for future use. TODO: how to check if the files exist?
+        else:
+            raise ValueError(f'Invalid year: {year}')
+    
     def add_items_to_collection(self):
-        # 2024 has the most tiles, and all tiles from 2020
-        tiles = os.listdir(Path('~/data/gvs/deploy/predictions_gtiff_2024').expanduser())
+        tiles = os.listdir(self.data_dir / f'2024/original/tiles/cog') # 2024 has the most tiles, including all tiles from 2020
         for tile in tiles:
-            path = Path(f'~/data/gvs/deploy/predictions_gtiff_2024/{tile}').expanduser()
+            path = self.data_dir / tile
             tile_info = self.get_raster_info(str(path))
             self.create_stac_item(2020, tile, tile_info)
             self.create_stac_item(2024, tile, tile_info)
@@ -100,26 +116,28 @@ class StacCatalog:
         }
     
     def create_stac_item(self, year, tile, tile_info: dict): # TODO: add q_idx
-        if year == 2020:
-            masked_dir = Path(f'~/data/gvs/deploy/predictions_gtiff_masked_2020/{tile}').expanduser()
-            gtiff_dir = Path(f'~/data/gvs/deploy/predictions_gtiff_2020/{tile}').expanduser()
-            cog_dir = Path(f'~/data/gvs/deploy/predictions_2020/{tile}').expanduser()
-            if masked_dir.exists(): # NOTE: all folders have 303 files, I didn't check the files inside the folder
-                path = masked_dir
-            elif gtiff_dir.exists():
-                path = gtiff_dir
-            elif cog_dir.exists():
-                path = cog_dir
-            else:
-                print(f'No predictions found for tile {tile} in year {year}')
-                return
+        #NOTE: for future use, every updated prediction should also be translated to cog, to avoid copies of the large amount of data
+        pred_dir = self.get_tile_pred_dir(year, tile)
+        # if year == 2020:
+        #     masked_dir = Path(f'~/data/gvs/deploy/predictions_gtiff_masked_2020/{tile}').expanduser()
+        #     gtiff_dir = Path(f'~/data/gvs/deploy/predictions_gtiff_2020/{tile}').expanduser()
+        #     cog_dir = Path(f'~/data/gvs/deploy/predictions_2020/{tile}').expanduser()
+        #     if masked_dir.exists(): # NOTE: all folders have 303 files, I didn't check the files inside the folder
+        #         path = masked_dir
+        #     elif gtiff_dir.exists():
+        #         path = gtiff_dir
+        #     elif cog_dir.exists():
+        #         path = cog_dir
+        #     else:
+        #         print(f'No predictions found for tile {tile} in year {year}')
+        #         return
         
-        elif year == 2024:
-            path = Path(f'~/data/gvs/deploy/predictions_gtiff_2024/{tile}').expanduser()
-            if path.exists():
-                path = path
-            else:
-                raise ValueError(f'No predictions found for tile {tile} in year {year}')
+        # elif year == 2024:
+        #     path = Path(f'~/data/gvs/deploy/predictions_gtiff_2024/{tile}').expanduser()
+        #     if path.exists():
+        #         path = path
+        #     else:
+        #         raise ValueError(f'No predictions found for tile {tile} in year {year}')
         item = pystac.Item(
             id=f'{tile}_{year}',
             geometry=tile_info['geom_4326'],
@@ -137,17 +155,12 @@ class StacCatalog:
             }
         )
 
-        # Add an asset later
-        # if 'https' in path:
-        #     href_prefix = ''
-        # else:
-        href_prefix = 'file://'
         for rh_idx in range(101):
             for q_idx in range(3):
                 item.add_asset(
                     f"RH{rh_idx}_Q{q_idx}",
                     pystac.Asset(
-                        href=f"{href_prefix}{path}/RH{rh_idx}_Q{q_idx}.tif",
+                        href=f"{pred_dir}/RH{rh_idx}_Q{q_idx}.tif",
                         media_type="image/tiff; application=geotiff; profile=cloud-optimized",
                         title=f'Median RH {rh_idx} - 10m',
                         roles=["data"],
@@ -161,73 +174,64 @@ class StacCatalog:
             )
         # image = stackstac.stack(item, resolution=10)
         # test = image.isel(time=0, band=0).compute() #@2025-10-02, tested, works well, can load image from tif files
-        self.collection.add_item(item)   
+        self.collection.add_item(item)
 
     def update_collection(self):
+        '''
+        Usually the updated predictions should overwrite the original predictions, to make further operation logic simpler. Old predictions can be achieved in a separate folder.
+        This function is mainly for case that the original prediction folder is no longer editable, e.g., in LUMI old project.
+        '''
+        year = re.search(r'\d{4}', self.new_predictions_dir).group(0)
+        year = int(year)
+        new_predictions_dir = Path(self.new_predictions_dir).expanduser()
         collection_dir = f'{self.catalog_dir}/{self.collection_id}'
         collection_dir = Path(collection_dir).expanduser()
-        item_dirs = collection_dir.glob(f'*_{self.year}')
+        # item_dirs = collection_dir.glob(f'*_{year}')
+        tiles = os.listdir(new_predictions_dir)
         tasks = []
-        for item_dir in item_dirs:
-            tasks.append(dask.delayed(self.update_item)(item_dir.name.split('_')[0]))
+        for tile_id in tiles:
+            tasks.append(dask.delayed(self.update_item)(tile_id, year, new_predictions_dir))
         dask.compute(*tasks)
 
-    def update_item(self, tile_id: str):
-        item_path = f'{self.catalog_dir}/{self.collection_id}/{tile_id}_{self.year}/{tile_id}_{self.year}.json'
+    def update_item(self, tile_id: str, year: int=2024, new_predictions_dir: str=None):
+        item_path = f'{self.catalog_dir}/{self.collection_id}/{tile_id}_{year}/{tile_id}_{year}.json'
         item = pystac.Item.from_file(item_path)
-        gtif_dir = Path(f'~/data/gvs/predictions/{self.year}/original/tiles/geotiff/{tile_id}').expanduser()
-        cog_dir = Path(f'~/data/gvs/predictions/{self.year}/original/tiles/cog/{tile_id}').expanduser()
-        file_path = item.assets['RH98_Q1'].href.replace('file://', '')
-        file_path = Path(file_path).expanduser()
-        if file_path.exists() and len(list(file_path.parent.glob('*.tif'))) == 303:
-            print('Local file exists and is complete, skip updating')
+        if len(list((new_predictions_dir/tile_id).glob('RH*Q*.tif'))) != 303:
+            print(f'Not enough predictions for tile {tile_id} in year {year}, skipping')
             return
-        if gtif_dir.exists() and len(list(gtif_dir.glob('*.tif'))) == 303:
-            pred_dir = gtif_dir
-            print(f'GTiff directory exists and is complete, updating')
-        elif cog_dir.exists() and len(list(cog_dir.glob('*.tif'))) == 303:
-            pred_dir = cog_dir
-            print(f'COG directory exists and is complete, updating')
-        elif self.year == 2024:
-            pred_dir = gtif_dir
-            print(f'2024 predictions directory exists and is complete, updating')
-        else:
-            raise ValueError(f'No predictions found for tile {tile_id} in year {self.year}')
-        # Update asset hrefs
-        for key, asset in item.assets.items():
-            asset.href = f'file://{pred_dir / Path(asset.href).name}'
-
-        # 🔑 Save updated item back to disk
+        for rh_idx in range(101):
+            for q_idx in range(3):
+                item.assets[f'RH{rh_idx}_Q{q_idx}'].href = f"file://{new_predictions_dir / tile_id / f'RH{rh_idx}_Q{q_idx}.tif'}"
         item.save_object(dest_href=item_path)
-
         print(f'Updated STAC item saved to {item_path}')
 
-@dataclass
-class Config:
-    collection_id: str ='vsm'
-    catalog_dir: str = '~/data/gvs/products/gvsm_stac_catalog'
-    data_source: str = 'local'
-    task: str = 'create_catalog'
-    tile_id: str = '32TNS'
-    year: int = 2020
     
-    
-cs = ConfigStore.instance()
-cs.store(name="config", node=Config)
-    
-@hydra.main(config_name="config", version_base='1.2')
-def main(cfg):
-    print(cfg)
-    stac_collection = StacCatalog(**cfg)
-    if cfg.task == 'create_catalog':
-        stac_collection.create_catalog()
-    elif cfg.task == 'update_item':
-        stac_collection.update_item(cfg.tile_id)
-    elif cfg.task == 'update_collection':
-        stac_collection.update_collection()
-    else:
-        raise ValueError(f'Invalid task: {cfg.task}')
+    # def update_item(self, tile_id: str, year: int=2024):
+    #     item_path = f'{self.catalog_dir}/{self.collection_id}/{tile_id}_{year}/{tile_id}_{year}.json'
+    #     item = pystac.Item.from_file(item_path)
+    #     gtif_dir = Path(f'~/data/gvs/predictions/{year}/original/tiles/geotiff/{tile_id}').expanduser()
+    #     cog_dir = Path(f'~/data/gvs/predictions/{year}/original/tiles/cog/{tile_id}').expanduser()
+    #     file_path = item.assets['RH98_Q1'].href.replace('file://', '')
+    #     file_path = Path(file_path).expanduser()
+    #     if file_path.exists() and len(list(file_path.parent.glob('*.tif'))) == 303:
+    #         print('Local file exists and is complete, skip updating')
+    #         return
+    #     if gtif_dir.exists() and len(list(gtif_dir.glob('*.tif'))) == 303:
+    #         pred_dir = gtif_dir
+    #         print(f'GTiff directory exists and is complete, updating')
+    #     elif cog_dir.exists() and len(list(cog_dir.glob('*.tif'))) == 303:
+    #         pred_dir = cog_dir
+    #         print(f'COG directory exists and is complete, updating')
+    #     elif self.year == 2024:
+    #         pred_dir = gtif_dir
+    #         print(f'2024 predictions directory exists and is complete, updating')
+    #     else:
+    #         raise ValueError(f'No predictions found for tile {tile_id} in year {self.year}')
+    #     # Update asset hrefs
+    #     for key, asset in item.assets.items():
+    #         asset.href = f'file://{pred_dir / Path(asset.href).name}'
 
-    
-if __name__ == "__main__":
-    main()  
+    #     # 🔑 Save updated item back to disk
+    #     item.save_object(dest_href=item_path)
+
+    #     print(f'Updated STAC item saved to {item_path}')

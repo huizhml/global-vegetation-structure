@@ -13,6 +13,16 @@ from postprocessing.core.utils import generate_run_log
 
 
 @dataclass
+class UpdateStacCollectionConfig(ClassConfig):
+    collection_id: str = 'vsm'
+    catalog_dir: str = '~/data/gvs/products/gvsm_stac_catalog'
+    data_source: str = 'local'
+    data_dir: str = '~/data/gvs/predictions'
+    new_predictions_dir: str = '~/data/gvs/predictions/2024/original/tiles/cog'
+    target_method: str = 'update_collection'
+    _target_: str = "postprocessing.core.stac_collection.StacCatalog"
+
+@dataclass
 class SampleForestTempConfig(FunctionConfig):
     tif_dir: str = '~/data/gvs/downstream_tasks/forest_temp/'
     p: float = 1e-4
@@ -75,10 +85,16 @@ class ExtractGEDIFromH5Config(FunctionConfig):
     _target_: str = "postprocessing.core.extract_sparse_points.extract_gedi_from_h5"
 
 @dataclass
+class CheckTwoDatasetsConfig(FunctionConfig):
+    source_dir: str = '~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_cal/original/2020/'
+    target_dir: str = '~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_cal/original_with_sota_chms/2020/'
+    _target_: str = "tools.sanity_check.check_npoints_for_two_datasets"
+    
+@dataclass
 class CheckTwoPartitionedDatasetsConfig(FunctionConfig):
     source_dir: str = '~/data/gvs/datasets/splits/split_test0.1_cal0.1_val0.1_seed42_v1/index_tables/val'
     target_dir: str = '~/data/gvs/datasets/splits/split_test0.1_cal0.1_val0.1_seed42_v1/index_tables_by_splitted_tile/val'
-    _target_: str = "tools.sanity_check.check_two_partitioned_datasets"
+    _target_: str = "tools.sanity_check.check_total_points_for_two_partitioned_data_hiarchy"
     
 @dataclass
 class MakeManifestConfig(FunctionConfig):
@@ -172,6 +188,9 @@ cs.store(group='run', name='get_tiles_reblend', node=GetTilesReblendConfig)
 cs.store(group='run', name='repartition_data', node=RepartitionDataConfig)
 cs.store(group='run', name='extract_gedi_from_h5', node=ExtractGEDIFromH5Config)
 cs.store(group='run', name='check_after_bias_correction', node=CheckfterBiasCorrectionConfig)
+cs.store(group='run', name='check_two_partitioned_datasets', node=CheckTwoPartitionedDatasetsConfig)
+cs.store(group='run', name='check_two_datasets', node=CheckTwoDatasetsConfig)
+cs.store(group='run', name='make_manifest', node=MakeManifestConfig)
 cs.store(group='run', name='add_ours_to_sota_gedi', node=AddOursToSOTAGEDIConfig)
 cs.store(group='run', name='add_ours_blended_to_sota_gedi', node=AddOursBlendedToSOTAGEDIConfig)
 cs.store(group='run', name='evaluate_bias_correction', node=EvaluateBiasCorrectionConfig)
@@ -183,6 +202,7 @@ cs.store(group='run', name='translate_predictions', node=TranslatePredictionsCon
 cs.store(group='run', name='get_tiles_redundant', node=GetTilesRedundantConfig)
 cs.store(group='run', name='get_tiles_nodata', node=GetTilesNodataConfig)
 cs.store(group='run', name='sample_forest_temp', node=SampleForestTempConfig)
+cs.store(group='run', name='update_stac_collection', node=UpdateStacCollectionConfig)
 # ================================ Main Config ================================
 cs.store(name='base_config', node=RunConfig) # NOTE: name here should match the default in ../config/base/no_log.yaml
 
