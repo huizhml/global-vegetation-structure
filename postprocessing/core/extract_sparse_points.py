@@ -22,11 +22,40 @@ from rasterio.warp import transform
 from rasterio.transform import rowcol
 import xarray as xr
 import numpy as np
-import dask.dataframe as dd
-from rasterio.crs import CRS
 from download.core.constants import gedi_attr_dtype
 from download.core.utils import check_unfinished_files
 
+
+def add_biome(parq_dir: str, biome_file: str, save_dir: str, **kwargs):
+    '''
+    Add biome info to the dataframe
+    '''
+    parq_dir = Path(parq_dir).expanduser()
+    parquet_files = list(parq_dir.glob('*.parquet'))
+    biome_file = Path(biome_file).expanduser()
+    ecoregions = gpd.read_file(biome_file)
+    save_dir = Path(save_dir).expanduser()
+    save_dir.mkdir(parents=True, exist_ok=True)
+    
+    
+    def _sjoin(parquet_file: Path):
+        df = gpd.read_parquet(parquet_file)
+        df = df.set_crs(epsg=4326)
+        df = gpd.sjoin(df, ecoregions, how='left', predicate='within')
+        df = df.drop(columns=['index_right'])
+        df.to_parquet(save_dir / f'{parquet_file.stem}.parquet')
+        return df
+    
+    tasks = []
+    for parquet_file in parquet_files:
+        if (save_dir / f'{parquet_file.stem}.parquet').exists():
+            continue
+        # _sjoin(parquet_file)
+        tasks.append(dask.delayed(_sjoin)(parquet_file))
+    with ProgressBar():
+        res = dask.compute(*tasks)
+    return res
+    
 
 def extract_pred_add_biome(
         gedi_ref_dir: str = None, 

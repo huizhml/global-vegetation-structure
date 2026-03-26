@@ -190,9 +190,9 @@ class Blending:
                 create_distance_map(intersect_stac_file, dist_map_file)
             intersect_dist_item = create_distance_map_item(intersect_tile, dist_map_file)
             intersect_dist_items.append(intersect_dist_item)
-            if self.on_lumi: # on lumi
-                intersect_tile = self.update_href(intersect_tile)
-                intersect_dist_item = self.update_href(intersect_dist_item)
+            # if self.on_lumi: # on lumi
+            #     intersect_tile = self.update_href(intersect_tile)
+            #     intersect_dist_item = self.update_href(intersect_dist_item)
             
         return intersect_items, intersect_dist_items, bbox_local
     
@@ -284,7 +284,7 @@ class Blending:
         if not small_area:
             with rasterio.open(current_tile.assets['RH98_Q1'].href) as src:
                 profile = src.profile
-            print(f'saved to {save_dir / f'{current_tile.id}_blended.tif'}')
+            print(f"saved to {save_dir / f'{current_tile.id}_blended.tif'}")
             with rasterio.open((save_dir / f'{current_tile.id}_blended.tif'), 'w', **profile) as dst:
                 dst.write(blended.squeeze(), 1)
 

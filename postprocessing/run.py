@@ -162,6 +162,15 @@ class ExtractPredBiomeConfig(FunctionConfig):
     save_dir: str = '~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_cal/original_with_ours_biome/2020'
     biome_file: str = '~/data/GEDI/ecoregions/wwf_terr_ecos.shp'
     _target_: str = "postprocessing.core.extract_sparse_points.extract_pred_add_biome"
+    
+
+@dataclass
+class AddBiomeConfig(FunctionConfig): 
+    '''Add biome info to partitioned geoparquet files'''
+    parq_dir: str = '~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_test/original_with_sota_chms/2020'
+    biome_file: str = '~/data/GEDI/ecoregions/wwf_terr_ecos.shp'
+    save_dir: str = '~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_test/original_with_sota_chms_biome/2020'
+    _target_: str = "postprocessing.core.extract_sparse_points.add_biome"
 
 @dataclass
 class EvaluateBiasCorrectionConfig(FunctionConfig):
@@ -197,6 +206,7 @@ cs.store(group='run', name='evaluate_bias_correction', node=EvaluateBiasCorrecti
 cs.store(group='run', name='get_tiles_wo_enough_gedi_gt', node=GetTilesWooEnoughGEDIConfig)
 cs.store(group='run', name='run_blending', node=RunBlendingConfig)
 cs.store(group='run', name='extract_pred', node=ExtractPredBiomeConfig)
+cs.store(group='run', name='add_biome', node=AddBiomeConfig)
 cs.store(group='run', name='create_distance_maps', node=CreateDistanceMapsConfig)
 cs.store(group='run', name='translate_predictions', node=TranslatePredictionsConfig)
 cs.store(group='run', name='get_tiles_redundant', node=GetTilesRedundantConfig)

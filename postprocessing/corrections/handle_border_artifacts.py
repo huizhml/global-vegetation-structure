@@ -26,7 +26,7 @@ import shutil
 from pystac_client.stac_api_io import StacApiIO
 from postprocessing.core.translate import translate_tile
 from postprocessing.corrections.blending import Blending
-from const import NO_DATA, KEY_RHS
+from const import NO_DATA, KEY_RHS, LUMI_PROJECT
 import warnings
 warnings.filterwarnings(
     "ignore",
@@ -146,7 +146,7 @@ class VSMCorrection(Blending):
             print(f"Copying tile {tile_id}")
             zone_name = tile_id[:3].lower()
             bucket_name = f"{zone_name}-{self.year}"
-            remote = f"lumi-465001846-private:{bucket_name}/predictions_GTiff_{self.year}/{tile_id}"
+            remote = f"lumi-{LUMI_PROJECT}-private:{bucket_name}/predictions_GTiff_{self.year}/{tile_id}"
             os.system(f"rclone copy {remote} {local/f'{tile_id}'} --transfers=16 --checkers=16 --multi-thread-streams=4")
             local_files = list(local.glob(f'{tile_id}/*.tif'))
             if len(local_files) == 303:
@@ -164,15 +164,15 @@ class VSMCorrection(Blending):
         t0 = time.time()
         zone_name = self.tile_id[:3].lower()
         bucket_name = f"{zone_name}-{self.year}"
-        remote = f"lumi-465001846-private:{bucket_name}/{self.tile_id}"
-        os.system(f"rclone sync {self.translate_dir} {remote} --transfers=16 --checkers=16 --multi-thread-streams=4")
+        remote = f"lumi-{LUMI_PROJECT}-private:{bucket_name}/{self.tile_id}"
+        os.system(f"rclone sync {self.cog_dir} {remote} --transfers=16 --checkers=16 --multi-thread-streams=4")
         t1 = time.time()
         # check if remote file are exactly the same as local file
-        rclone_command = ['rclone', 'check', '--checkers=16', '--checksum', '--stats-one-line', remote, self.translate_dir]
+        rclone_command = ['rclone', 'check', '--checkers=16', '--checksum', '--stats-one-line', remote, self.cog_dir]
         task = subprocess.run(rclone_command, capture_output=True, text=True)
         
         if task.returncode != 0:
-            raise ValueError(f"Failed to check if remote file {remote} is exactly the same as local file {self.translate_dir}")
+            raise ValueError(f"Failed to check if remote file {remote} is exactly the same as local file {self.cog_dir}")
         log_output = task.stdout + task.stderr
         DIFF_PATTERN = r': (\d+) differences found'
         match = re.search(DIFF_PATTERN, log_output)
@@ -181,33 +181,33 @@ class VSMCorrection(Blending):
             print(f"✅ Extracted difference count: {difference_count}")
             if difference_count > 0:
                 print(f"🚨 FAILURE: Found {difference_count} differences/corruptions.")
-                self.copy_data_to_lumio(self.translate_dir)
+                self.copy_data_to_lumio(self.cog_dir)
             else:
                 print("✨ SUCCESS: All files verified as identical and uncorrupted. Deleting local corrected predictions.")
-                shutil.rmtree(self.translate_dir) # cog files
-                shutil.rmtree(self.output_dir / f'{self.tile_id}') # geotiff files
+                shutil.rmtree(self.cog_dir) # cog files
+                shutil.rmtree(self.geotiff_dir) # geotiff files
                 (self.flag_dir / f"{self.tile_id}_done").touch()
         else:
             raise ValueError(f"Could not find the summary line in rclone output.")
         print(f"LUMI-O ⬅️ Local - {self.tile_id}: {t1 - t0} seconds")
         
-    def delete_local_file(self, tile_ids: list[str]):
-        '''
-        Delete local input files
-        '''
-        for tile_id in tile_ids:
-            current_tile = pystac.Item.from_file(str(self.stac_collection_dir / f'{tile_id}_{self.year}/{tile_id}_{self.year}.json'))
-            intersecting_tiles = self.find_intersecting_s2_tiles(current_tile)
-            # only if all intersecting tiles are done, delete the local file
-            if all(os.path.exists(self.flag_dir / f'{tile}_done') for tile in intersecting_tiles):
-                print(f"ALL tiles are done, deleting local file for tile {tile_id}")
-                #  TODO: delete the original predictions on lumi-o
-                if (self.flash_dir / f'{tile_id}').exists():
-                    shutil.rmtree(self.flash_dir / f'{tile_id}')
-                elif (self.scratch_dir / f'{tile_id}').exists():
-                    shutil.rmtree(self.scratch_dir / f'{tile_id}')
-                else:
-                    raise ValueError(f"Tile {tile_id} does not exist in flash or scratch directory")
+    # def delete_local_file(self, tile_ids: list[str]):
+    #     '''
+    #     Delete local input files, this was for copying input data from LUMI-O to local and then blending.
+    #     '''
+    #     for tile_id in tile_ids:
+    #         current_tile = pystac.Item.from_file(str(self.stac_collection_dir / f'{tile_id}_{self.year}/{tile_id}_{self.year}.json'))
+    #         intersecting_tiles = self.find_intersecting_s2_tiles(current_tile)
+    #         # only if all intersecting tiles are done, delete the local file
+    #         if all(os.path.exists(self.flag_dir / f'{tile}_done') for tile in intersecting_tiles):
+    #             print(f"ALL tiles are done, deleting local file for tile {tile_id}")
+    #             #  TODO: delete the original predictions on lumi-o
+    #             if (self.flash_dir / f'{tile_id}').exists():
+    #                 shutil.rmtree(self.flash_dir / f'{tile_id}')
+    #             elif (self.scratch_dir / f'{tile_id}').exists():
+    #                 shutil.rmtree(self.scratch_dir / f'{tile_id}')
+    #             else:
+    #                 raise ValueError(f"Tile {tile_id} does not exist in flash or scratch directory")
     
     def get_water_snow_mask(self, tile: pystac.Item):
         '''
@@ -223,7 +223,7 @@ class VSMCorrection(Blending):
             print(f'No ESA World Cover items found for tile {tile_id}')
             return None
         wc_image = stackstac.stack(items, ['map'], bounds=tile.assets['RH98_Q1'].extra_fields['proj:bbox'], epsg=tile.properties['proj:epsg'], resolution=10, dtype='uint16', fill_value=np.uint16(0),rescale=False)
-        print(wc_image.shape)
+        print('wc_image.shape:', wc_image.shape)
         if wc_image.shape[0] == 0:
             print(f'{tile_id} has no overlap with ESA World Cover')
             return None
@@ -300,8 +300,8 @@ class VSMCorrection(Blending):
         dask.compute(blended)
         translate_tile(self.geotiff_dir, self.cog_dir, profile="ZSTD") # TODO: add list of bands, key RHs are prioritized
         if self.on_lumi:
-            self.copy_data_to_lumio(self.translate_dir)
-            self.delete_local_file(intersecting_s2_tiles)
+            self.copy_data_to_lumio() # flag created in this function
+            # self.delete_local_file(intersecting_s2_tiles)
         else:
             (self.flag_dir / f"{self.tile_id}_done").touch()
 

@@ -86,7 +86,7 @@ run_inference() {
             --trainer.logger.init_args.id $run_id
     )
 
-    # python run.py ${args[@]}
+    python run.py ${args[@]}
 
     # Capture the exit status of the command
     exit_status=$?

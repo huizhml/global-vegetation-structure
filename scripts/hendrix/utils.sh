@@ -75,4 +75,3 @@ run_translate() {
     fi
     printf '>%.0s' {1..10}
 }
-
