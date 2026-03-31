@@ -41,12 +41,14 @@ def add_biome(parq_dir: str, biome_file: str, save_dir: str, **kwargs):
     def _sjoin(parquet_file: Path):
         df = gpd.read_parquet(parquet_file)
         df = df.set_crs(epsg=4326)
-        df = gpd.sjoin(df, ecoregions, how='left', predicate='within')
+        df = df.to_crs(epsg=3857)
+        df = gpd.sjoin(df, ecoregions, how='left', predicate='intersects')
         df = df.drop(columns=['index_right'])
         df.to_parquet(save_dir / f'{parquet_file.stem}.parquet')
         return df
     
     tasks = []
+    # parquet_files = [f for f in parquet_files if '32MQE' in f.stem]
     for parquet_file in parquet_files:
         if (save_dir / f'{parquet_file.stem}.parquet').exists():
             continue
