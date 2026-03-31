@@ -572,6 +572,7 @@ class S2DatasetStream(BaseDeployDataset):
         self.impute_cloud_with_mean = impute_cloud_with_mean
         self.save_intermediate_tif = save_intermediate_tif
         if download_data and not self.h5_file.exists():
+            self.h5_file.parent.mkdir(parents=True, exist_ok=True)
             print(f'{self.h5_file} does not exist, downloading...')
             if self.metadata_file is None:
                 self.download_tile_by_api()
