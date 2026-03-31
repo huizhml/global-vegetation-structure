@@ -1,5 +1,6 @@
-list_file=${HOME}/gvsm/assets/worklists/dk.txt
-save_dir=/Volumes/Seagate/vsm/
+list_file=${HOME}/gvsm/assets/worklists/uganda.txt
+save_dir="/Volumes/One Touch/vsm"
+
 
 
 case $1 in
@@ -9,7 +10,7 @@ case $1 in
 # ---------------------------------------
 # This organizes the data by RH98_Q{q_idx}/{tile_id}.tif
 for q_idx in 1 2 0; do
-    dst_dir=${save_dir}/RH98_Q${q_idx}
+    dst_dir="${save_dir}/RH98_Q${q_idx}"
     mkdir -p $dst_dir
     total=$(wc -l < "$list_file" | tr -d ' ')
     start_time=$(date +%s)
@@ -60,8 +61,8 @@ done < <(cat $list_file | xargs -P 8 -I {} bash -c \
 #   Download local full VSM, 4 parallel SSH sessions
 # ---------------------------------------
 # This doesn't change the directory structure
-dst_dir=${save_dir}/2020
-mkdir -p ${dst_dir}/
+dst_dir="${save_dir}/2020"
+mkdir -p "${dst_dir}/"
 
 read -s -p "Enter hendrix1 password: " SSHPASS
 echo

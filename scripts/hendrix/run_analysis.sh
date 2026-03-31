@@ -23,9 +23,8 @@ tile_id=$(sed -n "${SLURM_ARRAY_TASK_ID}p" $tile_id_file)
 echo "Processing tile ID: $tile_id"
 
 output_dir=${HOME}/data/gvs/products/profile_entropy/2020/tiles/geotiff
-mkdir -p $output_dir
+# python -m evaluation.run run=compute_entropy run.output_dir=$output_dir run.tile_id=$tile_id run.year=2020
 
-python -m evaluation.run run=compute_entropy run.output_dir=$output_dir run.tile_id=$tile_id run.year=2020
 
 ;;
 
