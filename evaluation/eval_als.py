@@ -90,6 +90,15 @@ def tile_level_evaluate(df: pd.DataFrame, ref_col: str, ours_col: str='ours_rh98
     }
 
 def evaluate(df_dir: str, save_dir: str = None, ref_col: str = 'als') -> dict:
+    '''
+    Correlation analysis between ALS and our predictions
+    Args:
+        df_dir: str, the directory of the evaluation results
+        save_dir: str, the directory to save the results
+        ref_col: str, the column name of the reference data
+    Returns:
+        stats: dict, the statistics of the evaluation
+    '''
     df_dir = Path(df_dir).expanduser()
     save_dir = save_dir or df_dir.parent / 'figures'
     save_dir = Path(save_dir).expanduser()

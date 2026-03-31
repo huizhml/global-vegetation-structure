@@ -23,6 +23,14 @@ class ComputeEntropyConfig(FunctionConfig):
     _target_: str = "evaluation.diversity_indices.compute_entropy"
 
 @dataclass
+class ComputeDiversityIndicesConfig(FunctionConfig):
+    save_dir: str = '~/data/gvs/evaluation/with_gedi_on_diversity_indices/indices_by_tile/'
+    gedi_ours_dir: str = '~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_test/original_with_sota_chms_biome_and_ours_full/2020'
+    bin_width: int = 5
+    year: int = 2020
+    _target_: str = "evaluation.diversity_indices.cal_diversity_indices"
+
+@dataclass
 class RunConfig:
     defaults: List[Any] = field(default_factory=lambda: defaults)
     run: Any = MISSING
@@ -35,7 +43,7 @@ defaults = [
 
 cs = ConfigStore.instance()
 cs.store(group='run', name='compute_entropy', node=ComputeEntropyConfig)
-
+cs.store(group='run', name='compute_diversity_indices', node=ComputeDiversityIndicesConfig)
 
 # ================================ Main Config ================================
 cs.store(name='base_config', node=RunConfig) # NOTE: name here should match the default in ../config/base/no_log.yaml
