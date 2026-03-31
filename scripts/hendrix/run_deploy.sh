@@ -22,7 +22,7 @@ echo "Partition: $SLURM_JOB_PARTITION"
 echo "CPUs per task: $SLURM_CPUS_PER_TASK"
 echo "Number of tasks: $SLURM_NTASKS"
 echo "Time requested: $SLURM_TIMELIMIT"
-scontrol show job $SLURM_JOB_ID | grep "TRES="
+# scontrol show job $SLURM_JOB_ID | grep "TRES="
 echo "********************************************************************"
 
 source scripts/hendrix/utils.sh
@@ -41,7 +41,29 @@ save_dir=${root_data_dir}/predictions/${year}/original/tiles/geotiff
 mkdir -p $save_dir
 
 tile_id_file=${3:-${root_data_dir}/assets/worklists/tiles_duplicated.txt}
-tile_id=$(sed -n "${line_num}p" $tile_id_file)
+tile_id_name=$(read_line_from_txt $tile_id_file $line_num)
+meta_file=none
+echo "Processing tile ID: $tile_id, line $line_num from $tile_id_file"
+echo "meta_file: $meta_file"
+
+run_inference $tile_id $stream_input $save_dir $meta_file $year
+
+;;
+2)
+# **************************************************************
+#    Predict one tile in one job, get tile_id from csv file
+# **************************************************************
+line_num=${SLURM_ARRAY_TASK_ID:-2}
+stream_input=${2:-True}
+repredict_tiles=${3:-False}
+tile_id_file=${root_data_dir}/evaluation/with_airborne_lidar/meta_lvis.csv
+
+read tile_id year <<< $(read_line_from_csv "$tile_id_file" "$line_num")
+
+echo "Processing tile ID: $tile_id, year: $year"
+save_dir=${root_data_dir}/predictions/${year}/original/tiles/geotiff
+mkdir -p $save_dir
+
 meta_file=none
 echo "Processing tile ID: $tile_id, line $line_num from $tile_id_file"
 echo "meta_file: $meta_file"

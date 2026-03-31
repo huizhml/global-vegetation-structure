@@ -75,3 +75,24 @@ run_translate() {
     fi
     printf '>%.0s' {1..10}
 }
+
+read_line_from_txt() {
+    local txt_file=$1
+    local line_num=$2
+    local line=$(sed -n "${line_num}p" $txt_file)
+    echo $line
+}
+
+read_line_from_csv() {
+    local csv_file=$1
+    local line_num=$2
+
+    tile_id=$(awk -F',' -v n="$line_num" 'NR==n {print $2}' "$csv_file")
+    # get last year
+    year=$(awk -F',' -v n="$line_num" 'NR==n {print $4}' "$csv_file" | sed 's/.*[–-]//')
+    year=$(printf '%s' "$year" | tr -d '\r' | xargs)
+    if [[ "$year" =~ ^[0-9]+$ ]] && [ "$year" -le 2016 ]; then
+        year=2017
+    fi
+    echo $tile_id $year
+}

@@ -15,6 +15,10 @@ get_options() {
     fi
 }
 
+warn() {
+  printf '[%s] WARNING: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >&2
+}
+
 
 check_if_processed() {
     local tile_id=$1
@@ -58,6 +62,16 @@ clean_up_local_file() {
 
 translate_to_cog() {
     local tif_file=$1
-    local cog_file=${tif_file%.tif}.cog.tif
-    gdal_translate $tif_file $cog_file -of COG -co COMPRESS=ZSTD -co MAX_Z_ERROR=0
+    local save_dir=$2
+    if [ -z "$save_dir" ]; then # if save_dir is not provided, use the directory of the tif file
+        save_dir=$(dirname $tif_file)
+        base_name="$(basename "$tif_file" .tif)"
+        cog_file="${save_dir}/${base_name}.cog.tif"
+    else
+        mkdir -p $save_dir
+        base_name="$(basename "$tif_file" .tif)"
+        cog_file="${save_dir}/${base_name}.tif"
+    fi
+    gdal_translate $tif_file $cog_file -of COG -co COMPRESS=ZSTD
 }
+
