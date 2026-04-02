@@ -26,8 +26,9 @@ import pandas as pd
 from evaluation.utils import ProgressMonitor
 import dask
 from dask.diagnostics import ProgressBar
+from sklearn.metrics import r2_score
 
-MAX_HEIGHT = 1000.0
+MAX_HEIGHT = 100.0
 N_BINS = 20
 BIN_WIDTH = MAX_HEIGHT / N_BINS
 NODATA_IN = 32767
@@ -66,7 +67,7 @@ def pixel_diversity_indices(rhs, bin_width=5, max_height=None):
     
     return fhd, enl1d, enl2d, cr
 
-def _chunk_diversity(tile, bin_width=50):
+def _chunk_diversity(tile, bin_width=5):
     """
     Vectorized Shannon entropy for a single spatial chunk.
 
@@ -78,12 +79,14 @@ def _chunk_diversity(tile, bin_width=50):
     -------
     out : ndarray, shape (rows, cols), float32
     """
+    
     n_bands, n_rows, n_cols = tile.shape
     n_pixels = n_rows * n_cols
     n_bins = int(MAX_HEIGHT / bin_width)
     valid = np.isfinite(tile) & (tile != NODATA_IN) & (tile > 0)
     nodata_mask = valid.sum(axis=0) == 0
 
+    tile = tile/10
     tile_clean = np.where(valid, tile, 0.0)
     bin_idx = np.clip((tile_clean / bin_width).astype(np.int32), 0, n_bins - 1)
     bin_idx = np.where(valid, bin_idx, -1)
@@ -100,6 +103,19 @@ def _chunk_diversity(tile, bin_width=50):
     total = hist.sum(axis=-1, keepdims=True)
     p = hist / total # (n_pixels, n_bins)
     log_p = np.where(p > 0, np.log(p), 0.0)
+    # # pixel-wise entropy, VERIFIED
+    # tile_flat = tile_clean.reshape(n_bands, n_pixels)
+    # hist_pixel_wise = np.zeros((n_pixels, n_bins), dtype=np.float32)
+    # for i in range(n_pixels):
+    #     count, bin_edges = np.histogram(tile_flat[flat_valid[:, i], i], bins=n_bins, range=(0, MAX_HEIGHT))
+    #     hist_pixel_wise[i, :] = count
+    # p = hist_pixel_wise / hist_pixel_wise.sum(axis=-1, keepdims=True)
+    # log_p = np.where(p > 0, np.log(p), 0.0)
+    # entropy_ = -np.sum(p * log_p, axis=-1)
+    # enl1d_ = np.exp(entropy_)
+    # enl2d_ = (1/ (p**2).sum(axis=-1))
+    # cr_ = (tile_flat[98, i] - tile_flat[25, i])/(tile_flat[98, i] + 1e-6)
+
     entropy = -np.sum(p * log_p, axis=-1).astype(np.float32)
     enl1d = np.exp(entropy)
     enl2d = (1/ (p**2).sum(axis=-1)).astype(np.float32) # 2D ENL
@@ -131,7 +147,7 @@ def _process_tile(args):
 
 
 def compute_entropy(output_dir, tile_id, year, vrt_path=None,
-                         chunk_size=512, max_workers=8, bin_width=50, **kwargs):
+                         chunk_size=512, max_workers=8, bin_width=5, **kwargs):
     """
     Compute per-pixel FHD entropy — fast version.
 
@@ -160,8 +176,8 @@ def compute_entropy(output_dir, tile_id, year, vrt_path=None,
     output_dir.mkdir(parents=True, exist_ok=True)
 
     output_path = output_dir / f'{tile_id}.tif'
-    if output_path.exists():
-        return
+    # if output_path.exists():
+    #     return
 
     # Create VRT if not provided
     if vrt_path is None:
@@ -203,7 +219,7 @@ def compute_entropy(output_dir, tile_id, year, vrt_path=None,
         for col_off in range(0, nx, chunk_size):
             h = min(chunk_size, ny - row_off)
             w = min(chunk_size, nx - col_off)
-            # ent, enl1d, enl2d = _process_tile((vrt_path, col_off, row_off, w, h, bin_width))
+            ent, enl1d, enl2d, cr = _process_tile((vrt_path, col_off, row_off, w, h, bin_width))
             work_items.append((vrt_path, col_off, row_off, w, h, bin_width))
 
     print(f"Processing {len(work_items)} tiles with {max_workers} processes")
@@ -423,15 +439,13 @@ def cal_diversity_indices(save_dir, gedi_ours_dir, bin_width=5, year=2020, **kwa
     
     def _tile_level_indices(gedi_ours_file: Path):
         tile_id = gedi_ours_file.stem
-        # if (save_dir / f'{tile_id}.parquet').exists():
-        #     return None
+        if (save_dir / f'{tile_id}.parquet').exists():
+            return None
         gedi_ours = gpd.read_parquet(gedi_ours_file)
         gedi_ours = gedi_ours.dropna(subset=gedi_ref_cols + ours_cols)
         mask = (gedi_ours['pft_class'].isin(np.arange(1,11)) & gedi_ours['sensitivity'] >= 0.95)
         gedi_ours = gedi_ours[mask]
         if gedi_ours.empty:
-            if (save_dir / f'{tile_id}.parquet').exists():
-                os.remove(save_dir / f'{tile_id}.parquet')
             return None
         
         indices_gedi = gedi_ours[gedi_ref_cols].apply(lambda x: pixel_diversity_indices(x, bin_width=bin_width), axis=1)
@@ -466,35 +480,122 @@ def cal_diversity_indices(save_dir, gedi_ours_dir, bin_width=5, year=2020, **kwa
         dask.compute(*tasks)
     # all_metrics = pd.concat([r for r in results if r is not None])
     # all_metrics.to_parquet(save_dir / f'all_metrics_by_{group_by}_bin_{bin_width}m.parquet')
+    
+def eval_diversity_indices(indices_dir, group_by=None, year=2020, save_dir=None, filter_steep_slope=False, **kwargs):
+    import dask.dataframe as dd
+    import re
+    # Extract bin_width from indices_dir string (looks for "bin_width_" followed by digits)
+    m = re.search(r'bin_width_(\d+)', str(indices_dir))
+    bin_width = int(m.group(1)) if m else None
+    assert bin_width is not None, f"Could not extract bin_width from {indices_dir}"
+    indices_dir = Path(indices_dir).expanduser()
+    save_dir = Path(save_dir).expanduser()
+    save_dir.mkdir(parents=True, exist_ok=True)
+    indices_files = sorted(indices_dir.glob('*.parquet'))
+    # indices_files = indices_files[100:110] # for testing
+    ddf = dd.read_parquet(indices_files)
+    ddf = ddf.compute()
+    import ipdb; ipdb.set_trace()
+    if filter_steep_slope:
+        ddf = ddf[ddf['slope'] <= 20]
+        save_dir = save_dir.parent / 'steep_slope_filtered'
+        save_dir.mkdir(parents=True, exist_ok=True)
+    ddf['fhd_diff'] = ddf['fhd_gedi'] - ddf['fhd_ours']
+    ddf['enl1d_diff'] = ddf['enl1d_gedi'] - ddf['enl1d_ours']
+    ddf['enl2d_diff'] = ddf['enl2d_gedi'] - ddf['enl2d_ours']
+    ddf['cr_diff'] = ddf['cr_gedi'] - ddf['cr_ours']
+
+    n_bins = int(100/bin_width)
+    max_metrics = {
+        'fhd': np.log(n_bins),
+        'enl1d': n_bins,
+        'enl2d': n_bins,
+        'cr': 1.0,
+    }
+    # Group and compute metrics
+    def compute_metrics(group):
+        metrics = {}
+        for var in ['fhd', 'enl1d', 'enl2d', 'cr']:
+            gedi = group[f'{var}_gedi']
+            ours = group[f'{var}_ours']
+            diff = group[f'{var}_diff']
+            metrics[f'{var}_corr'] = np.corrcoef(gedi, ours)[0, 1]
+            metrics[f'{var}_r2'] =  r2_score(gedi, ours)
+            metrics[f'{var}_rmse'] = np.sqrt(np.mean(diff**2)) / max_metrics[var]
+            metrics[f'{var}_mae'] = np.mean(np.abs(diff)) / max_metrics[var]
+            metrics[f'{var}_me'] = np.mean(diff) / max_metrics[var]
+        return pd.Series(metrics)
+
+    if group_by is not None:
+        meta = pd.DataFrame({
+            "fhd_corr": pd.Series(dtype="float32"),
+            "fhd_r2": pd.Series(dtype="float32"),
+            "fhd_rmse": pd.Series(dtype="float32"),
+            "fhd_mae": pd.Series(dtype="float32"),
+            "fhd_me": pd.Series(dtype="float32"),
+            
+            "enl1d_corr": pd.Series(dtype="float32"),
+            "enl1d_r2": pd.Series(dtype="float32"),
+            "enl1d_rmse": pd.Series(dtype="float32"),
+            "enl1d_mae": pd.Series(dtype="float32"),
+            "enl1d_me": pd.Series(dtype="float32"),
+            
+            "enl2d_corr": pd.Series(dtype="float32"),
+            "enl2d_r2": pd.Series(dtype="float32"),
+            "enl2d_rmse": pd.Series(dtype="float32"),
+            "enl2d_mae": pd.Series(dtype="float32"),
+            "enl2d_me": pd.Series(dtype="float32"),
+            
+            "cr_corr": pd.Series(dtype="float32"),
+            "cr_r2": pd.Series(dtype="float32"),
+            "cr_rmse": pd.Series(dtype="float32"),
+            "cr_mae": pd.Series(dtype="float32"),
+            "cr_me": pd.Series(dtype="float32"),
+        })
+        result = ddf.groupby(group_by).apply(compute_metrics, meta=meta).compute()
+        result.to_csv(save_dir / f'diversity_indices_evaluation_by_biomes_bin_width_{bin_width}m_{year}.csv')
+    else:
+        result = compute_metrics(ddf.compute())
+        records = {}
+        for var, label in [('fhd', 'FHD'), ('enl1d', 'ENL 1D'), ('enl2d', 'ENL 2D'), ('cr', 'CR')]:
+            records[label] = {
+                'R2': result[f'{var}_r2'],
+                'Corr': result[f'{var}_corr'],
+                'RMSE': result[f'{var}_rmse'],
+                'MAE': result[f'{var}_mae'],
+                'ME': result[f'{var}_me'],
+            }
+        result_df = pd.DataFrame(records).T
+        result_df.to_csv(save_dir / f'diversity_indices_evaluation_all_tiles_bin_width_{bin_width}m_{year}.csv')
         
 
 if __name__ == "__main__":
     save_dir = '/projects/dereeco/data/gvs/evaluation/with_gedi_on_diversity_indices/indices_by_tile/bin_width_5m/2020'
     gedi_ours_dir = '/projects/dereeco/data/gvs/gedi/veg_sensitivity_gt0p95/subset_test/original_with_sota_chms_biome_and_ours_full/2020'
-    cal_diversity_indices(save_dir, gedi_ours_dir)
-    # tile_id = '36NTF'
-    # year = 2020
-    # vrt_path = f"~/data/gvs/predictions/{year}/original/vrt/{tile_id}_Q1.vrt"
-    # output_dir = f"~/data/gvs/products/profile_entropy/{year}/tiles/geotiff"
+    # cal_diversity_indices(save_dir, gedi_ours_dir)
+    tile_id = '36NTF'
+    year = 2020
+    vrt_path = f"~/data/gvs/predictions/{year}/original/vrt/{tile_id}_Q1.vrt"
+    output_dir = f"~/data/gvs/products/profile_entropy/{year}/tiles/geotiff"
 
     # # Create VRT if needed
-    # tile_dir = f"~/data/gvs/predictions/{year}/original/tiles/cog/{tile_id}"
-    # vrt_resolved = Path(vrt_path).expanduser()
-    # if not vrt_resolved.exists():
-    #     create_vrt(tile_dir, vrt_path)
+    tile_dir = f"~/data/gvs/predictions/{year}/original/tiles/cog/{tile_id}"
+    vrt_resolved = Path(vrt_path).expanduser()
+    if not vrt_resolved.exists():
+        create_vrt(tile_dir, vrt_path)
 
-    # start = time.time()
-    # compute_entropy(
-    #     output_dir=output_dir,
-    #     tile_id=tile_id,
-    #     year=year,
-    #     vrt_path=vrt_path,
-    #     chunk_size=512,
-    #     max_workers=8,
-    #     bin_width=50,
-    # )
-    # elapsed = time.time() - start
-    # print(f"Time taken: {elapsed:.2f} seconds")
+    start = time.time()
+    compute_entropy(
+        output_dir=output_dir,
+        tile_id=tile_id,
+        year=year,
+        vrt_path=vrt_path,
+        chunk_size=512,
+        max_workers=8,
+        bin_width=5,
+    )
+    elapsed = time.time() - start
+    print(f"Time taken: {elapsed:.2f} seconds")
     # # vertical_profile_per_biome(
     # #     points_file='/projects/dereeco/data/gvs/analysis/typical_forests/typical_forests.zip',
     # #     save_dir='/projects/dereeco/data/gvs/analysis/typical_forests/vertical_profile_gedi_ref',

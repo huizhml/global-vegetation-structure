@@ -41,20 +41,20 @@ ESA_WC_s = {
 
 BIOMES = [
     # Don't change the order, index is the corresponding BIOME number
-    'Tropical & Subtropical Moist Broadleaf Forests',
-    'Tropical & Subtropical Dry Broadleaf Forests',
-    'Tropical & Subtropical Coniferous Forests',
-    'Temperate Broadleaf & Mixed Forests',
-    'Temperate Conifer Forests',
-    'Boreal Forests/Taiga',
-    'Tropical & Subtropical Grasslands, Savannas & Shrublands',
-    'Temperate Grasslands, Savannas & Shrublands',
-    'Flooded Grasslands & Savannas',
-    'Montane Grasslands & Shrublands',
-    'Tundra',
-    'Mediterranean Forests, Woodlands & Scrub',
-    'Deserts & Xeric Shrublands',
-    'Mangroves'
+    'Tropical & Subtropical Moist Broadleaf Forests', # 1
+    'Tropical & Subtropical Dry Broadleaf Forests',   # 2
+    'Tropical & Subtropical Coniferous Forests',     # 3
+    'Temperate Broadleaf & Mixed Forests',          # 4
+    'Temperate Conifer Forests',                     # 5
+    'Boreal Forests/Taiga',                          # 6
+    'Tropical & Subtropical Grasslands, Savannas & Shrublands', # 7
+    'Temperate Grasslands, Savannas & Shrublands',          # 8
+    'Flooded Grasslands & Savannas',                        # 9
+    'Montane Grasslands & Shrublands',                    # 10
+    'Tundra',                                            # 11
+    'Mediterranean Forests, Woodlands & Scrub',          # 12
+    'Deserts & Xeric Shrublands',                          # 13
+    'Mangroves'                                           # 14
 ]
 
 BIOMES_s = {
