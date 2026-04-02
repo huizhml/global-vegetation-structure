@@ -89,7 +89,8 @@ read_line_from_csv() {
 
     tile_id=$(awk -F',' -v n="$line_num" 'NR==n {print $2}' "$csv_file")
     # get last year
-    year=$(awk -F',' -v n="$line_num" 'NR==n {print $4}' "$csv_file" | sed 's/.*[–-]//')
+    # year=$(awk -F',' -v n="$line_num" 'NR==n {print $4}' "$csv_file" | sed 's/.*[–-]//') # matching last year in a range
+    year=$(awk -F',' -v n="$line_num" 'NR==n {print $4}' "$csv_file" | sed 's/[–\-].*//') # matching first year in a range
     year=$(printf '%s' "$year" | tr -d '\r' | xargs)
     if [[ "$year" =~ ^[0-9]+$ ]] && [ "$year" -le 2016 ]; then
         year=2017
