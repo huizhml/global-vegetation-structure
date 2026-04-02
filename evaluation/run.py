@@ -31,6 +31,23 @@ class ComputeDiversityIndicesConfig(FunctionConfig):
     _target_: str = "evaluation.diversity_indices.cal_diversity_indices"
 
 @dataclass
+class EvaluateDiversityIndicesConfig(FunctionConfig):
+    indices_dir: str = '~/data/gvs/evaluation/with_gedi_on_diversity_indices/indices_by_tile/bin_width_5m/2020'
+    group_by: Optional[str] = 'BIOME'
+    filter_steep_slope: bool = True
+    year: int = 2020
+    save_dir: str = '~/data/gvs/evaluation/with_gedi_on_diversity_indices/results/'
+    _target_: str = "evaluation.diversity_indices.eval_diversity_indices"
+    
+
+@dataclass
+class ExtractPixelsAndSaveConfig(FunctionConfig):
+    ref_dir: str = '~/data/gvs/evaluation/with_airborne_lidar/ALS_MaxGEDIFootprint_GSD10m'
+    ours_root_dir: str = '~/data/gvs/predictions'
+    save_dir: str = '~/data/gvs/evaluation/with_airborne_lidar/lidar_and_ours_year_matching'
+    _target_: str = "evaluation.eval_als.extract_pixels_and_save"
+
+@dataclass
 class RunConfig:
     defaults: List[Any] = field(default_factory=lambda: defaults)
     run: Any = MISSING
@@ -44,7 +61,8 @@ defaults = [
 cs = ConfigStore.instance()
 cs.store(group='run', name='compute_entropy', node=ComputeEntropyConfig)
 cs.store(group='run', name='compute_diversity_indices', node=ComputeDiversityIndicesConfig)
-
+cs.store(group='run', name='evaluate_diversity_indices', node=EvaluateDiversityIndicesConfig)
+cs.store(group='run', name='extract_pixels_and_save', node=ExtractPixelsAndSaveConfig)
 # ================================ Main Config ================================
 cs.store(name='base_config', node=RunConfig) # NOTE: name here should match the default in ../config/base/no_log.yaml
 

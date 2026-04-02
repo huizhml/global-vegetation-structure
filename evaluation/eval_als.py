@@ -15,38 +15,46 @@ def extract_valid_pixels(ref_dir: Path, ours_dir: Path, tile_id: str) -> np.ndar
     Returns:
         valid_pixels: numpy array of shape (n_pixels, n_bands)
     '''
+    import ipdb; ipdb.set_trace()
     with rasterio.open(ref_dir / f'{tile_id}.cog.tif') as src:
         ref = src.read(masked=True)
         ref_data = ref.filled(np.nan)
         ref_data[ref_data > 100] = np.nan # there are very high values (> 1000) for some tiles
         ref_data[ref_data < 0] = 0 # there are negative values, looks like nonvegetation
+    import ipdb; ipdb.set_trace()
     with rasterio.open(ours_dir / f'{tile_id}/RH98_Q1.tif') as src:
         ours = src.read(masked=True).astype(np.float32)
         ours_data = ours.filled(np.nan)
     mask = ~np.isnan(ref_data) & ~np.isnan(ours_data)
-    # residuals = ours_data/10 - ref_data
-    # residuals = residuals[mask]
     ref_data = ref_data[mask]
     ours_data = ours_data[mask]/10
-    # me = np.mean(residuals)
-    # rmse = np.sqrt(np.mean(residuals**2))
-    # r2 = 1 - np.sum(residuals**2) / np.sum((ref_data - ref_data.mean())**2)
-    # print(f'{tile_id}: r2: {r2}, rmse: {rmse}, me: {me}')
     return ref_data, ours_data
 
 
-def extract_pixels_and_save(ref_dir: str, ours_dir: str, save_dir: str = None) -> dict:
+def extract_pixels_and_save(ref_dir: str, ours_root_dir: str, save_dir: str = None, **kwargs) -> dict:
     ref_dir = Path(ref_dir).expanduser()
-    ours_dir = Path(ours_dir).expanduser()
+    ours_root_dir = Path(ours_root_dir).expanduser()
     save_dir = save_dir or ref_dir.parent / 'results'
     save_dir = Path(save_dir).expanduser()
     save_dir.mkdir(parents=True, exist_ok=True)
     ref_col = 'als' if 'ALS' in ref_dir.name else 'lvis'
+    ref_meta = pd.read_csv(ref_dir.parent / f'meta_{ref_col}.csv')
 
     tiles = [t for t in ref_dir.glob('*.tif') if t.name.endswith('.cog.tif')]
     
     for tile_id in tiles:
         tile_id = tile_id.stem.split('.')[0]
+        import ipdb; ipdb.set_trace()
+        ref_year = ref_meta[ref_meta['Tile name'] == tile_id]['Year'].values[0]
+        if '-' in ref_year:
+            ref_year = ref_year.split('-')[-1]
+        else:
+            ref_year = int(ref_year)
+        if ref_year < 2016:
+            continue
+        if ref_year == 2016:
+            ref_year = 2017
+        ours_dir = ours_root_dir / f'{ref_year}/original/tiles/geotiff/'
         ref, ours = extract_valid_pixels(ref_dir, ours_dir, tile_id)
         df = pd.DataFrame({'tile_id': np.full(len(ref), tile_id), ref_col: ref, 'ours_rh98': ours})
         df.to_parquet(save_dir / f'eval_{ref_col}_{tile_id}.parquet', index=False)

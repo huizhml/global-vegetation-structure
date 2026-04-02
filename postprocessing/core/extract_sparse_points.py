@@ -255,7 +255,9 @@ def pair_predictions_with_gedi_ref_data(
         
     
     # all_tiles = ['32SNA']
+    unfinished_tiles = check_unfinished_files(all_tiles, save_dir, output_format='parquet')
     print(f'{len(all_tiles)} tiles have predictions')
+    print(f'{len(unfinished_tiles)} tiles need to be processed')
 
     ours_rh_cols = [f'RH{i}_Q1_raw' for i in rh_idxs]
     
@@ -276,6 +278,9 @@ def pair_predictions_with_gedi_ref_data(
         if pred_dir is None:
             return None
         tile_id = pred_dir.stem
+        if (save_dir / f'{tile_id}.parquet').exists():
+            return
+        
         gedi_chm_ref_df = gpd.read_parquet(gedi_chm_reference_dir / f'{tile_id}.parquet')
         lon = gedi_chm_ref_df.lon.values
         lat = gedi_chm_ref_df.lat.values
@@ -289,7 +294,7 @@ def pair_predictions_with_gedi_ref_data(
 
     # all_tiles = ['35NLJ']
     tasks = []
-    for tile_id in all_tiles:
+    for tile_id in unfinished_tiles:
         pred_file = _get_tile_pred_dir(tile_id)
         tasks.append(_process_tile(pred_file))
     with ProgressBar():
