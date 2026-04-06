@@ -41,20 +41,22 @@ ESA_WC_s = {
 
 BIOMES = [
     # Don't change the order, index is the corresponding BIOME number
-    'Tropical & Subtropical Moist Broadleaf Forests', # 1
-    'Tropical & Subtropical Dry Broadleaf Forests',   # 2
-    'Tropical & Subtropical Coniferous Forests',     # 3
-    'Temperate Broadleaf & Mixed Forests',          # 4
-    'Temperate Conifer Forests',                     # 5
-    'Boreal Forests/Taiga',                          # 6
-    'Tropical & Subtropical Grasslands, Savannas & Shrublands', # 7
-    'Temperate Grasslands, Savannas & Shrublands',          # 8
-    'Flooded Grasslands & Savannas',                        # 9
-    'Montane Grasslands & Shrublands',                    # 10
-    'Tundra',                                            # 11
-    'Mediterranean Forests, Woodlands & Scrub',          # 12
-    'Deserts & Xeric Shrublands',                          # 13
-    'Mangroves'                                           # 14
+    {'value': 1, 'abbr': 'Tro.Sub.Moi.Br.F', 'name': 'Tropical & Subtropical Moist Broadleaf Forests', }, # 1
+    {'value': 2, 'abbr': 'Tro.Sub.Dry.Br.F', 'name': 'Tropical & Subtropical Dry Broadleaf Forests'},   # 2
+    {'value': 3, 'abbr': 'Tro.Sub.Con.F', 'name': 'Tropical & Subtropical Coniferous Forests'},     # 3
+    {'value': 4, 'abbr': 'Tem.Br.Mix.F', 'name': 'Temperate Broadleaf & Mixed Forests'},          # 4
+    {'value': 5, 'abbr': 'Tem.Con.F', 'name': 'Temperate Conifer Forests'},                     # 5
+    {'value': 6, 'abbr': 'Bor.F.Tai', 'name': 'Boreal Forests/Taiga'},                          # 6
+    {'value': 7, 'abbr': 'Tro.Sub.Gr.Sav.Shr', 'name': 'Tropical & Subtropical Grasslands, Savannas & Shrublands'}, # 7
+    {'value': 8, 'abbr': 'Tem.Gr.Sav.Shr', 'name': 'Temperate Grasslands, Savannas & Shrublands'},          # 8
+    {'value': 9, 'abbr': 'Flo.Gr.Sav', 'name': 'Flooded Grasslands & Savannas'},                        # 9
+    {'value': 10, 'abbr': 'Mon.Gr.Sh', 'name': 'Montane Grasslands & Shrublands'},                    # 10
+    {'value': 11, 'abbr': 'Tun', 'name': 'Tundra'},                                            # 11
+    {'value': 12, 'abbr': 'Med.F.Woo.Scr', 'name': 'Mediterranean Forests, Woodlands & Scrub'},          # 12
+    {'value': 13, 'abbr': 'Des.Xer.Shr', 'name': 'Deserts & Xeric Shrublands'},                          # 13
+    {'value': 14, 'abbr': 'Man', 'name': 'Mangroves'},                                    # 14
+    {'value': 98, 'abbr': 'biome_98', 'name': 'Biome 98'},                                    # 98
+    {'value': 99, 'abbr': 'biome_99', 'name': 'Biome 99'}                                    # 99
 ]
 
 BIOMES_s = {

@@ -74,10 +74,10 @@ def group_df_by_biome(df_fps: List[str] = None):
     def save_parquet(x):
         print(x)
         if x.name is not None and int(x.name) < 15:
-            name = f'rhs_attrs_{BIOMES[int(x.name)-1].replace(" ", "_").replace("&", "and")}.parquet'
+            name = f'rhs_attrs_{BIOMES[int(x.name)-1]['abbr']}.parquet'
             x.to_parquet(data_dir / name)
         else:
-            x.to_parquet(data_dir / f'rhs_attrs_biome_{x.name}.parquet')
+            x.to_parquet(data_dir / f'rhs_attrs_biome_{BIOMES[x.name]['abbr']}.parquet')
     df.groupby('BIOME').apply(save_parquet)
 
 
@@ -344,7 +344,7 @@ class PCAAnalysis:
         print('Unique max(d(PC)): ', np.unique(cohend_matrix_dict['max_idx_pcs']))
         print('Unique max(d(RH)): ', np.unique(cohend_matrix_dict['max_idx_rhs']))
 
-        labels = BIOMES if group_method == 'Biome' else ESA_WC.keys()
+        labels = [biome['abbr'] for biome in BIOMES] if group_method == 'Biome' else ESA_WC.keys()
         for name in ['all', 'pcs', 'rhs']:
             plt.figure(figsize=(12, 12))
             value = cohend_matrix_dict[f'max_value_{name}']
@@ -483,7 +483,7 @@ class PCAAnalysis:
             elif 'pcs' in name:
                 annot = annot + 1
             sns.heatmap(value, cmap=cmap, annot=annot, annot_kws={'fontsize': 10}, fmt='d', vmin=vmin, vmax=vmax,
-                        xticklabels=BIOMES, yticklabels=BIOMES)
+                        xticklabels=[biome['abbr'] for biome in BIOMES], yticklabels=[biome['abbr'] for biome in BIOMES])
             title = f'Biome effect size: most evident values of {name.upper()} across all biomes'
             plt.title(title)
             plt.tight_layout()

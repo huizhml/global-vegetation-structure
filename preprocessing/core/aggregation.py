@@ -65,9 +65,9 @@ def group_df_by_biome(df_fps: List[str] = None):
     def save_parquet(x):
         print(x)
         if x.name is not None and int(x.name) < 15:
-            name = f'rhs_attrs_{BIOMES[int(x.name)-1].replace(" ", "_").replace("&", "and")}.parquet'
+            name = f'rhs_attrs_{BIOMES[int(x.name)-1]['abbr']}.parquet'
             x.to_parquet(data_dir / name)
         else:
-            x.to_parquet(data_dir / f'rhs_attrs_biome_{x.name}.parquet')
+            x.to_parquet(data_dir / f'rhs_attrs_biome_{BIOMES[x.name]['abbr']}.parquet')
     df.groupby('BIOME').apply(save_parquet)
 

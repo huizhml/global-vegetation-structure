@@ -15,13 +15,11 @@ def extract_valid_pixels(ref_dir: Path, ours_dir: Path, tile_id: str) -> np.ndar
     Returns:
         valid_pixels: numpy array of shape (n_pixels, n_bands)
     '''
-    import ipdb; ipdb.set_trace()
     with rasterio.open(ref_dir / f'{tile_id}.cog.tif') as src:
         ref = src.read(masked=True)
         ref_data = ref.filled(np.nan)
         ref_data[ref_data > 100] = np.nan # there are very high values (> 1000) for some tiles
         ref_data[ref_data < 0] = 0 # there are negative values, looks like nonvegetation
-    import ipdb; ipdb.set_trace()
     with rasterio.open(ours_dir / f'{tile_id}/RH98_Q1.tif') as src:
         ours = src.read(masked=True).astype(np.float32)
         ours_data = ours.filled(np.nan)

@@ -26,7 +26,15 @@ import pandas as pd
 from evaluation.utils import ProgressMonitor
 import dask
 from dask.diagnostics import ProgressBar
+import dask.dataframe as dd
+import re
 from sklearn.metrics import r2_score
+import seaborn as sns
+from matplotlib.colors import LogNorm
+from const import BIOMES
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+import matplotlib.gridspec as gridspec
+from scipy.stats import gaussian_kde
 
 MAX_HEIGHT = 100.0
 N_BINS = 20
@@ -40,8 +48,108 @@ GEDI_META_COLS =['digital_elevation_model', 'digital_elevation_model_srtm', 'pft
                  'solar_azimuth', 'solar_elevation', 'surface_flag', 'urban_focal_window_size', 'urban_proportion', 'slope', 'lc', 
                  'geometry',
                  'BIOME', 'ECO_NAME']
+key_rhs = [25, 50, 75, 95, 98]
+RH_COLS = [f'rh{rh}' for rh in key_rhs] + [f'RH{rh}_Q1_raw' for rh in key_rhs]
 stac_collection_dir = '~/data/gvs/products/gvsm_stac_catalog/vsm_local'
 
+
+def scatter_plot(df: pd.DataFrame, var: str, metrics: dict, biome_value: int = None, save_dir: Path = None, max_value: int = 3) -> None:
+    if biome_value == 98:
+        biome_value = 15
+    elif biome_value == 99:
+        biome_value = 16
+    biome_value = int(biome_value) - 1
+    plot_title = f'{BIOMES[biome_value]['name']}' if biome_value is not None else 'All Biomes'
+    file_name = f'scatter_plot_gedi_vs_ours_{var}_{BIOMES[biome_value]["abbr"].replace(".", "")}.pdf'
+    fig, ax = plt.subplots(1, 1, figsize=(7, 6))
+    sns.histplot(df, x=f'{var}_gedi', y = f'{var}_ours', bins=50, cbar=False, cmap='viridis', ax=ax)
+    ax.collections[0].set_norm(LogNorm(vmin=1, vmax=1000))
+    divider = make_axes_locatable(ax)
+    cax = divider.append_axes("right", size="5%", pad=0.1)
+    fig.colorbar(ax.collections[0], cax=cax)
+    ax.set_xlim(0, max_value)
+    ax.set_ylim(0, max_value)
+    ax.plot(np.arange(max_value), np.arange(max_value), color='black', linestyle='dashed')
+    ax.set_title(plot_title)
+    ax.text(0.05, 0.95, f'R$^2$ = {metrics[f"{var}_r2"]:.2f}', ha='left', va='top', transform=ax.transAxes, fontsize=14)
+    ax.text(0.05, 0.90, f'Corr = {metrics[f"{var}_corr"]:.2f}', ha='left', va='top', transform=ax.transAxes, fontsize=14)
+    ax.text(0.05, 0.85, f'N = {metrics[f"{var}_n"]}', ha='left', va='top', transform=ax.transAxes, fontsize=14)
+    ax.set_aspect('equal')
+    fig.savefig(save_dir / file_name, bbox_inches='tight')
+    plt.close(fig)  # explicitly close THIS figure
+
+def boxplot_with_marginal_histograms(df: pd.DataFrame, var: str, rh_col: str='rh98', bin_width:int=5, max_height:int=50, max_value:int=50, save_dir: Path = None) -> None:
+    biome_value = df['BIOME'].unique()[0]
+    df = df[df[var] <= max_value]
+    if biome_value == 98:
+        biome_value = 15
+    elif biome_value == 99:
+        biome_value = 16
+    biome_value = int(biome_value) - 1
+    plot_title = f'{BIOMES[biome_value]['name']}' if biome_value is not None else 'All Biomes'
+    file_name = f'boxplot_{var}_{rh_col}_{BIOMES[biome_value]["abbr"].replace(".", "")}.pdf'
+    # Create 5m height bins based on rh98
+    bin_edges = np.arange(0, max_height+bin_width, bin_width)
+    df['height_bin'] = pd.cut(df[rh_col], bins=bin_edges, right=False)
+    df['bin_label'] = df['height_bin'].apply(
+        lambda x: f"{int(x.left)}-{int(x.right)}" if pd.notna(x) else None
+    )
+    df = df.dropna(subset=['bin_label'])
+    ordered_bin = sorted(df['bin_label'].unique(), key=lambda x: int(x.split('-')[0]))
+    counts = df.groupby('bin_label').size()
+    
+    # Set up grid: main axes + marginal on the right
+    fig = plt.figure(figsize=(10, 6))
+    gs = gridspec.GridSpec(1, 2, width_ratios=[5, 1], wspace=0.05)
+
+    ax_main = fig.add_subplot(gs[0])
+    ax_marg = fig.add_subplot(gs[1], sharey=ax_main)
+
+    # --- Main boxplot ---
+    data = [df[df['bin_label'] == b][var].values for b in ordered_bin]
+    bp = ax_main.boxplot(
+        data,
+        tick_labels=ordered_bin,
+        patch_artist=True,
+        widths=0.6,
+        showfliers=True,
+        flierprops=dict(marker='o', markersize=3, alpha=0.5, markerfacecolor='grey'),
+        medianprops=dict(color='darkred', linewidth=1.5),
+        boxprops=dict(facecolor='#4C72B0', alpha=0.7, edgecolor='black'),
+        whiskerprops=dict(color='black'),
+        capprops=dict(color='black'),
+    )
+
+    # Annotate sample sizes
+    ymax = df[var].max()
+    for i, b in enumerate(ordered_bin):
+        n = counts.get(b, 0)
+        ax_main.text(i + 1, ymax + 0.08, f'n={n}',
+                    ha='center', va='bottom', fontsize=7, color='grey')
+
+    ax_main.set_xlabel(f'Canopy Top Height (m)', fontsize=12)
+    ax_main.set_ylabel(var, fontsize=12)
+    ax_main.set_title(f'{plot_title}', fontsize=14)
+    ax_main.tick_params(axis='x', rotation=45)
+    ax_main.grid(axis='y', alpha=0.3)
+
+    # --- Marginal KDE on the right ---
+    vals = df[var].dropna().values
+    kde = gaussian_kde(vals)
+    y_grid = np.linspace(vals.min() - 0.2, vals.max() + 0.2, 300)
+    density = kde(y_grid)
+
+    ax_marg.fill_betweenx(y_grid, density, alpha=0.4, color='#4C72B0')
+    ax_marg.plot(density, y_grid, color='#4C72B0', linewidth=1.2)
+    ax_marg.tick_params(labelleft=False, left=False)
+    ax_marg.set_xlabel('Density', fontsize=10)
+    ax_marg.grid(axis='y', alpha=0.3)
+    ax_marg.spines['top'].set_visible(False)
+    ax_marg.spines['right'].set_visible(False)
+    ax_marg.spines['left'].set_visible(False)
+
+    fig.savefig(save_dir / file_name, dpi=200, bbox_inches='tight')
+    plt.close(fig)
 
 def pixel_diversity_indices(rhs, bin_width=5, max_height=None):
     """
@@ -60,12 +168,44 @@ def pixel_diversity_indices(rhs, bin_width=5, max_height=None):
     fhd = -np.sum(p[mask] * np.log(p[mask])).astype(np.float32)
     enl1d = np.exp(fhd)
     enl2d = np.float32(1.0 / np.sum(p[mask] ** 2))
+    if np.isinf(enl2d):
+        print(f'ENL2D is inf, setting to 0, rhs: {rhs}, p: {p}')
+        enl2d = 0.0
     if rhs[98] <= 0:
         cr = 0
     else:
         cr = (rhs[98] - rhs[25])/rhs[98]
     
     return fhd, enl1d, enl2d, cr
+
+
+def pixel_vertical_profile(rhs, min_rh=-20, max_rh=50, step=0.1, window=3):
+    
+    rhs_arr = np.asarray(rhs, dtype=np.float32)
+    rhs_arr = rhs_arr[np.isfinite(rhs_arr)]
+    x = np.arange(min_rh, max_rh + step, step, dtype=np.float32)
+
+    if rhs_arr.size < 3:
+        return x, np.zeros_like(x, dtype=np.float32)
+
+    rhs_unique = np.unique(np.sort(rhs_arr))
+    if rhs_unique.size < 3:
+        return x, np.zeros_like(x, dtype=np.float32)
+
+    ones = np.arange(rhs_unique.size, dtype=np.float32)
+    grad = np.gradient(ones, rhs_unique)
+    grad = np.nan_to_num(grad, nan=0.0, posinf=0.0, neginf=0.0)
+    grad_inter = interp1d(rhs_unique, grad, kind='linear', fill_value=0, bounds_error=False)
+    grad_resampled = grad_inter(x)
+
+    max_window = int(grad_resampled.size) if grad_resampled.size % 2 == 1 else int(grad_resampled.size) - 1
+    safe_window = min(window if window % 2 == 1 else window + 1, max_window)
+    if safe_window < 3:
+        smoothed_grad = grad_resampled
+    else:
+        smoothed_grad = savgol_filter(grad_resampled, safe_window, 1)
+    return x, smoothed_grad.astype(np.float32)
+
 
 def _chunk_diversity(tile, bin_width=5):
     """
@@ -277,60 +417,6 @@ def create_vrt(tile_dir, vrt_path, q_idx="1"):
     return vrt_path
 
 
-def pixel_vertical_profile(rhs, min_rh=-20, max_rh=50, step=0.1, window=3):
-    
-    rhs_arr = np.asarray(rhs, dtype=np.float32)
-    rhs_arr = rhs_arr[np.isfinite(rhs_arr)]
-    x = np.arange(min_rh, max_rh + step, step, dtype=np.float32)
-
-    if rhs_arr.size < 3:
-        return x, np.zeros_like(x, dtype=np.float32)
-
-    rhs_unique = np.unique(np.sort(rhs_arr))
-    if rhs_unique.size < 3:
-        return x, np.zeros_like(x, dtype=np.float32)
-
-    ones = np.arange(rhs_unique.size, dtype=np.float32)
-    grad = np.gradient(ones, rhs_unique)
-    grad = np.nan_to_num(grad, nan=0.0, posinf=0.0, neginf=0.0)
-    grad_inter = interp1d(rhs_unique, grad, kind='linear', fill_value=0, bounds_error=False)
-    grad_resampled = grad_inter(x)
-
-    max_window = int(grad_resampled.size) if grad_resampled.size % 2 == 1 else int(grad_resampled.size) - 1
-    safe_window = min(window if window % 2 == 1 else window + 1, max_window)
-    if safe_window < 3:
-        smoothed_grad = grad_resampled
-    else:
-        smoothed_grad = savgol_filter(grad_resampled, safe_window, 1)
-    return x, smoothed_grad.astype(np.float32)
-
-
-def create_vrt(tile_dir, vrt_path, q_idx="1"):
-    tile_dir = Path(tile_dir).expanduser()
-    vrt_path = Path(vrt_path).expanduser()
-    vrt_path.parent.mkdir(parents=True, exist_ok=True)
-
-    tile_id = tile_dir.stem
-    files = sorted(
-        glob.glob(f"{tile_dir}/RH*_Q{q_idx}.tif"),
-        key=lambda x: int(x.split("RH")[-1].split("_")[0]),
-    )
-    files = files[:100]
-    print(f"Creating VRT for {tile_id} with {len(files)} files")
-    assert len(files) == 100, f"Expected 100 files, found {len(files)}"
-
-    vrt_options = gdal.BuildVRTOptions(separate=True)
-    vrt = gdal.BuildVRT(str(vrt_path), files, options=vrt_options)
-
-    for i in range(1, len(files) + 1):
-        band = vrt.GetRasterBand(i)
-        band.SetDescription(f"RH{i - 1}")
-
-    vrt.FlushCache()
-    vrt = None
-    return vrt_path
-
-
 def vertical_profile_biome_analysis(points_file, save_dir, s2_grid_file=None, gedi_ref_dir=None, max_distance=1000):
     points_file = Path(points_file).expanduser()
     save_dir = Path(save_dir).expanduser()
@@ -425,10 +511,8 @@ def vertical_profile_biome_analysis_ours(points_file, save_dir, s2_grid_file=Non
         vrt_path = str(Path(vrt_path).expanduser())
         #TODO: ...
 
-
 def cal_diversity_indices(save_dir, gedi_ours_dir, bin_width=5, year=2020, **kwargs):
     '''Evaluate the diversity indices against the GEDI reference points on the test set'''
-    import os
     save_dir = Path(f'{save_dir}/bin_width_{bin_width}m/{year}').expanduser()
     save_dir.mkdir(parents=True, exist_ok=True)
     gedi_ours_dir = Path(gedi_ours_dir).expanduser()
@@ -452,24 +536,9 @@ def cal_diversity_indices(save_dir, gedi_ours_dir, bin_width=5, year=2020, **kwa
         indices_gedi = pd.DataFrame(indices_gedi.tolist(), index=indices_gedi.index, columns=['fhd_gedi', 'enl1d_gedi', 'enl2d_gedi', 'cr_gedi'])
         indices_ours = gedi_ours[ours_cols].apply(lambda x: pixel_diversity_indices(x, bin_width=5), axis=1)
         indices_ours = pd.DataFrame(indices_ours.tolist(), index=indices_ours.index, columns=['fhd_ours', 'enl1d_ours', 'enl2d_ours', 'cr_ours'])
-        df = pd.concat([indices_gedi, indices_ours, gedi_ours[GEDI_META_COLS]], axis=1)
+        df = pd.concat([indices_gedi, indices_ours, gedi_ours[GEDI_META_COLS + RH_COLS]], axis=1)
         df = gpd.GeoDataFrame(df, geometry='geometry', crs="EPSG:4326")
         df.to_parquet(save_dir / f'{tile_id}.parquet')
-        # import ipdb; ipdb.set_trace()
-        # N = len(indices_gedi)
-        # metrics = {}
-        # for col in indices_gedi.columns: # fhd, enl1d, enl2d, cr
-        #     diff = indices_gedi[col] - indices_ours[col]
-        #     metrics[col] = {
-        #         'r2': np.corrcoef(indices_gedi[col], indices_ours[col])[0, 1],
-        #         'rmse': np.sqrt(np.mean(diff**2)),
-        #         'mae': np.mean(np.abs(diff)),
-        #         'me': np.mean(diff),
-        #         'n': N,
-        #     }
-        # metrics_df = pd.DataFrame(metrics).T
-        # all_metrics = pd.concat({tile_id: metrics_df}, names=['tile', 'metric'])
-        # return all_metrics
     
     tasks = []
     # gedi_ours_files = [ f for f in gedi_ours_files if f.stem=='32QND']
@@ -478,12 +547,9 @@ def cal_diversity_indices(save_dir, gedi_ours_dir, bin_width=5, year=2020, **kwa
         tasks.append(dask.delayed(_tile_level_indices)(gedi_ours_file))
     with ProgressBar():
         dask.compute(*tasks)
-    # all_metrics = pd.concat([r for r in results if r is not None])
-    # all_metrics.to_parquet(save_dir / f'all_metrics_by_{group_by}_bin_{bin_width}m.parquet')
-    
-def eval_diversity_indices(indices_dir, group_by=None, year=2020, save_dir=None, filter_steep_slope=False, **kwargs):
-    import dask.dataframe as dd
-    import re
+
+
+def eval_diversity_indices(indices_dir, group_by=None, year=2020, save_dir=None, filter_steep_slope=False, plot_scatter=False, plot_boxplot=False, **kwargs):
     # Extract bin_width from indices_dir string (looks for "bin_width_" followed by digits)
     m = re.search(r'bin_width_(\d+)', str(indices_dir))
     bin_width = int(m.group(1)) if m else None
@@ -494,8 +560,6 @@ def eval_diversity_indices(indices_dir, group_by=None, year=2020, save_dir=None,
     indices_files = sorted(indices_dir.glob('*.parquet'))
     # indices_files = indices_files[100:110] # for testing
     ddf = dd.read_parquet(indices_files)
-    ddf = ddf.compute()
-    import ipdb; ipdb.set_trace()
     if filter_steep_slope:
         ddf = ddf[ddf['slope'] <= 20]
         save_dir = save_dir.parent / 'steep_slope_filtered'
@@ -510,7 +574,7 @@ def eval_diversity_indices(indices_dir, group_by=None, year=2020, save_dir=None,
         'fhd': np.log(n_bins),
         'enl1d': n_bins,
         'enl2d': n_bins,
-        'cr': 1.0,
+        'cr': 5.0,
     }
     # Group and compute metrics
     def compute_metrics(group):
@@ -518,12 +582,18 @@ def eval_diversity_indices(indices_dir, group_by=None, year=2020, save_dir=None,
         for var in ['fhd', 'enl1d', 'enl2d', 'cr']:
             gedi = group[f'{var}_gedi']
             ours = group[f'{var}_ours']
-            diff = group[f'{var}_diff']
+            diff = group[f'{var}_diff'] / max_metrics[var]
             metrics[f'{var}_corr'] = np.corrcoef(gedi, ours)[0, 1]
             metrics[f'{var}_r2'] =  r2_score(gedi, ours)
-            metrics[f'{var}_rmse'] = np.sqrt(np.mean(diff**2)) / max_metrics[var]
-            metrics[f'{var}_mae'] = np.mean(np.abs(diff)) / max_metrics[var]
-            metrics[f'{var}_me'] = np.mean(diff) / max_metrics[var]
+            metrics[f'{var}_rmse'] = np.sqrt(np.mean(diff**2))
+            metrics[f'{var}_mae'] = np.mean(np.abs(diff))
+            metrics[f'{var}_me'] = np.mean(diff)
+            metrics[f'{var}_n'] = len(gedi)
+            if plot_scatter:
+                scatter_plot(group, var, metrics, biome_value=group['BIOME'].iloc[0], save_dir=save_dir, max_value=max_metrics[var])
+            if plot_boxplot:
+                boxplot_with_marginal_histograms(group, f'{var}_gedi', rh_col=f'rh98', save_dir=save_dir)
+                boxplot_with_marginal_histograms(group, f'{var}_ours', rh_col=f'RH98_Q1_raw', save_dir=save_dir)
         return pd.Series(metrics)
 
     if group_by is not None:
@@ -533,25 +603,29 @@ def eval_diversity_indices(indices_dir, group_by=None, year=2020, save_dir=None,
             "fhd_rmse": pd.Series(dtype="float32"),
             "fhd_mae": pd.Series(dtype="float32"),
             "fhd_me": pd.Series(dtype="float32"),
+            "fhd_n": pd.Series(dtype="int32"),
             
             "enl1d_corr": pd.Series(dtype="float32"),
             "enl1d_r2": pd.Series(dtype="float32"),
             "enl1d_rmse": pd.Series(dtype="float32"),
             "enl1d_mae": pd.Series(dtype="float32"),
             "enl1d_me": pd.Series(dtype="float32"),
-            
+            "enl1d_n": pd.Series(dtype="int32"),
             "enl2d_corr": pd.Series(dtype="float32"),
             "enl2d_r2": pd.Series(dtype="float32"),
             "enl2d_rmse": pd.Series(dtype="float32"),
             "enl2d_mae": pd.Series(dtype="float32"),
             "enl2d_me": pd.Series(dtype="float32"),
-            
+            "enl2d_n": pd.Series(dtype="int32"),
             "cr_corr": pd.Series(dtype="float32"),
             "cr_r2": pd.Series(dtype="float32"),
             "cr_rmse": pd.Series(dtype="float32"),
             "cr_mae": pd.Series(dtype="float32"),
             "cr_me": pd.Series(dtype="float32"),
+            "cr_n": pd.Series(dtype="int32"),
         })
+        # ddf = ddf.compute()
+        # ddf.groupby('BIOME').apply(compute_metrics)
         result = ddf.groupby(group_by).apply(compute_metrics, meta=meta).compute()
         result.to_csv(save_dir / f'diversity_indices_evaluation_by_biomes_bin_width_{bin_width}m_{year}.csv')
     else:
@@ -567,7 +641,16 @@ def eval_diversity_indices(indices_dir, group_by=None, year=2020, save_dir=None,
             }
         result_df = pd.DataFrame(records).T
         result_df.to_csv(save_dir / f'diversity_indices_evaluation_all_tiles_bin_width_{bin_width}m_{year}.csv')
-        
+  
+def diversity_indices_distribution(indices_dir, save_dir, group_by=None, filter_steep_slope=False, year=2020, **kwargs):      
+    indices_dir = Path(indices_dir).expanduser()
+    save_dir = Path(save_dir).expanduser()
+    save_dir.mkdir(parents=True, exist_ok=True)
+    indices_files = sorted(indices_dir.glob('*.parquet'))
+    for indices_file in indices_files:
+        indices = gpd.read_parquet(indices_file)
+        indices = indices[RH_COLS]
+        indices = indices.apply(lambda x: pixel_diversity_indices(x, bin_width=5), axis=1)
 
 if __name__ == "__main__":
     save_dir = '/projects/dereeco/data/gvs/evaluation/with_gedi_on_diversity_indices/indices_by_tile/bin_width_5m/2020'

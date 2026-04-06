@@ -36,6 +36,8 @@ class EvaluateDiversityIndicesConfig(FunctionConfig):
     group_by: Optional[str] = 'BIOME'
     filter_steep_slope: bool = True
     year: int = 2020
+    plot_scatter: bool = False
+    plot_boxplot: bool = True
     save_dir: str = '~/data/gvs/evaluation/with_gedi_on_diversity_indices/results/'
     _target_: str = "evaluation.diversity_indices.eval_diversity_indices"
     

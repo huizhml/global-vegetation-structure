@@ -22,10 +22,37 @@ case $1 in
 # ---------------------------------------
 echo "Running evaluation"
 ;;
+# =======================================
+#    Evaluate against ALS and LVIS
+# =======================================
+3)
+# ---------------------------------------
+#   User our predictions from 2020
+# ---------------------------------------
+echo "Evaluating against ALS and LVIS"
+ref_dir=${HOME}/data/gvs/gedi/veg_sensitivity_gt0p95/subset_test/original/
+ours_dir=${HOME}/data/gvs/gedi/veg_sensitivity_gt0p95/subset_test/original_with_sota_chms_biome_and_ours_full/2020
+save_dir=${HOME}/data/gvs/evaluation/with_gedi_on_diversity_indices/results/
+python -m evaluation.run run=evaluate_als run.ref_dir=${ref_dir} run.ours_dir=${ours_dir} run.save_dir=${save_dir} || exit $?
+
+;;
+
+31)
+# ---------------------------------------
+#   User our predictions from years matching ALS's and LVIS's years
+# ---------------------------------------
+echo "Evaluating against ALS and LVIS"
+ref_dir=${HOME}/data/gvs/gedi/veg_sensitivity_gt0p95/subset_test/original/
+ours_dir=${HOME}/data/gvs/gedi/veg_sensitivity_gt0p95/subset_test/original_with_sota_chms_biome_and_ours_full/2021
+save_dir=${HOME}/data/gvs/evaluation/with_gedi_on_diversity_indices/results/
+python -m evaluation.run run=evaluate_als run.ref_dir=${ref_dir} run.ours_dir=${ours_dir} run.save_dir=${save_dir} || exit $?
+;;
+
 
 # =======================================
 #    Diversity indices
 # =======================================
+# Evaluate diversity indices against GEDI reference points - test set
 4)
 # ---------------------------------------
 #   Calculate diversity indices
