@@ -7,6 +7,7 @@ from hydra.utils import instantiate
 from dataclasses import dataclass, field, fields
 import hydra
 from omegaconf import OmegaConf, MISSING
+import numpy as np
 from config.base_config_class import ClassConfig, FunctionConfig
 from const import KEY_RHS, CHM_COLS
 from postprocessing.core.utils import generate_run_log
@@ -156,13 +157,24 @@ class AddOursBlendedToSOTAGEDIConfig(FunctionConfig):
 
 
 @dataclass
-class ExtractPredBiomeConfig(FunctionConfig):
-    gedi_ref_dir: str = '~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_cal/original/2020'
-    vsm_dir: str = '~/data/gvs/predictions/2020/blended/tiles/geotiff/'
+class ExtractPredConfig(FunctionConfig):
+    loc_dir: str = '~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_cal/original/2020'
     save_dir: str = '~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_cal/original_with_ours_biome/2020'
-    biome_file: str = '~/data/GEDI/ecoregions/wwf_terr_ecos.shp'
-    _target_: str = "postprocessing.core.extract_sparse_points.extract_pred_add_biome"
+    stac_col_dir: str = '~/data/gvs/products/gvsm_stac_catalog/vsm_local/'
+    year: int = 2020
+    rh_idxs: list[int] = field(default_factory=lambda: list(range(101)))
+    _target_: str = "postprocessing.core.sample_vsm.sample_points"
     
+
+@dataclass
+class SampleVSMPatchesConfig(FunctionConfig):
+    loc_dir: str = '~/data/gvs/downstream_tasks/naturalness/loc_by_tile/'
+    stac_col_dir: str = '~/data/gvs/products/gvsm_stac_catalog/vsm_local/'
+    save_dir: str = '~/data/gvs/downstream_tasks/naturalness/vsm_patches_ps11/'
+    year: int = 2020
+    rh_idxs: list[int] = field(default_factory=lambda: list(range(101)))
+    q_idxs: list[int] = field(default_factory=lambda: [1])
+    _target_: str = "postprocessing.core.sample_vsm.sample_patches"
 
 @dataclass
 class AddBiomeConfig(FunctionConfig): 
@@ -181,6 +193,15 @@ class EvaluateBiasCorrectionConfig(FunctionConfig):
     save_dir: str = '~/data/gvs/assets/bias_correction_stats/slope_lt20_minpoints2000/2020/figures/cal_slope_lt20'
     _target_: str = "postprocessing.corrections.bias_correction.evaluate_bias_correction_against_sota_chm"
 
+@dataclass
+class CreateVRTConfig(FunctionConfig):
+    tile_list_file: str = '~/data/gvs/assets/worklists/total_tiles_2020.txt'
+    year: int = 2020
+    q_idx: str = '1'
+    vrt_dir: str = '~/data/gvs/predictions/2020/original/vrt_q1'
+    _target_: str = "postprocessing.core.create_vrt.create_vrt"
+    
+
 defaults = [
     {'run': 'add_ours_to_sota_gedi'}, # default group
     "_self_"
@@ -196,6 +217,9 @@ cs.store(group='run', name='make_parq_subcolumns', node=MakeParqSubcolumnsConfig
 cs.store(group='run', name='get_tiles_reblend', node=GetTilesReblendConfig)
 cs.store(group='run', name='repartition_data', node=RepartitionDataConfig)
 cs.store(group='run', name='extract_gedi_from_h5', node=ExtractGEDIFromH5Config)
+cs.store(group='run', name='extract_pred', node=ExtractPredConfig)
+cs.store(group='run', name='sample_vsm_patches', node=SampleVSMPatchesConfig)
+
 cs.store(group='run', name='check_after_bias_correction', node=CheckfterBiasCorrectionConfig)
 cs.store(group='run', name='check_two_partitioned_datasets', node=CheckTwoPartitionedDatasetsConfig)
 cs.store(group='run', name='check_two_datasets', node=CheckTwoDatasetsConfig)
@@ -205,9 +229,9 @@ cs.store(group='run', name='add_ours_blended_to_sota_gedi', node=AddOursBlendedT
 cs.store(group='run', name='evaluate_bias_correction', node=EvaluateBiasCorrectionConfig)
 cs.store(group='run', name='get_tiles_wo_enough_gedi_gt', node=GetTilesWooEnoughGEDIConfig)
 cs.store(group='run', name='run_blending', node=RunBlendingConfig)
-cs.store(group='run', name='extract_pred', node=ExtractPredBiomeConfig)
 cs.store(group='run', name='add_biome', node=AddBiomeConfig)
 cs.store(group='run', name='create_distance_maps', node=CreateDistanceMapsConfig)
+cs.store(group='run', name='create_vrt', node=CreateVRTConfig)
 cs.store(group='run', name='translate_predictions', node=TranslatePredictionsConfig)
 cs.store(group='run', name='get_tiles_redundant', node=GetTilesRedundantConfig)
 cs.store(group='run', name='get_tiles_nodata', node=GetTilesNodataConfig)
