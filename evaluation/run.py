@@ -48,7 +48,13 @@ class ExtractPixelsAndSaveConfig(FunctionConfig):
     ours_root_dir: str = '~/data/gvs/predictions'
     save_dir: str = '~/data/gvs/evaluation/with_airborne_lidar/lidar_and_ours_year_matching'
     _target_: str = "evaluation.eval_als.extract_pixels_and_save"
-
+    
+@dataclass
+class PrepareNaturalnessLocParquetsConfig(FunctionConfig):
+    naturalness_csv: str = '~/data/gvs/downstream_tasks/naturalness/reference_data_set_updated_train.csv'
+    s2_grid_file: str = '~/data/gvs/state/s2_tiles_with_growing_months.parquet'
+    save_dir: str = '~/data/gvs/downstream_tasks/naturalness/loc_by_tile'
+    _target_: str = "evaluation.naturalness.prepare_loc_parqs"
 @dataclass
 class RunConfig:
     defaults: List[Any] = field(default_factory=lambda: defaults)
@@ -65,6 +71,7 @@ cs.store(group='run', name='compute_entropy', node=ComputeEntropyConfig)
 cs.store(group='run', name='compute_diversity_indices', node=ComputeDiversityIndicesConfig)
 cs.store(group='run', name='evaluate_diversity_indices', node=EvaluateDiversityIndicesConfig)
 cs.store(group='run', name='extract_pixels_and_save', node=ExtractPixelsAndSaveConfig)
+cs.store(group='run', name='prepare_naturalness_loc_parquets', node=PrepareNaturalnessLocParquetsConfig)
 # ================================ Main Config ================================
 cs.store(name='base_config', node=RunConfig) # NOTE: name here should match the default in ../config/base/no_log.yaml
 

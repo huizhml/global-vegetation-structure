@@ -34,7 +34,7 @@ from matplotlib.colors import LogNorm
 from const import BIOMES
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import matplotlib.gridspec as gridspec
-from scipy.stats import gaussian_kde
+from scipy.stats import gaussian_kde, pearsonr
 
 MAX_HEIGHT = 100.0
 N_BINS = 20
@@ -79,6 +79,9 @@ def scatter_plot(df: pd.DataFrame, var: str, metrics: dict, biome_value: int = N
     plt.close(fig)  # explicitly close THIS figure
 
 def boxplot_with_marginal_histograms(df: pd.DataFrame, var: str, rh_col: str='rh98', bin_width:int=5, max_height:int=50, max_value:int=50, save_dir: Path = None) -> None:
+    '''
+    NOTE: bin width here means the canopy top height bin width, not the vertical resolution width
+    '''
     biome_value = df['BIOME'].unique()[0]
     df = df[df[var] <= max_value]
     if biome_value == 98:
@@ -99,11 +102,15 @@ def boxplot_with_marginal_histograms(df: pd.DataFrame, var: str, rh_col: str='rh
     counts = df.groupby('bin_label').size()
     
     # Set up grid: main axes + marginal on the right
-    fig = plt.figure(figsize=(10, 6))
-    gs = gridspec.GridSpec(1, 2, width_ratios=[5, 1], wspace=0.05)
+    fig = plt.figure(figsize=(10, 8))
+    gs = gridspec.GridSpec(2, 2, width_ratios=[5, 1], height_ratios=[1, 5],
+                           wspace=0.05, hspace=0.05)
 
-    ax_main = fig.add_subplot(gs[0])
-    ax_marg = fig.add_subplot(gs[1], sharey=ax_main)
+    ax_top  = fig.add_subplot(gs[0, 0])          # top marginal
+    ax_main = fig.add_subplot(gs[1, 0])           # main boxplot
+    ax_marg = fig.add_subplot(gs[1, 1], sharey=ax_main)  # right marginal
+    ax_empty = fig.add_subplot(gs[0, 1])          # empty corner
+    ax_empty.axis('off')
 
     # --- Main boxplot ---
     data = [df[df['bin_label'] == b][var].values for b in ordered_bin]
@@ -129,18 +136,17 @@ def boxplot_with_marginal_histograms(df: pd.DataFrame, var: str, rh_col: str='rh
 
     ax_main.set_xlabel(f'Canopy Top Height (m)', fontsize=12)
     ax_main.set_ylabel(var, fontsize=12)
-    ax_main.set_title(f'{plot_title}', fontsize=14)
     ax_main.tick_params(axis='x', rotation=45)
     ax_main.grid(axis='y', alpha=0.3)
 
-    # --- Marginal KDE on the right ---
-    vals = df[var].dropna().values
-    kde = gaussian_kde(vals)
-    y_grid = np.linspace(vals.min() - 0.2, vals.max() + 0.2, 300)
-    density = kde(y_grid)
+    # --- Right marginal KDE (distribution of var) ---
+    vals_var = df[var].dropna().values
+    kde_var = gaussian_kde(vals_var)
+    y_grid = np.linspace(vals_var.min() - 0.2, vals_var.max() + 0.2, 300)
+    density_var = kde_var(y_grid)
 
-    ax_marg.fill_betweenx(y_grid, density, alpha=0.4, color='#4C72B0')
-    ax_marg.plot(density, y_grid, color='#4C72B0', linewidth=1.2)
+    ax_marg.fill_betweenx(y_grid, density_var, alpha=0.4, color='#4C72B0')
+    ax_marg.plot(density_var, y_grid, color='#4C72B0', linewidth=1.2)
     ax_marg.tick_params(labelleft=False, left=False)
     ax_marg.set_xlabel('Density', fontsize=10)
     ax_marg.grid(axis='y', alpha=0.3)
@@ -148,6 +154,41 @@ def boxplot_with_marginal_histograms(df: pd.DataFrame, var: str, rh_col: str='rh
     ax_marg.spines['right'].set_visible(False)
     ax_marg.spines['left'].set_visible(False)
 
+    # --- Top marginal KDE (distribution of rh_col) ---
+    vals_rh = df[rh_col].dropna().values
+    kde_rh = gaussian_kde(vals_rh)
+    x_grid = np.linspace(vals_rh.min() - 0.2, vals_rh.max() + 0.2, 300)
+    density_rh = kde_rh(x_grid)
+
+    ax_top.fill_between(x_grid, density_rh, alpha=0.4, color='#4C72B0')
+    ax_top.plot(x_grid, density_rh, color='#4C72B0', linewidth=1.2)
+    ax_top.tick_params(labelbottom=False, bottom=False)
+    ax_top.set_ylabel('Density', fontsize=10)
+    ax_top.grid(axis='x', alpha=0.3)
+    ax_top.spines['top'].set_visible(False)
+    ax_top.spines['right'].set_visible(False)
+    ax_top.spines['bottom'].set_visible(False)
+
+    # Align the top marginal x-axis with the main boxplot x-axis
+    # The boxplot x-axis goes from 0.5 to len(ordered_bin)+0.5 (categorical positions)
+    # Map the continuous rh_col range to those positions
+    ax_top.set_xlim(bin_edges[0], bin_edges[-1])
+    ax_main.set_xlim(0.5, len(ordered_bin) + 0.5)
+    
+    # Pearson correlation (top-left of main axes)
+    r, p = pearsonr(df[rh_col], df[var])
+    ax_main.text(0.02, 0.9, f'r = {r:.3f} (p = {p:.1e})',
+                transform=ax_main.transAxes, fontsize=10,
+                verticalalignment='top', fontstyle='italic',
+                bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
+
+    # Within-bin std (annotate below each box)
+    for i, b in enumerate(ordered_bin):
+        std = df[df['bin_label'] == b][var].std()
+        ax_main.text(i + 1, ax_main.get_ylim()[0] + 0.05, f'σ={std:.2f}',
+                    ha='center', va='bottom', fontsize=6, color='steelblue')
+
+    fig.suptitle(f'{plot_title}', fontsize=14, y=0.98)
     fig.savefig(save_dir / file_name, dpi=200, bbox_inches='tight')
     plt.close(fig)
 
@@ -562,7 +603,7 @@ def eval_diversity_indices(indices_dir, group_by=None, year=2020, save_dir=None,
     ddf = dd.read_parquet(indices_files)
     if filter_steep_slope:
         ddf = ddf[ddf['slope'] <= 20]
-        save_dir = save_dir.parent / 'steep_slope_filtered'
+        save_dir = save_dir.parent / f'steep_slope_filtered_bin_{bin_width}m'
         save_dir.mkdir(parents=True, exist_ok=True)
     ddf['fhd_diff'] = ddf['fhd_gedi'] - ddf['fhd_ours']
     ddf['enl1d_diff'] = ddf['enl1d_gedi'] - ddf['enl1d_ours']
