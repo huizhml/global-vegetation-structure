@@ -98,6 +98,7 @@ def _sample_tile_points_loop(pred_dir: Path, out_file: Path, loc_file: Path, rh_
 def _sample_tile_points_xarray(loc_file: Path, stac_item: pystac.Item, out_file: Path,  rh_idxs: list[int] = [98], q_idxs: list[int] = [1]):
     '''
     Extract the RH profile from the tif files
+    NOTE: single tile sampling is faster than rasterio windowed sampling, but slower when it comes to large number of tiles.
     '''
     if out_file.exists():
         return
@@ -166,7 +167,6 @@ def _sample_tile_points(loc_file: Path, pred_dir: Path, out_file: Path, rh_idxs:
         preds[valid, band_idx] = data[rows_local[valid], cols_local[valid]]
 
     preds = np.where(preds == nodata, np.nan, preds)
-    
     vsm_cols = [f'RH{i}_Q{j}' for i in rh_idxs for j in q_idxs]
     _df = pd.DataFrame(preds/10., index=loc_df.index, columns=vsm_cols)
     df = loc_df.join(_df)
@@ -178,6 +178,11 @@ def _sample_tile_points(loc_file: Path, pred_dir: Path, out_file: Path, rh_idxs:
 def _sample_tile_patches_xarray(loc_file: Path, stac_item: pystac.Item, out_file: Path,
                           rh_idxs: List[int] = np.arange(101), q_idxs: List[int] = [1],
                           patch_size: int = 11, chunk_size: int = 10, **kwargs):
+    '''
+    NOTE: single tile sampling is faster than rasterio windowed sampling, but slower when it comes to large number of tiles.
+    '''
+    if out_file.exists():
+        return
     half = patch_size // 2
     loc_df = gpd.read_parquet(loc_file)
     loc_df = loc_df.to_crs(epsg=stac_item.properties['proj:epsg'])
@@ -239,6 +244,9 @@ def _sample_tile_patches_xarray(loc_file: Path, stac_item: pystac.Item, out_file
     oob_broadcast = np.broadcast_to(oob_mask[:, np.newaxis, :, :],
                                      (n_points, n_bands, patch_size, patch_size))
     patches[oob_broadcast] = NODATA
+    patches = patches.astype(np.float32)
+    patches = np.where(patches == NODATA, np.nan, patches)
+    patches = patches / 10.0
     np.savez(out_file, patches=patches)
     return patches
 
@@ -246,6 +254,8 @@ def _sample_tile_patches_xarray(loc_file: Path, stac_item: pystac.Item, out_file
 def _sample_tile_patches(loc_file: Path, pred_dir: Path, out_file: Path,
                           rh_idxs: List[int] = np.arange(101), q_idxs: List[int] = [1],
                           patch_size: int = 11, **kwargs):
+    if out_file.exists():
+        return
     half = patch_size // 2
     loc_df = gpd.read_parquet(loc_file)
     loc_df = loc_df.to_crs(epsg=4326)
@@ -301,9 +311,16 @@ def _sample_tile_patches(loc_file: Path, pred_dir: Path, out_file: Path,
     # Mask out-of-bounds and nodata
     patches[np.broadcast_to(oob_mask[:, np.newaxis, :, :], patches.shape)] = np.nan
     patches = np.where(patches == nodata, np.nan, patches) / 10.0
-
-    np.save(out_file, patches)
-    return patches
+    # NOTE:
+    #  np.nanmean((loc_df.loc[:, [f'rh{i}' for i in range(101)]].values -  patches[:, :, 5,5])) gives 0.23693679634738254 for 32MNE
+    #  which is the same as the one given by the _sample_tile_points method
+    da = xr.DataArray(patches, dims=['points', 'bands', 'y', 'x'], coords=[range(n_points), range(n_bands), range(patch_size), range(patch_size)])
+    da = da.assign_coords(points=loc_df.ID, bands=assets, 
+                     lat=('points', loc_df.geometry.y), lon=('points', loc_df.geometry.x), 
+                     flag=('points', loc_df.flag.values), land_use_id=('points', loc_df.Land_use_ID.values),
+                     rowid=('points', loc_df.rowid.values))
+    da.name = 'data'
+    da.to_netcdf(out_file.with_suffix('.h5'), format='NETCDF4', engine='h5netcdf')
 
 # ------------------------------------------------------------
 #  Main functions
@@ -369,14 +386,8 @@ def sample_patches(loc_dir: str,  stac_col_dir: str, save_dir: str, year: int = 
     tasks = []
     for tile_id in all_tiles:
         pred_dir = dask.delayed(_resolve_vsm_path)(stac_col_dir, tile_id, year)
-        # stac_file = stac_col_dir / f'{tile_id}_{year}/{tile_id}_{year}.json'
-        # if not stac_file.exists():
-        #     print(f'{stac_file} not found')
-        #     continue
-        # stac_item = pystac.Item.from_file(str(stac_file))
-        # pred_dir = Path(stac_item.assets[f'RH98_Q1'].href.replace('file://', '')).parent
         loc_file = loc_dir / f'{tile_id}.parquet'
-        tasks.append(dask.delayed(_sample_tile_patches)(loc_file, pred_dir, save_dir / f'{tile_id}.npz', rh_idxs=rh_idxs, q_idxs=q_idxs, patch_size=patch_size))
+        tasks.append(dask.delayed(_sample_tile_patches)(loc_file, pred_dir, save_dir / f'{tile_id}.h5', rh_idxs=rh_idxs, q_idxs=q_idxs, patch_size=patch_size))
     with ProgressBar():
         dask.compute(*tasks)
 
@@ -406,10 +417,10 @@ def sample_points(
     # all_tiles = ['48RWN']
     tasks = []
     for tile_id in all_tiles:
-        stac_item = dask.delayed(_resolve_vsm_path)(stac_col_dir, tile_id, year, return_stac_item=True)
+        pred_dir = dask.delayed(_resolve_vsm_path)(stac_col_dir, tile_id, year, return_stac_item=False)
         out_file = save_dir / f'{tile_id}.parquet'
         loc_file = loc_dir / f'{tile_id}.parquet'
-        tasks.append(dask.delayed(_sample_tile_points_xarray)(loc_file, stac_item, out_file, rh_idxs))
+        tasks.append(dask.delayed(_sample_tile_points)(loc_file, pred_dir, out_file, rh_idxs))
     with ProgressBar():
         dask.compute(*tasks)
 
@@ -545,20 +556,23 @@ if __name__ == '__main__':
     year = 2020
     stac_item = pystac.Item.from_file(str(f'/projects/dereeco/data/gvs/products/gvsm_stac_catalog/vsm_local/{tile_id}_{year}/{tile_id}_{year}.json'))
     out_file = Path(f'~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_test/original_with_sota_chms_ours_test/{year}/{tile_id}').expanduser()
-    loc_dir = '~/data/gvs/downstream_tasks/naturalness/loc_by_tile/'
+    # loc_dir = '~/data/gvs/downstream_tasks/naturalness/loc_by_tile/'
+    # 
+    loc_dir = '/projects/dereeco/data/gvs/gedi/veg_sensitivity_gt0p95/subset_test/original_with_sota_chms/2020'
     rh_idxs = np.arange(101)
     q_idxs = [1]    
     
     stac_col_dir = '/projects/dereeco/data/gvs/products/gvsm_stac_catalog/vsm_local'
     save_dir = '~/data/gvs/downstream_tasks/naturalness/vsm_patches_ps11'
     loc_file = Path(f'{loc_dir}/{tile_id}.parquet').expanduser()
+    pred_dir = Path(stac_item.assets[f'RH98_Q1'].href.replace('file://', '')).parent
     # df = sample_patches(loc_dir, stac_col_dir, save_dir, year=year, rh_idxs=rh_idxs, q_idxs=q_idxs, patch_size=11, chunk_size=2)
     t0 = time.time()
-    df = sample_points(loc_dir, stac_item, out_file, rh_idxs=rh_idxs, q_idxs=q_idxs)
+    df = _sample_tile_points(loc_file, pred_dir, out_file, rh_idxs=rh_idxs, q_idxs=q_idxs)
     t1 = time.time()
     print(f'Time taken: {t1 - t0} seconds')
     # t0 = time.time()
-    # pred_dir = Path(stac_item.assets[f'RH98_Q1'].href.replace('file://', '')).parent
+    
     # for i in range(10):
     #     patches = sample_points(loc_file, pred_dir, out_file, rh_idxs=rh_idxs, q_idxs=q_idxs)
     # t1 = time.time()
