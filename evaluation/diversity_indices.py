@@ -248,7 +248,7 @@ def pixel_vertical_profile(rhs, min_rh=-20, max_rh=50, step=0.1, window=3):
     return x, smoothed_grad.astype(np.float32)
 
 
-def _chunk_diversity(tile, bin_width=5):
+def _chunk_diversity(tile, bin_width=5, nodata_out=NODATA_OUT):
     """
     Vectorized Shannon entropy for a single spatial chunk.
 
@@ -305,11 +305,11 @@ def _chunk_diversity(tile, bin_width=5):
     enl1d = enl1d.reshape(n_rows, n_cols)
     enl2d = enl2d.reshape(n_rows, n_cols)
 
-    entropy[nodata_mask] = NODATA_OUT
-    enl1d[nodata_mask] = NODATA_OUT
-    enl2d[nodata_mask] = NODATA_OUT
+    entropy[nodata_mask] = nodata_out
+    enl1d[nodata_mask] = nodata_out
+    enl2d[nodata_mask] = nodata_out
     cr = (tile[98] - tile[25])/(tile[98] + 1e-6)
-    cr[nodata_mask] = NODATA_OUT
+    cr[nodata_mask] = nodata_out
     return entropy, enl1d, enl2d, cr
 
 

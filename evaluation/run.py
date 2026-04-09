@@ -53,8 +53,17 @@ class ExtractPixelsAndSaveConfig(FunctionConfig):
 class PrepareNaturalnessLocParquetsConfig(FunctionConfig):
     naturalness_csv: str = '~/data/gvs/downstream_tasks/naturalness/reference_data_set_updated_train.csv'
     s2_grid_file: str = '~/data/gvs/state/s2_tiles_with_growing_months.parquet'
-    save_dir: str = '~/data/gvs/downstream_tasks/naturalness/loc_by_tile'
+    save_dir: str = '~/data/gvs/downstream_tasks/naturalness/loc_by_tile_train'
     _target_: str = "evaluation.naturalness.prepare_loc_parqs"
+    
+    
+@dataclass
+class CalVSMPatchStatsConfig(FunctionConfig):
+    vsm_patches_dir: str = '~/data/gvs/downstream_tasks/naturalness/vsm_patches_ps11_train'
+    save_dir: str = '~/data/gvs/downstream_tasks/naturalness/vsm_patch_stats_ps11_train'
+    s2_patch_file: str = '~/data/gvs/downstream_tasks/naturalness/s2_2017_ps31.h5'
+    _target_: str = "evaluation.naturalness.cal_vsm_patch_stats"
+    
 @dataclass
 class RunConfig:
     defaults: List[Any] = field(default_factory=lambda: defaults)
@@ -72,6 +81,7 @@ cs.store(group='run', name='compute_diversity_indices', node=ComputeDiversityInd
 cs.store(group='run', name='evaluate_diversity_indices', node=EvaluateDiversityIndicesConfig)
 cs.store(group='run', name='extract_pixels_and_save', node=ExtractPixelsAndSaveConfig)
 cs.store(group='run', name='prepare_naturalness_loc_parquets', node=PrepareNaturalnessLocParquetsConfig)
+cs.store(group='run', name='cal_vsm_patch_stats', node=CalVSMPatchStatsConfig)
 # ================================ Main Config ================================
 cs.store(name='base_config', node=RunConfig) # NOTE: name here should match the default in ../config/base/no_log.yaml
 

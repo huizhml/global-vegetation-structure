@@ -48,16 +48,41 @@ run_sanity_check check_two_datasets ${loc_dir} ${save_dir} || exit $?
 # =======================================
 #   Naturalness analysis
 # =======================================
-2)
+2.0)
 # ---------------------------------------
-#   Sample VSM patches
+#   Partition naturalness locations by tile
 # ---------------------------------------
-echo "Sampling VSM patches"
-python -m postprocessing.run run=sample_vsm_patches
+echo "Partitioning naturalness locations by tile"
+naturalness_csv=${HOME}/data/gvs/downstream_tasks/naturalness/reference_data_set_updated_val.csv
+save_dir=${HOME}/data/gvs/downstream_tasks/naturalness/loc_by_tile_val
+python -m evaluation.run run=prepare_naturalness_loc_parquets run.naturalness_csv=${naturalness_csv} run.save_dir=${save_dir} || exit $?
 # run_sanity_check check_two_datasets ${gedi_ref_dir} ${save_dir} || exit $?
 
 ;;
 
+2.1)
+# ---------------------------------------
+#   Sample VSM patches
+# ---------------------------------------
+echo "Sampling VSM patches"
+split=${2:-val}
+loc_dir=${HOME}/data/gvs/downstream_tasks/naturalness/loc_by_tile_${split}
+save_dir=${HOME}/data/gvs/downstream_tasks/naturalness/vsm_patches_ps11_${split}
+python -m postprocessing.run run=sample_vsm_patches run.loc_dir=${loc_dir} run.save_dir=${save_dir}  || exit $?
+# run_sanity_check check_two_datasets ${gedi_ref_dir} ${save_dir} || exit $?
+;;
+
+2.2)
+# ---------------------------------------
+#   Calculate VSM patch statistics
+# ---------------------------------------
+echo "Calculating VSM patch statistics"
+split=${2:-val}
+vsm_patches_dir=${HOME}/data/gvs/downstream_tasks/naturalness/vsm_patches_ps11_${split}
+save_dir=${HOME}/data/gvs/downstream_tasks/naturalness/vsm_patch_stats_ps11_${split}
+python -m evaluation.run run=cal_vsm_patch_stats run.vsm_patches_dir=${vsm_patches_dir} run.save_dir=${save_dir}  || exit $?
+# run_sanity_check check_two_datasets ${gedi_ref_dir} ${save_dir} || exit $?
+;;
 *)
 echo "Invalid option"
 exit 1
