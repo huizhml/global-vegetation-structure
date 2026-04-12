@@ -42,12 +42,15 @@ def extract_pixels_and_save(ref_dir: str, ours_root_dir: str, save_dir: str = No
     
     for tile_id in tiles:
         tile_id = tile_id.stem.split('.')[0]
-        import ipdb; ipdb.set_trace()
+        out_file = save_dir / f'eval_{ref_col}_{tile_id}.parquet'
+        if out_file.exists():
+            continue
         ref_year = ref_meta[ref_meta['Tile name'] == tile_id]['Year'].values[0]
-        if '-' in ref_year:
-            ref_year = ref_year.split('-')[-1]
-        else:
+        if type(ref_year) == str:
+            if '-' in ref_year:
+                ref_year = ref_year.split('-')[-1]
             ref_year = int(ref_year)
+
         if ref_year < 2016:
             continue
         if ref_year == 2016:
@@ -55,7 +58,7 @@ def extract_pixels_and_save(ref_dir: str, ours_root_dir: str, save_dir: str = No
         ours_dir = ours_root_dir / f'{ref_year}/original/tiles/geotiff/'
         ref, ours = extract_valid_pixels(ref_dir, ours_dir, tile_id)
         df = pd.DataFrame({'tile_id': np.full(len(ref), tile_id), ref_col: ref, 'ours_rh98': ours})
-        df.to_parquet(save_dir / f'eval_{ref_col}_{tile_id}.parquet', index=False)
+        df.to_parquet(out_file, index=False)
 
     
 def scatter_plot(tile_id: str, df: pd.DataFrame, ref_col: str, stats: dict, save_dir: Path = None, max_height: int = 80) -> None:

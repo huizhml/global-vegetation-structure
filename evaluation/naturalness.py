@@ -214,17 +214,18 @@ def logistic_regression(vsm_patch_stats_dir: str, vsm_patch_stats_dir_val: str, 
         None
     '''
     vsm_patch_stats_dir = Path(vsm_patch_stats_dir).expanduser()
+    vsm_patch_stats_dir_val = Path(vsm_patch_stats_dir_val).expanduser()
     save_dir = Path(save_dir).expanduser()
     save_dir.mkdir(parents=True, exist_ok=True)
     files = list(vsm_patch_stats_dir.glob('*.parquet'))
     files_val = list(vsm_patch_stats_dir_val.glob('*.parquet'))
-    ddf = dd.read_parquet(files[:1000])
+    ddf = dd.read_parquet(files)
     ddf = ddf.dropna(subset=['avg_s2_band0'])
     ddf = ddf.compute()
     valid = ~ddf['land_use_id'].isin([-1, 1])
     ddf = ddf[valid]
     
-    ddf_val = dd.read_parquet(files_val[:1000])
+    ddf_val = dd.read_parquet(files_val)
     ddf_val = ddf_val.dropna(subset=['avg_s2_band0'])
     ddf_val = ddf_val.compute()
     valid_val = ~ddf_val['land_use_id'].isin([-1, 1])
@@ -236,14 +237,14 @@ def logistic_regression(vsm_patch_stats_dir: str, vsm_patch_stats_dir_val: str, 
     
     groups = {
         'full_profile': [f'std_RH{i}_Q1' for i in range(101)] + [f'avg_RH{i}_Q1' for i in range(101)],
-        's2_only': [f'std_s2_band{i}' for i in range(12)] + [f'avg_s2_band{i}' for i in range(12)],
+        # 's2_only': [f'std_s2_band{i}' for i in range(12)] + [f'avg_s2_band{i}' for i in range(12)],
         'key_rhs': [f'std_RH{i}_Q1' for i in [25, 50, 75, 90, 95, 98]] + [f'avg_RH{i}_Q1' for i in [25, 50, 75, 90, 95, 98]],
         'rh98': ['std_RH98_Q1', 'avg_RH98_Q1'],
-        's2_rh98': [f'std_s2_band{i}' for i in range(12)] + [f'avg_s2_band{i}' for i in range(12)] + ['std_RH98_Q1', 'avg_RH98_Q1'],
-        'fhd_enl1d_enl2d_cr': [f'{metric}_{var}' for metric in ['std', 'avg'] for var in ['fhd', 'enl1d', 'enl2d', 'cr']],
-        'fhd': [f'{metric}_{var}' for metric in ['std', 'avg'] for var in ['fhd']],
-        'enl2d': [f'{metric}_{var}' for metric in ['std', 'avg'] for var in ['enl2d']],
-        'cr': [f'{metric}_{var}' for metric in ['std', 'avg'] for var in ['cr']],
+        'rh98_s2': [f'std_s2_band{i}' for i in range(12)] + [f'avg_s2_band{i}' for i in range(12)] + ['std_RH98_Q1', 'avg_RH98_Q1'],
+        'rh98_fhd_enl1d_enl2d_cr': ['std_RH98_Q1', 'avg_RH98_Q1'] + [f'{metric}_{var}' for metric in ['std', 'avg'] for var in ['fhd', 'enl1d', 'enl2d', 'cr']],
+        'rh98_fhd': ['std_RH98_Q1', 'avg_RH98_Q1'] + [f'{metric}_{var}' for metric in ['std', 'avg'] for var in ['fhd']],
+        'rh98_enl2d': ['std_RH98_Q1', 'avg_RH98_Q1'] +[f'{metric}_{var}' for metric in ['std', 'avg'] for var in ['enl2d']],
+        'rh98_cr': ['std_RH98_Q1', 'avg_RH98_Q1'] + [f'{metric}_{var}' for metric in ['std', 'avg'] for var in ['cr']],
     }
     # Store results for comparison plots
     all_metrics = {}
@@ -253,6 +254,7 @@ def logistic_regression(vsm_patch_stats_dir: str, vsm_patch_stats_dir_val: str, 
         x = ddf[cols].values
         x_val = ddf_val[cols].values
         x = sm.add_constant(x)
+        x_val = sm.add_constant(x_val)
         model = sm.MNLogit(y, x)
         result = model.fit()
         print(f'{name}: AIC={result.aic:.0f}, BIC={result.bic:.0f}, Pseudo R²={result.prsquared:.4f}')
@@ -336,9 +338,11 @@ def logistic_regression(vsm_patch_stats_dir: str, vsm_patch_stats_dir_val: str, 
 
     
 if __name__ == '__main__':
-    vsm_patches_dir = '~/data/gvs/downstream_tasks/naturalness/vsm_patches_ps11_train/'
-    vsm_patch_stats_dir = '~/data/gvs/downstream_tasks/naturalness/vsm_patch_stats_ps11_train/'
-    save_dir = '~/data/gvs/downstream_tasks/naturalness/logistic_regression_ps11/'
+    split = 'train'
+    vsm_patches_dir = f'~/data/gvs/downstream_tasks/naturalness/vsm_patches_ps11_{split}/'
+    vsm_patch_stats_dir = f'~/data/gvs/downstream_tasks/naturalness/vsm_patch_stats_ps11_{split}/'
+    vsm_patch_stats_dir_val = f'~/data/gvs/downstream_tasks/naturalness/vsm_patch_stats_ps11_val/'
+    save_dir = f'~/data/gvs/downstream_tasks/naturalness/logistic_regression_ps11/'
     s2_patch_file = '~/data/gvs/downstream_tasks/naturalness/s2_2017_ps31.h5'
     # cal_vsm_patch_stats(vsm_patches_dir, vsm_patch_stats_dir, s2_patch_file=s2_patch_file)
-    logistic_regression(vsm_patch_stats_dir, save_dir)
+    logistic_regression(vsm_patch_stats_dir, vsm_patch_stats_dir_val, save_dir)
