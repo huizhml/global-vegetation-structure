@@ -12,6 +12,17 @@ from const import KEY_RHS, CHM_COLS
 from postprocessing.core.utils import generate_run_log
 
 
+# =======================================
+#   Biome analysis - diversity indices
+# =======================================
+@dataclass
+class SamplePointsByBiomeConfig(FunctionConfig):
+    biome_file: str = '~/data/GEDI/ecoregions/wwf_terr_ecos.shp'
+    n_samples: int = 100000
+    save_dir: str = '~/data/gvs/analysis/biome_anlaysis/random_sample_100000_points_per_biome_veg'
+    plot_points: bool = True
+    _target_: str = "evaluation.utils.sample_points_by_biome"
+
 @dataclass
 class ComputeEntropyConfig(FunctionConfig):
     output_dir: str = '~/data/gvs/products/profile_entropy/2020/tiles/geotiff'
@@ -64,6 +75,18 @@ class CalVSMPatchStatsConfig(FunctionConfig):
     s2_patch_file: str = '~/data/gvs/downstream_tasks/naturalness/s2_2017_ps31.h5'
     _target_: str = "evaluation.naturalness.cal_vsm_patch_stats"
     
+
+@dataclass
+class PlotBiomeCombinedBoxplotConfig(FunctionConfig):
+    indices_dir: str = '~/data/gvs/evaluation/with_gedi_on_diversity_indices/indices_by_tile/bin_width_5m/2020'
+    group_by: Optional[str] = None
+    filter_steep_slope: bool = True
+    year: int = 2020
+    plot_biome_combined_boxplot: bool = True
+    max_height: int = 50
+    save_dir: str = '~/data/gvs/evaluation/with_gedi_on_diversity_indices/results/'
+    _target_: str = "evaluation.diversity_indices.eval_diversity_indices"
+    
 @dataclass
 class RunConfig:
     defaults: List[Any] = field(default_factory=lambda: defaults)
@@ -78,7 +101,11 @@ defaults = [
 cs = ConfigStore.instance()
 cs.store(group='run', name='compute_entropy', node=ComputeEntropyConfig)
 cs.store(group='run', name='compute_diversity_indices', node=ComputeDiversityIndicesConfig)
+
+cs.store(group='run', name='sample_points_by_biome', node=SamplePointsByBiomeConfig)
+
 cs.store(group='run', name='evaluate_diversity_indices', node=EvaluateDiversityIndicesConfig)
+cs.store(group='run', name='plot_biome_combined_boxplot', node=PlotBiomeCombinedBoxplotConfig)
 cs.store(group='run', name='extract_pixels_and_save', node=ExtractPixelsAndSaveConfig)
 cs.store(group='run', name='prepare_naturalness_loc_parquets', node=PrepareNaturalnessLocParquetsConfig)
 cs.store(group='run', name='cal_vsm_patch_stats', node=CalVSMPatchStatsConfig)

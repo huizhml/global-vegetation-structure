@@ -31,9 +31,11 @@ import re
 from sklearn.metrics import r2_score
 import seaborn as sns
 from matplotlib.colors import LogNorm
+import colorsys
 from const import BIOMES
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import matplotlib.gridspec as gridspec
+import matplotlib.patches as mpatches
 from scipy.stats import gaussian_kde, pearsonr
 
 MAX_HEIGHT = 100.0
@@ -190,6 +192,152 @@ def boxplot_with_marginal_histograms(df: pd.DataFrame, var: str, rh_col: str='rh
 
     fig.suptitle(f'{plot_title}', fontsize=14, y=0.98)
     fig.savefig(save_dir / file_name, dpi=200, bbox_inches='tight')
+    plt.close(fig)
+
+def boxplot_with_marginal_histograms_combined(
+    df: pd.DataFrame,
+    var: str,
+    rh_col: str = 'rh98',
+    bin_width: int = 5,
+    max_height: int = 50,
+    max_value: int = 50,
+    biome_col: str = 'BIOME',
+    save_dir: Path = None,
+) -> None:
+    """
+    Single plot with grouped boxplots: one box per biome within each height bin.
+    """
+    df = df.copy()
+    df = df.dropna(subset=[var, rh_col, biome_col])
+    df = df[df[biome_col] < 90] # NOTE: exclude biome 98 and 99
+    df = df[df[var] <= max_value]
+
+    # Map biome codes to readable names
+    def biome_label(code):
+        code = int(code)
+        if code == 98:
+            idx = 14
+        elif code == 99:
+            idx = 15
+        else:
+            idx = code - 1
+        return BIOMES[idx]['name']
+
+    df['biome_name'] = df[biome_col].apply(biome_label)
+    biome_names = sorted(df['biome_name'].unique())
+    n_biomes = len(biome_names)
+
+    # Height bins
+    bin_edges = np.arange(0, max_height + bin_width, bin_width)
+    df['height_bin'] = pd.cut(df[rh_col], bins=bin_edges, right=False)
+    df['bin_label'] = df['height_bin'].apply(
+        lambda x: f"{int(x.left)}-{int(x.right)}" if pd.notna(x) else None
+    )
+    df = df.dropna(subset=['bin_label'])
+    ordered_bins = sorted(df['bin_label'].unique(), key=lambda x: int(x.split('-')[0]))
+    n_bins = len(ordered_bins)
+
+    # Color palette
+    cmap = plt.cm.get_cmap('tab10', n_biomes)
+    # colors = [cmap(i) for i in range(n_biomes)]
+    colors = [
+        colorsys.hls_to_rgb(i / n_biomes, 0.45, 0.75)
+        for i in range(n_biomes)
+    ]
+
+    # --- Layout ---
+    fig = plt.figure(figsize=(max(14, n_bins * 2), 9))
+    gs = gridspec.GridSpec(2, 2, width_ratios=[5, 1], height_ratios=[1, 5],
+                           wspace=0.05, hspace=0.05)
+    ax_top = fig.add_subplot(gs[0, 0])
+    ax_main = fig.add_subplot(gs[1, 0])
+    ax_marg = fig.add_subplot(gs[1, 1], sharey=ax_main)
+    fig.add_subplot(gs[0, 1]).axis('off')
+
+    # --- Grouped boxplots ---
+    total_width = 0.75  # total width allocated per height bin
+    box_width = total_width / n_biomes
+    positions_map = {}  # (bin_label, biome) -> x position
+
+    for i, b in enumerate(ordered_bins):
+        center = i + 1
+        start = center - total_width / 2 + box_width / 2
+        for j, biome in enumerate(biome_names):
+            pos = start + j * box_width
+            positions_map[(b, biome)] = pos
+
+    bp_artists = []
+    for j, biome in enumerate(biome_names):
+        positions = []
+        data = []
+        for b in ordered_bins:
+            subset = df[(df['bin_label'] == b) & (df['biome_name'] == biome)][var].values
+            data.append(subset if len(subset) > 0 else [np.nan])
+            positions.append(positions_map[(b, biome)])
+
+        bp = ax_main.boxplot(
+            data,
+            positions=positions,
+            widths=box_width * 0.85,
+            patch_artist=True,
+            showfliers=True,
+            flierprops=dict(marker='o', markersize=2, alpha=0.4, markerfacecolor=colors[j]),
+            medianprops=dict(color='darkred', linewidth=1.2),
+            boxprops=dict(facecolor=colors[j], alpha=0.7, edgecolor='black', linewidth=0.5),
+            whiskerprops=dict(color='black', linewidth=0.5),
+            capprops=dict(color='black', linewidth=0.5),
+            manage_ticks=False,
+        )
+        bp_artists.append((bp, biome))
+
+    # X-axis ticks at bin centers
+    ax_main.set_xticks([i + 1 for i in range(n_bins)])
+    ax_main.set_xticklabels(ordered_bins, rotation=45, ha='right')
+    ax_main.set_xlim(0.5, n_bins + 0.5)
+    ax_main.set_xlabel('Canopy Top Height (m)', fontsize=12)
+    ax_main.set_ylabel(var, fontsize=12)
+    ax_main.grid(axis='y', alpha=0.3)
+
+    # Legend
+    legend_patches = [mpatches.Patch(facecolor=colors[j], alpha=0.7, edgecolor='black',
+                                      label=biome_names[j]) for j in range(n_biomes)]
+    ax_main.legend(handles=legend_patches, fontsize=7, loc='upper left',
+                   ncol=max(1, n_biomes // 4), framealpha=0.8)
+
+    # --- Right marginal: one KDE per biome ---
+    for j, biome in enumerate(biome_names):
+        vals = df[df['biome_name'] == biome][var].dropna().values
+        if len(vals) < 2:
+            continue
+        kde = gaussian_kde(vals)
+        y_grid = np.linspace(df[var].min() - 0.2, df[var].max() + 0.2, 300)
+        ax_marg.plot(kde(y_grid), y_grid, color=colors[j], linewidth=1, alpha=0.7)
+    ax_marg.tick_params(labelleft=False, left=False)
+    ax_marg.set_xlabel('Density', fontsize=10)
+    ax_marg.spines['top'].set_visible(False)
+    ax_marg.spines['right'].set_visible(False)
+    ax_marg.spines['left'].set_visible(False)
+
+    # --- Top marginal: one KDE per biome ---
+    for j, biome in enumerate(biome_names):
+        vals = df[df['biome_name'] == biome][rh_col].dropna().values
+        if len(vals) < 2:
+            continue
+        kde = gaussian_kde(vals)
+        x_grid = np.linspace(0, max_height, 300)
+        ax_top.plot(x_grid, kde(x_grid), color=colors[j], linewidth=1, alpha=0.7)
+    ax_top.set_xlim(bin_edges[0], bin_edges[-1])
+    ax_top.tick_params(labelbottom=False, bottom=False)
+    ax_top.set_ylabel('Density', fontsize=10)
+    ax_top.spines['top'].set_visible(False)
+    ax_top.spines['right'].set_visible(False)
+    ax_top.spines['bottom'].set_visible(False)
+
+    fig.suptitle(f'{var} by Canopy Height across Biomes', fontsize=14, y=0.98)
+    file_name = f'boxplot_combined_{var}_{rh_col}.pdf'
+    if save_dir:
+        fig.savefig(save_dir / file_name, dpi=200, bbox_inches='tight')
+        print(f'Saved to {save_dir / file_name}')
     plt.close(fig)
 
 def pixel_diversity_indices(rhs, bin_width=5, max_height=None):
@@ -590,7 +738,7 @@ def cal_diversity_indices(save_dir, gedi_ours_dir, bin_width=5, year=2020, **kwa
         dask.compute(*tasks)
 
 
-def eval_diversity_indices(indices_dir, group_by=None, year=2020, save_dir=None, filter_steep_slope=False, plot_scatter=False, plot_boxplot=False, **kwargs):
+def eval_diversity_indices(indices_dir, group_by=None, year=2020, save_dir=None, filter_steep_slope=False, plot_scatter=False, plot_boxplot=False, max_height=50, **kwargs):
     # Extract bin_width from indices_dir string (looks for "bin_width_" followed by digits)
     m = re.search(r'bin_width_(\d+)', str(indices_dir))
     bin_width = int(m.group(1)) if m else None
@@ -633,8 +781,8 @@ def eval_diversity_indices(indices_dir, group_by=None, year=2020, save_dir=None,
             if plot_scatter:
                 scatter_plot(group, var, metrics, biome_value=group['BIOME'].iloc[0], save_dir=save_dir, max_value=max_metrics[var])
             if plot_boxplot:
-                boxplot_with_marginal_histograms(group, f'{var}_gedi', rh_col=f'rh98', save_dir=save_dir)
-                boxplot_with_marginal_histograms(group, f'{var}_ours', rh_col=f'RH98_Q1_raw', save_dir=save_dir)
+                boxplot_with_marginal_histograms(group, f'{var}_gedi', rh_col=f'rh98', save_dir=save_dir, max_height=max_height)
+                boxplot_with_marginal_histograms(group, f'{var}_ours', rh_col=f'RH98_Q1_raw', save_dir=save_dir, max_height=max_height)
         return pd.Series(metrics)
 
     if group_by is not None:
@@ -670,7 +818,13 @@ def eval_diversity_indices(indices_dir, group_by=None, year=2020, save_dir=None,
         result = ddf.groupby(group_by).apply(compute_metrics, meta=meta).compute()
         result.to_csv(save_dir / f'diversity_indices_evaluation_by_biomes_bin_width_{bin_width}m_{year}.csv')
     else:
-        result = compute_metrics(ddf.compute())
+        ddf = ddf.compute()
+        plot_biome_combined_boxplot = kwargs.get('plot_biome_combined_boxplot', False)
+        if plot_biome_combined_boxplot:
+            boxplot_with_marginal_histograms_combined(
+                ddf, var='fhd_gedi', rh_col='rh98', save_dir=save_dir
+            )
+        result = compute_metrics(ddf)
         records = {}
         for var, label in [('fhd', 'FHD'), ('enl1d', 'ENL 1D'), ('enl2d', 'ENL 2D'), ('cr', 'CR')]:
             records[label] = {

@@ -9,6 +9,16 @@ import geopandas as gpd
 from pathlib import Path
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
+import xarray as xr
+import stackstac
+import planetary_computer as pc
+from pystac_client import Client
+from rasterio.transform import rowcol
+
+STAC_URL = "https://planetarycomputer.microsoft.com/api/stac/v1"
+
+NON_VEGETATION_CLASSES = {50, 60, 70, 80}
+
 
 class ProgressMonitor:
     """Background thread that prints speed and RAM stats."""
@@ -87,11 +97,83 @@ def plot_biome_samples(gdf_dissolved, points_gdf, save_path=None, figsize=(16, 1
     if save_path:
         plt.savefig(save_path, dpi=200, bbox_inches="tight")
     plt.close()
-
-def sample_points_by_biome(biome_file: str, n_samples: int, seed: int = 42, save_dir: str = None, plot_points: bool = True):
-    """Vectorized rejection sampling using Shapely 2.0 prepare."""
     
+
+
+
+def get_landcover_values(points_gdf: gpd.GeoDataFrame,
+                         collection: str = "esa-worldcover") -> np.ndarray:
+    """Query ESA WorldCover via stackstac for all points at once."""
+    catalog = Client.open(STAC_URL, modifier=pc.sign_inplace)
+
+    bounds = points_gdf.total_bounds
+    bbox = [float(b) for b in bounds]
+
+    search = catalog.search(collections=[collection], bbox=bbox, limit=500, datetime=f'2021-01-01/2021-12-31')
+    items = list(search.items())
+    if len(items) == 0:
+        return np.full(len(points_gdf), -1)
+    else:
+        print(f"Found {len(items)} items")
+
+    stack = stackstac.stack(
+        items,
+        assets=["map"],
+        bounds=bbox,
+        resolution=10,
+        epsg=4326,
+        dtype=np.uint8,
+        fill_value=np.uint8(0),
+        rescale=False,
+        chunksize=4096,
+    )
+    # Mosaic: take the first valid value across the item dimension
+    mosaic = stack.sel(band="map").max(dim="time")  # WorldCover has one timestamp per tile
+
+    xs = points_gdf.geometry.x.values
+    ys = points_gdf.geometry.y.values
+
+    # Build xarray DataArray selectors using nearest-neighbor lookup
+    lc_values = mosaic.sel(
+        x=xr.DataArray(xs, dims="points"),
+        y=xr.DataArray(ys, dims="points"),
+        method="nearest",
+    ).compute().values  # single compute call triggers all reads
+
+    return lc_values.astype(np.int16)
+
+def filter_non_vegetation(points_gdf: gpd.GeoDataFrame,
+                          non_veg_classes: set = NON_VEGETATION_CLASSES) -> gpd.GeoDataFrame:
+    """Remove points falling on non-vegetation land cover."""
+    lc_values = get_landcover_values(points_gdf)
+    mask = ~np.isin(lc_values, list(non_veg_classes))
+    # Also drop any points that didn't intersect a tile (-1)
+    mask &= lc_values != -1
+    return points_gdf[mask].reset_index(drop=True)
+
+def sample_points_by_biome(biome_file: str, n_samples: int, seed: int = 42,
+                           save_dir: str = None, plot_points: bool = True,
+                           collection: str = "esa-worldcover", **kwargs):
+    '''
+    Sample vegetation points by biome from the GEDI ecoregions shapefile.
+    It took ~3356s to sample 100000 points per biome.
+    Parameters:
+        biome_file: path to the GEDI ecoregions shapefile
+        n_samples: number of samples per biome
+        seed: random seed
+        save_dir: path to save the sampled points
+        plot_points: whether to plot the sampled points
+        collection: name of the ESA WorldCover collection
+        year: year of the ESA WorldCover data
+    Returns:
+        points_gdf: GeoDataFrame of the sampled points
+    '''
+    year = kwargs.get('year', 2021)
     from shapely import prepare, contains
+
+    NON_VEGETATION_CLASSES = {50, 60, 70, 80}
+    OVERSAMPLE_FACTOR = 2
+
     rng = np.random.default_rng(seed)
     save_dir = Path(save_dir).expanduser()
     save_dir.mkdir(parents=True, exist_ok=True)
@@ -99,37 +181,88 @@ def sample_points_by_biome(biome_file: str, n_samples: int, seed: int = 42, save
     biome_df = gpd.read_file(biome_file)
     biome_df = biome_df.to_crs(epsg=4326)
     gdf_dissolved = biome_df.dissolve(by="BIOME").reset_index()
+    gdf_dissolved = gdf_dissolved[~gdf_dissolved.BIOME.isin({98, 99})]
     for geom in gdf_dissolved.geometry:
         prepare(geom)
 
-
+    # --- Stage 1: oversample 2x with rejection sampling on geometry only ---
+    n_oversample = n_samples * OVERSAMPLE_FACTOR
     points_by_biome = {}
     for biome in gdf_dissolved.BIOME.unique():
-        gdf_biome = gdf_dissolved[gdf_dissolved.BIOME == biome]
-        geom = gdf_biome.geometry.iloc[0]  # extract the single geometry
+        geom = gdf_dissolved[gdf_dissolved.BIOME == biome].geometry.iloc[0]
         minx, miny, maxx, maxy = geom.bounds
         points = []
-        while len(points) < n_samples:
-            batch = max((n_samples - len(points)) * 5, 100)
+        while len(points) < n_oversample:
+            batch = max((n_oversample - len(points)) * 5, 100)
             xs = rng.uniform(minx, maxx, batch)
             ys = rng.uniform(miny, maxy, batch)
             pts = [Point(x, y) for x, y in zip(xs, ys)]
-            mask = contains(geom, pts)  # geometry object, not GeoDataFrame
+            mask = contains(geom, pts)
             points.extend(p for p, m in zip(pts, mask) if m)
-        points_by_biome[biome] = points[:n_samples]
+        points_by_biome[biome] = points[:n_oversample]
+
+    # Build full oversampled GeoDataFrame
     rows = [
         {"BIOME": biome, "geometry": pt}
         for biome, pts in points_by_biome.items()
         for pt in pts
     ]
-    points_gdf = gpd.GeoDataFrame(rows, crs=gdf_dissolved.crs)
-    
+    all_points = gpd.GeoDataFrame(rows, crs=gdf_dissolved.crs)
+
+    # --- Stage 2: query land cover once for all points ---
+    catalog = Client.open(STAC_URL, modifier=pc.sign_inplace)
+    bbox = [float(b) for b in all_points.total_bounds]
+    search = catalog.search(collections=[collection], bbox=bbox, limit=500, datetime=f'2021-01-01/2021-12-31')
+    items = list(search.items())
+
+    stack = stackstac.stack(
+        items,
+        assets=["map"],
+        bounds=bbox,
+        resolution=10,
+        epsg=4326,
+        dtype=np.uint8,
+        fill_value=np.uint8(0),
+        rescale=False,
+        chunksize=4096,
+    )
+    mosaic = stack.sel(band="map").max(dim="time")
+
+    xs = all_points.geometry.x.values
+    ys = all_points.geometry.y.values
+    lc_values = mosaic.sel(
+        x=xr.DataArray(xs, dims="points"),
+        y=xr.DataArray(ys, dims="points"),
+        method="nearest",
+    ).compute().values
+
+    all_points["lc_class"] = lc_values
+    vegetation = all_points[~all_points.lc_class.isin(NON_VEGETATION_CLASSES)].copy()
+
+    # --- Stage 3: take n_samples per biome from the filtered set ---
+    points_gdf = (
+        vegetation
+        .groupby("BIOME", group_keys=False)
+        .apply(lambda g: g.head(n_samples))
+        .drop(columns="lc_class")
+        .reset_index(drop=True)
+    )
+
+    # Warn if any biome came up short
+    counts = points_gdf.groupby("BIOME").size()
+    short = counts[counts < n_samples]
+    if not short.empty:
+        for biome, count in short.items():
+            print(f"  Warning: biome {biome} only got {count}/{n_samples} vegetation points")
+
     points_gdf.to_parquet(save_dir / f'random_sample_{n_samples}_points_per_biome.parquet')
-    print(f"Saved {len(points_gdf)} points to {save_dir / f'random_sample_{n_samples}_points_per_biome.parquet'}")
+    print(f"Saved {len(points_gdf)} points")
+
     if plot_points:
-        points_gdf = points_gdf[~points_gdf.BIOME.isin([98,99])]
-        plot_biome_samples(biome_df, points_gdf, save_path=save_dir / f'random_sample_{n_samples}_points_per_biome.pdf')
+        plot_biome_samples(biome_df, points_gdf,
+                           save_path=save_dir / f'random_sample_{n_samples}_points_per_biome.pdf')
         
+               
 def partition_points_by_tile(gdf_file: str, s2_tile_file: str, save_dir: str):
     save_dir = Path(save_dir).expanduser()
     save_dir.mkdir(parents=True, exist_ok=True)
@@ -148,8 +281,14 @@ def partition_points_by_tile(gdf_file: str, s2_tile_file: str, save_dir: str):
         print(f"Saved {len(points_gdf_tile)} points to {save_dir / f'{tile}.parquet'}")
 
 if __name__ == "__main__":
-    partition_points_by_tile(
-        gdf_file='/projects/dereeco/data/gvs/analysis/biome_anlaysis/random_sample_100000_points_per_biome.parquet',
-        s2_tile_file='~/data/gvs/state/s2_tiles_with_growing_months.parquet',
-        save_dir='/projects/dereeco/data/gvs/analysis/biome_anlaysis/random_sample_100000_points_per_biome_by_tile'
+    sample_points_by_biome(
+        biome_file='/projects/dereeco/data/GEDI/ecoregions/wwf_terr_ecos.shp',
+        n_samples=100000,
+        save_dir='/projects/dereeco/data/gvs/analysis/biome_anlaysis/random_sample_100000_points_per_biome',
+        plot_points=True
     )
+    # partition_points_by_tile(
+    #     gdf_file='/projects/dereeco/data/gvs/analysis/biome_anlaysis/random_sample_100000_points_per_biome.parquet',
+    #     s2_tile_file='~/data/gvs/state/s2_tiles_with_growing_months.parquet',
+    #     save_dir='/projects/dereeco/data/gvs/analysis/biome_anlaysis/random_sample_100000_points_per_biome_by_tile'
+    # )
