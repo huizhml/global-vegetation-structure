@@ -22,6 +22,13 @@ class SamplePointsByBiomeConfig(FunctionConfig):
     save_dir: str = '~/data/gvs/analysis/biome_anlaysis/random_sample_100000_points_per_biome_veg'
     plot_points: bool = True
     _target_: str = "evaluation.utils.sample_points_by_biome"
+    
+@dataclass
+class PartitionPointsByTileConfig(FunctionConfig):
+    gdf_file: str = '~/data/gvs/analysis/biome_anlaysis/random_sample_100000_points_per_biome_veg/random_sample_100000_points_per_biome.parquet'
+    s2_tile_file: str = '~/data/gvs/state/s2_tiles_with_growing_months.parquet'
+    save_dir: str = '~/data/gvs/analysis/biome_anlaysis/random_sample_100000_points_per_biome_veg_by_tile'
+    _target_: str = "evaluation.utils.partition_points_by_tile"
 
 @dataclass
 class ComputeEntropyConfig(FunctionConfig):
@@ -70,9 +77,10 @@ class PrepareNaturalnessLocParquetsConfig(FunctionConfig):
     
 @dataclass
 class CalVSMPatchStatsConfig(FunctionConfig):
-    vsm_patches_dir: str = '~/data/gvs/downstream_tasks/naturalness/vsm_patches_ps11_train'
-    save_dir: str = '~/data/gvs/downstream_tasks/naturalness/vsm_patch_stats_ps11_train'
-    s2_patch_file: str = '~/data/gvs/downstream_tasks/naturalness/s2_2017_ps31.h5'
+    vsm_patches_dir: str = '~/data/gvs/downstream_tasks/naturalness/results_from_vsm_2020/vsm_patches_ps11_val'
+    save_dir: str = '~/data/gvs/downstream_tasks/naturalness/results_from_vsm_2020/vsm_s2_alpha_patch_stats_ps11_val'
+    s2_patch_file: str = '~/data/gvs/downstream_tasks/naturalness/results_from_vsm_2017/s2_gedi_patches_ps31/s2_2017_ps31.h5'
+    alpha_em_patch_file: str = '/projects/dereeco/data/gvs/downstream_tasks/alphaearth_embeddings/alphaearth_embeddings.h5'
     _target_: str = "evaluation.naturalness.cal_vsm_patch_stats"
     
 
@@ -103,6 +111,7 @@ cs.store(group='run', name='compute_entropy', node=ComputeEntropyConfig)
 cs.store(group='run', name='compute_diversity_indices', node=ComputeDiversityIndicesConfig)
 
 cs.store(group='run', name='sample_points_by_biome', node=SamplePointsByBiomeConfig)
+cs.store(group='run', name='partition_points_by_tile', node=PartitionPointsByTileConfig)
 
 cs.store(group='run', name='evaluate_diversity_indices', node=EvaluateDiversityIndicesConfig)
 cs.store(group='run', name='plot_biome_combined_boxplot', node=PlotBiomeCombinedBoxplotConfig)

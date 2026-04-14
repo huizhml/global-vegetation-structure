@@ -10,10 +10,14 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 import xarray as xr
+from tqdm import tqdm
+from concurrent.futures import as_completed
 import stackstac
 import planetary_computer as pc
 from pystac_client import Client
 from rasterio.transform import rowcol
+import rasterio
+from concurrent.futures import ThreadPoolExecutor
 
 STAC_URL = "https://planetarycomputer.microsoft.com/api/stac/v1"
 
@@ -101,62 +105,74 @@ def plot_biome_samples(gdf_dissolved, points_gdf, save_path=None, figsize=(16, 1
 
 
 
-def get_landcover_values(points_gdf: gpd.GeoDataFrame,
-                         collection: str = "esa-worldcover") -> np.ndarray:
-    """Query ESA WorldCover via stackstac for all points at once."""
+def _sample_tile(item, xs, ys, indices):
+    """Read land cover values for points falling within one tile."""
+    href = pc.sign(item.assets["map"].href)
+    result = {}
+    with rasterio.open(href) as src:
+        tb = src.bounds
+        in_tile = (
+            (xs[indices] >= tb.left) & (xs[indices] <= tb.right) &
+            (ys[indices] >= tb.bottom) & (ys[indices] <= tb.top)
+        )
+        idx = indices[in_tile]
+        if len(idx) == 0:
+            return result
+        rows, cols = rowcol(src.transform, xs[idx], ys[idx])
+        rows = np.clip(rows, 0, src.height - 1)
+        cols = np.clip(cols, 0, src.width - 1)
+        # Windowed read to avoid loading the full tile
+        row_min, row_max = int(np.min(rows)), int(np.max(rows))
+        col_min, col_max = int(np.min(cols)), int(np.max(cols))
+        window = rasterio.windows.Window(
+            col_min, row_min,
+            col_max - col_min + 1, row_max - row_min + 1,
+        )
+        data = src.read(1, window=window)
+        local_rows = np.array(rows) - row_min
+        local_cols = np.array(cols) - col_min
+        for i, r, c in zip(idx, local_rows, local_cols):
+            result[i] = data[r, c]
+    return result
+
+
+def get_landcover_values(points_gdf, collection="esa-worldcover", year=2021, max_workers=16):
+    """Query ESA WorldCover tile-by-tile in parallel via thread pool."""
     catalog = Client.open(STAC_URL, modifier=pc.sign_inplace)
-
-    bounds = points_gdf.total_bounds
-    bbox = [float(b) for b in bounds]
-
-    search = catalog.search(collections=[collection], bbox=bbox, limit=500, datetime=f'2021-01-01/2021-12-31')
-    items = list(search.items())
-    if len(items) == 0:
-        return np.full(len(points_gdf), -1)
-    else:
-        print(f"Found {len(items)} items")
-
-    stack = stackstac.stack(
-        items,
-        assets=["map"],
-        bounds=bbox,
-        resolution=10,
-        epsg=4326,
-        dtype=np.uint8,
-        fill_value=np.uint8(0),
-        rescale=False,
-        chunksize=4096,
+    bbox = [float(b) for b in points_gdf.total_bounds]
+    search = catalog.search(
+        collections=[collection],
+        bbox=bbox,
+        datetime=f"{year}-01-01/{year}-12-31",
     )
-    # Mosaic: take the first valid value across the item dimension
-    mosaic = stack.sel(band="map").max(dim="time")  # WorldCover has one timestamp per tile
+    items = list(search.items())
+    print(f"  Found {len(items)} WorldCover tiles")
 
     xs = points_gdf.geometry.x.values
     ys = points_gdf.geometry.y.values
+    lc_values = np.full(len(points_gdf), -1, dtype=np.int16)
+    remaining = np.arange(len(points_gdf))
 
-    # Build xarray DataArray selectors using nearest-neighbor lookup
-    lc_values = mosaic.sel(
-        x=xr.DataArray(xs, dims="points"),
-        y=xr.DataArray(ys, dims="points"),
-        method="nearest",
-    ).compute().values  # single compute call triggers all reads
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {
+            pool.submit(_sample_tile, item, xs, ys, remaining): item
+            for item in items
+        }
+        for future in tqdm(as_completed(futures), total=len(futures), desc="Querying WorldCover tiles"):
+            for i, val in future.result().items():
+                lc_values[i] = val
 
-    return lc_values.astype(np.int16)
-
-def filter_non_vegetation(points_gdf: gpd.GeoDataFrame,
-                          non_veg_classes: set = NON_VEGETATION_CLASSES) -> gpd.GeoDataFrame:
-    """Remove points falling on non-vegetation land cover."""
-    lc_values = get_landcover_values(points_gdf)
-    mask = ~np.isin(lc_values, list(non_veg_classes))
-    # Also drop any points that didn't intersect a tile (-1)
-    mask &= lc_values != -1
-    return points_gdf[mask].reset_index(drop=True)
+    # Update remaining so already-resolved points aren't rechecked
+    n_resolved = np.sum(lc_values != -1)
+    print(f"  Resolved {n_resolved}/{len(points_gdf)} points")
+    return lc_values
 
 def sample_points_by_biome(biome_file: str, n_samples: int, seed: int = 42,
                            save_dir: str = None, plot_points: bool = True,
                            collection: str = "esa-worldcover", **kwargs):
     '''
     Sample vegetation points by biome from the GEDI ecoregions shapefile.
-    It took ~3356s to sample 100000 points per biome.
+    It took ~2301s to sample 100000 points per biome.
     Parameters:
         biome_file: path to the GEDI ecoregions shapefile
         n_samples: number of samples per biome
@@ -208,43 +224,19 @@ def sample_points_by_biome(biome_file: str, n_samples: int, seed: int = 42,
         for pt in pts
     ]
     all_points = gpd.GeoDataFrame(rows, crs=gdf_dissolved.crs)
-
-    # --- Stage 2: query land cover once for all points ---
-    catalog = Client.open(STAC_URL, modifier=pc.sign_inplace)
-    bbox = [float(b) for b in all_points.total_bounds]
-    search = catalog.search(collections=[collection], bbox=bbox, limit=500, datetime=f'2021-01-01/2021-12-31')
-    items = list(search.items())
-
-    stack = stackstac.stack(
-        items,
-        assets=["map"],
-        bounds=bbox,
-        resolution=10,
-        epsg=4326,
-        dtype=np.uint8,
-        fill_value=np.uint8(0),
-        rescale=False,
-        chunksize=4096,
-    )
-    mosaic = stack.sel(band="map").max(dim="time")
-
-    xs = all_points.geometry.x.values
-    ys = all_points.geometry.y.values
-    lc_values = mosaic.sel(
-        x=xr.DataArray(xs, dims="points"),
-        y=xr.DataArray(ys, dims="points"),
-        method="nearest",
-    ).compute().values
-
+    
+    lc_values = get_landcover_values(all_points, collection=collection, year=year)
     all_points["lc_class"] = lc_values
-    vegetation = all_points[~all_points.lc_class.isin(NON_VEGETATION_CLASSES)].copy()
+    vegetation = all_points[
+        (~all_points.lc_class.isin(NON_VEGETATION_CLASSES)) & (all_points.lc_class != -1)
+    ].copy()
 
     # --- Stage 3: take n_samples per biome from the filtered set ---
     points_gdf = (
         vegetation
         .groupby("BIOME", group_keys=False)
-        .apply(lambda g: g.head(n_samples))
-        .drop(columns="lc_class")
+        .apply(lambda g: g.sample(n=min(n_samples, len(g)), random_state=seed))
+        # .drop(columns="lc_class")
         .reset_index(drop=True)
     )
 
@@ -263,7 +255,15 @@ def sample_points_by_biome(biome_file: str, n_samples: int, seed: int = 42,
                            save_path=save_dir / f'random_sample_{n_samples}_points_per_biome.pdf')
         
                
-def partition_points_by_tile(gdf_file: str, s2_tile_file: str, save_dir: str):
+def partition_points_by_tile(gdf_file: str, s2_tile_file: str, save_dir: str, **kwargs):
+    '''
+    Partition the points by tile.
+    Args:
+        gdf_file: path to the points GeoDataFrame
+        s2_tile_file: path to the S2 tile file
+        save_dir: path to save the partitioned points
+    Returns:
+    '''
     save_dir = Path(save_dir).expanduser()
     save_dir.mkdir(parents=True, exist_ok=True)
     gdf_file = Path(gdf_file).expanduser()
