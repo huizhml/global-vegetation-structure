@@ -1,3 +1,4 @@
+import time
 from pathlib import Path
 import pandas as pd
 import geopandas as gpd
@@ -12,21 +13,22 @@ import dask.dataframe as dd
 from dask.diagnostics import ProgressBar
 import matplotlib.pyplot as plt
 import seaborn as sns
+import xgboost as xgb
 import warnings
+from evaluation.utils import load_vsm_naturalness, batch_binning
 warnings.filterwarnings('ignore')
 warnings.filterwarnings(action='ignore', category=DeprecationWarning)
 pd.set_option('display.max_columns', None)
 pd.set_option('display.float_format', lambda x: '%.2f' % x)
 
 
-MAX_HEIGHT = 100.0
-NODATA_IN = 32767
+
 LAND_USE_NAMES = {
     0: {'name':'No forest', 'short_name':'No Forest'},
     11: {'name':'Naturally regenerating forest without any signs of human activities', 'short_name':'Natural Forest'},
-    20: {'name':'Naturally regenerating forest with signs of human activities', 'short_name':'Natural Forest (Secondary)'},
+    20: {'name':'Naturally regenerating forest with signs of human activities', 'short_name':'Natural Forest\n(Secondary)'},
     31: {'name':'Planted forest', 'short_name':'Planted Forest'},
-    32: {'name':'Short rotation plantations for timber', 'short_name':'Short Rotation Plantation'},
+    32: {'name':'Short rotation plantations for timber', 'short_name':'Short Rotation\nPlantation'},
     40: {'name':'Oil palm plantations', 'short_name':'Oil Palm'},
     53: {'name':'Agroforestry', 'short_name':'Agroforestry'},
 }
@@ -35,10 +37,10 @@ MODEL_NAMES = {
     'rh98': 'RH98',
     'full_profile': 'Full Profile',
     'rh98_s2': 'RH98 + S2',
-    'key_rhs': 'Key RHs',
     'rh98_cr': 'RH98 + CR',
     'rh98_fhd': 'RH98 + FHD',
     'rh98_enl2d': 'RH98 + ENL2D',
+    'key_rhs': 'RH98 + RH25, RH50, RH75, RH90, RH95',
     'rh98_fhd_enl1d_enl2d_cr': 'RH98 + FHD + ENL1D + ENL2D + CR',
 }
 
@@ -46,6 +48,8 @@ MODEL_NAMES = {
 # ---------------------------------------
 #   Helper functions
 # ---------------------------------------
+
+ 
 
 def _chunk_diversity(tile, bin_width=5):
     """
@@ -59,29 +63,8 @@ def _chunk_diversity(tile, bin_width=5):
     -------
     entropy, enl1d, enl2d, cr : each ndarray, shape (n, rows, cols), float32
     """
-    
     n_batch, n_bands, n_rows, n_cols = tile.shape
-    n_pixels = n_batch * n_rows * n_cols
-    n_bins = int(MAX_HEIGHT / bin_width)
-    valid = np.isfinite(tile) & (~np.isnan(tile) & (tile > 0))
-    nodata_mask = valid.sum(axis=1) == 0  # (n, rows, cols)
-
-    tile_clean = np.where(valid, tile, 0.0)
-    bin_idx = np.clip((tile_clean / bin_width).astype(np.int32), 0, n_bins - 1)
-    bin_idx = np.where(valid, bin_idx, -1)
-
-    # Reshape: merge batch, rows, cols into one pixel dimension
-    bin_flat = bin_idx.reshape(n_batch, n_bands, n_rows * n_cols)       # (n, 101, rows*cols)
-    bin_flat = bin_flat.transpose(1, 0, 2).reshape(n_bands, n_pixels)   # (101, n_pixels)
-
-    pixel_indices = np.broadcast_to(
-        np.arange(n_pixels)[np.newaxis, :], (n_bands, n_pixels)
-    )
-
-    hist = np.zeros((n_pixels, n_bins), dtype=np.float32)
-    flat_valid = bin_flat != -1
-    np.add.at(hist, (pixel_indices[flat_valid], bin_flat[flat_valid]), 1.0)
-
+    hist, nodata_mask = batch_binning(tile, bin_width=bin_width)
     total = hist.sum(axis=-1, keepdims=True)
     total = np.where(total == 0, 1, total)  # avoid division by zero
     p = hist / total
@@ -100,9 +83,39 @@ def _chunk_diversity(tile, bin_width=5):
     enl2d[nodata_mask] = np.nan
 
     cr = (tile[:, 98] - tile[:, 25]) / (tile[:, 98] + 1e-6)
+    cr = cr.astype(np.float32)
     cr[nodata_mask] = np.nan
 
     return entropy, enl1d, enl2d, cr
+
+
+
+def _load_patch_stats(patch_stats_dir: str, name_pattern: str='train', **kwargs):
+    '''
+    Load the VSM patch statistics. One big parquet file for one data/split
+    Args:
+        patch_stats_dir: path to the VSM patch statistics directory
+    Returns:
+        None
+    '''
+    patch_stats_dir = Path(patch_stats_dir).expanduser()
+    files = list(patch_stats_dir.glob(f'*{name_pattern}*.parquet'))
+    if len(files) == 0:
+        raise ValueError(f'No parquet files found in {patch_stats_dir} with name pattern {name_pattern}')
+    dfs = []
+    for file in files:
+        df = pd.read_parquet(file)
+        dfs.append(df)
+    import ipdb; ipdb.set_trace()
+    df = pd.concat(dfs, axis=1)
+    df = df.loc[:, ~df.columns.duplicated()]
+    df = df.dropna()
+    ddf = ddf.dropna(subset=['avg_s2_band0', 'std_alpha_em_band0'])
+    valid = ~ddf['Land_use_ID'].isin([-1, 1])
+    ddf = ddf[valid]
+    
+    y = ddf['Land_use_ID'].values.flatten().astype(int)
+    return ddf, y
 
 # ---------------------------------------
 #   Plot functions
@@ -110,12 +123,6 @@ def _chunk_diversity(tile, bin_width=5):
 def plot_bars(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, metric: str='Recall', avg:str='macro', save_dir: str=None, show_improve: bool=True, include_alpha_em: bool=False, **kwargs):
     '''
     Plot the summary reports
-    Args:
-        summary_df: dataframe of summary reports
-        per_class_df: dataframe of per-class reports
-        save_dir: path to save the plots
-    Returns:
-        None
     '''
     
     assert avg in ['macro', 'weighted']
@@ -126,34 +133,95 @@ def plot_bars(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, metric: str=
         summary_df = summary_df.drop(index='alpha_em')
         per_class_df = per_class_df.drop(index='alpha_em')
         
-    if show_improve:
-        baseline = summary_df.loc['rh98']
-        summary_df = summary_df - baseline
-        summary_df = summary_df.drop(index='rh98')
-        baseline_per_class = per_class_df.loc['rh98']
-        baseline_map = baseline_per_class.set_index('Class')[metric]
-        per_class_df = per_class_df.drop(index='rh98')
-        per_class_df[metric] = per_class_df[metric].values - per_class_df['Class'].map(baseline_map).values
-        
-    class_names = list(per_class_df.Class.unique()) + ['ALL']
-    model_names = list(per_class_df.index.unique()) 
+    baseline_name = 'rh98'
+    
+    # forest_types = list(per_class_df.Class.unique()) 
+    forest_types = [c['short_name'] for c in LAND_USE_NAMES.values()]
+    model_names = ['rh98', 'rh98_cr', 'rh98_enl2d', 'rh98_fhd', 'rh98_fhd_enl1d_enl2d_cr', 'key_rhs', 'rh98_s2', 'full_profile'] #list(per_class_df.index.unique()) 
+    print(model_names)
     n_models = len(model_names)
-    x_pos = np.arange(len(class_names))
-    width = 0.8 / n_models
-    
-    fig, ax = plt.subplots(figsize=(14, 6))
-    for i, model_name in enumerate(model_names[:-1]):
-        values = per_class_df.loc[model_name, metric].values.tolist() + [summary_df.loc[model_name, metric]]
-        ax.bar(x_pos + i * width - (n_models - 1) * width / 2, values, width, label=MODEL_NAMES[model_name])
-    # ax.bar(x_pos[-1], summary_df[metric].values, width, label='Overall')
-    
-    ax.set_xticks(x_pos)
-    ax.set_xticklabels(class_names, rotation=45)
-    ax.set_ylabel(f'{metric}')
-    ax.set_ylim(0, 1)
-    ax.legend(bbox_to_anchor=(0.85, 1), loc='upper left')
+
+    # Build values dict: model_name -> list of values (per class + ALL)
+    values_dict = {}
+    for model_name in model_names:
+        values_dict[model_name] = (
+            per_class_df.loc[model_name, metric].values.tolist()
+            + [summary_df.loc[model_name, metric]]
+        )
+
+    # Sort class categories (except ALL) by Full Profile improvement
+    if show_improve and 'full_profile' in values_dict and baseline_name in values_dict:
+        baseline_vals = values_dict[baseline_name]
+        fp_vals = values_dict['full_profile']
+        non_all_indices = list(range(len(forest_types)))
+        improvements = [max(fp_vals[ci] - baseline_vals[ci], 0) for ci in non_all_indices]
+        sorted_pairs = sorted(zip(non_all_indices, improvements), key=lambda x: x[1])
+        sorted_indices = [p[0] for p in sorted_pairs] + [len(forest_types)]  # append ALL
+        # Reorder
+        forest_types = [forest_types[i] for i in sorted_indices[:-1]]
+        for m in values_dict:
+            values_dict[m] = [values_dict[m][i] for i in sorted_indices]
+
+    class_names = forest_types + ['ALL']
+    baseline_vals = np.array(values_dict[baseline_name])
+
+    # Plot setup
+    bar_width = 0.5
+    group_spacing = 0.5
+    x_pos = np.arange(len(class_names)) * (n_models * bar_width + group_spacing)
+
+    fig, ax = plt.subplots(figsize=(20, 8))
+
+    # First pass: draw bars, collect annotations
+    annotations = {j: [] for j in range(len(class_names))}
+
+    for i, model_name in enumerate(model_names):
+        values = np.array(values_dict[model_name])
+        offsets = x_pos + i * bar_width
+
+        ax.bar(offsets, values, bar_width, label=MODEL_NAMES[model_name])
+
+        if show_improve and model_name != baseline_name:
+            improvement = np.maximum(values - baseline_vals, 0)
+            base_part = np.minimum(values, baseline_vals)
+            ax.bar(offsets, improvement, bar_width, bottom=base_part,
+                   color='none', edgecolor='white', hatch='///',
+                   linewidth=0.5)
+
+            for j, imp in enumerate(improvement):
+                if imp > 0:
+                    annotations[j].append((offsets[j], values[j], f"+{imp:.2f}"))
+
+    # Second pass: resolve label overlaps within each group
+    if show_improve:
+        min_gap = 0.04
+        for j in range(len(class_names)):
+            labels = annotations[j]
+            if not labels:
+                continue
+            labels.sort(key=lambda t: t[1])
+            y_positions = []
+            for k, (lx, ly, txt) in enumerate(labels):
+                desired_y = ly + 0.01
+                if y_positions:
+                    desired_y = max(desired_y, y_positions[-1] + min_gap)
+                y_positions.append(desired_y)
+            # for k, (lx, ly, txt) in enumerate(labels):
+            #     label_y = y_positions[k]
+            #     ax.text(lx, label_y, txt, ha='center', va='bottom', fontsize=10)
+            #     if label_y - ly > 0.02:
+            #         ax.plot([lx, lx], [ly, label_y],
+            #                 color='gray', linewidth=0.5, alpha=0.5)
+
+    ax.set_xticks(x_pos + bar_width * (n_models - 1) / 2)
+    ax.set_xticklabels(class_names, fontsize=18)
+    ax.set_ylabel(f'{metric}', fontsize=18)
+    ax.tick_params(axis='y', labelsize=18)
+    ax.set_ylim(0, 1.1)
+    ax.legend(bbox_to_anchor=(0.66, 1), loc='upper left', fontsize=18)
+    ax.grid(axis='y', alpha=0.3)
     plt.tight_layout()
-    plt.savefig(save_dir / f'barplot_{metric}_{avg}.png', dpi=150, bbox_inches='tight')
+    plt.savefig(save_dir / f'barplot_{metric}_{avg}.pdf', dpi=150, bbox_inches='tight')
     plt.close()
     
 def plot_improve_heatmap(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, metric: str='Recall', avg: str='macro', save_dir: str=None, show_improve: bool=True, include_alpha_em: bool=False, **kwargs):
@@ -223,7 +291,7 @@ def plot_improve_heatmap(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, m
     plt.close()
     
     
-def plot_confusion_matrix(all_cms: dict, save_dir: Path, **kwargs):
+def plot_confusion_matrix(all_cms: dict, save_dir: Path, include_alpha_em: bool = False, **kwargs):
     '''
     Plot the confusion matrix
     Args:
@@ -234,6 +302,9 @@ def plot_confusion_matrix(all_cms: dict, save_dir: Path, **kwargs):
     '''
     # --- Confusion matrix heatmaps ---
     class_labels = [l['short_name'] for l in LAND_USE_NAMES.values()]
+    if not include_alpha_em:
+        all_cms = all_cms.drop(index='alpha_em')
+        
     n_models = len(all_cms)
     ncols = 3
     nrows = int(np.ceil(n_models / ncols))
@@ -312,45 +383,85 @@ def prepare_loc_parqs(naturalness_csv: str, s2_grid_file: str, save_dir: str, **
 #  Step 1. Extract VSM patches/points
 # ----------------------------------------------------------------------------------------
 
-def _cal_s2_patch_stats(s2_patch_file: str, rowids: list):
-    s2_patch_file = Path(s2_patch_file).expanduser()
-    with h5py.File(s2_patch_file, 'r') as f:
-        all_rowids = f['rowid'][:]
-        mask = np.isin(rowids, all_rowids)
-        idx = np.where(np.isin(all_rowids, rowids))[0]
-        s2_patch = f['s2'][idx, :12, 10:21, 10:21]
-        slope = f['slope'][idx, 15:16, 15]
-        avg_s2 = s2_patch.mean(axis=(2,3))
-        std_s2 = s2_patch.std(axis=(2,3))
-        
-        # there may be locations where there is no S2 patch, so we need to fill with NaN
-        full_avg_s2 = np.full((len(rowids), avg_s2.shape[1]), np.nan)
-        full_std_s2 = np.full((len(rowids), std_s2.shape[1]), np.nan)
-        full_slope = np.full((len(rowids), 1), np.nan)
+# ----------------------------------------------------------------------------------------
+#  Step 2. Calculate VSM patch statistics (mean and std)
+# ----------------------------------------------------------------------------------------
+def _read_s2(patch_file: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    with h5py.File(patch_file, 'r') as f:
+        s2_patch = f['s2'][:, :12, 10:21, 10:21]
+        slope = f['slope'][:, 15:16, 15]
+        rowids = f['rowid'][:]
+    return s2_patch, slope, rowids
 
-        full_avg_s2[mask] = avg_s2
-        full_std_s2[mask] = std_s2
-        full_slope[mask] = slope   
-        
-    return full_std_s2, full_avg_s2, full_slope
+def _read_alpha_em(patch_file: Path):
+    with h5py.File(patch_file, 'r') as f:
+        alpha_em = f['data'][:, :, 2:-2, 2:-2]
+        rowids = f['rowid'][:]
+    return alpha_em, rowids
 
+def _read_vsm(patch_file: Path):
+    with h5py.File(patch_file, 'r') as f:
+        vsm = f['vsm_median'][:, :, 2:-2, 2:-2]
+        rowids = f['rowid'][:]
+    return vsm, rowids
+    
+def cal_patch_stats(patch_file: str, ref_csv_train: str, out_file: str, data_type: str='s2', **kwargs):
+    '''
+    Calculate the statistics (mean and std) of the patches (S2 patches or AlphaEarth embeddings)
+    Args:
+        patch_file: path to the patch file
+        ref_csv_train: path to the reference csv file for training
+        out_file: path to save the patch statistics
+    Returns:
+        None
+    '''
+    patch_file = Path(patch_file).expanduser()
+    ref_csv_train = Path(ref_csv_train).expanduser()
+    out_file = Path(out_file).expanduser()
+    out_file.parent.mkdir(parents=True, exist_ok=True)
+    ref_df_train = pd.read_csv(ref_csv_train)
+    ref_csv_val = ref_csv_train.with_name(ref_csv_train.name.replace('train', 'val'))
+    ref_df_val = pd.read_csv(ref_csv_val)
+    
+    rowids_train = ref_df_train['rowid'].unique()
+    rowids_val = ref_df_val['rowid'].unique()
+    rowids = np.concatenate([rowids_train, rowids_val])
+    ref_df = pd.concat([ref_df_train, ref_df_val])
+    ref_df = ref_df.astype({'rowid': 'int32', 'ID': 'int32', 'Land_use_ID': 'uint8', 'flag': 'uint8'})
+    ref_df = ref_df.set_index('rowid')
 
-def _cal_alpha_em_patch_stats(alpha_em_patch_file: str, rowids: list):
-    alpha_em_patch_file = Path(alpha_em_patch_file).expanduser()
-    with h5py.File(alpha_em_patch_file, 'r') as f:
-        all_rowids = f['rowid'][:]
-        mask = np.isin(rowids, all_rowids)
-        idx = np.where(np.isin(all_rowids, rowids))[0]
-        alpha_em = f['data'][idx, :, 2:-2, 2:-2]
-        avg_alpha_em = alpha_em.mean(axis=(2,3))
-        std_alpha_em = alpha_em.std(axis=(2,3))
+    if data_type == 's2':
+        data_patch, slope, rowids = _read_s2(patch_file)
+        ref_df.loc[rowids, 'slope'] = slope    
+    elif data_type == 'alpha_em':
+        data_patch, rowids = _read_alpha_em(patch_file)
+    elif data_type == 'vsm':
+        data_patch, rowids = _read_vsm(patch_file)
+        fhd, enl1d, enl2d, cr = _chunk_diversity(data_patch, bin_width=5)
+        diversity_indices = np.stack([fhd, enl1d, enl2d, cr], axis=1)
+        avg_indices = np.nanmean(diversity_indices, axis=(2,3), dtype=np.float32)
+        std_indices = np.nanstd(diversity_indices, axis=(2,3), dtype=np.float32)
+        indices_cols = ['fhd', 'enl1d', 'enl2d', 'cr']
+        for col in indices_cols:
+            ref_df.loc[rowids, f'avg_{col}'] = avg_indices[:, indices_cols.index(col)]
+            ref_df.loc[rowids, f'std_{col}'] = std_indices[:, indices_cols.index(col)]
         
-        # there may be locations where there is no S2 patch, so we need to fill with NaN
-        full_avg_alpha_em = np.full((len(rowids), avg_alpha_em.shape[1]), np.nan)
-        full_std_alpha_em = np.full((len(rowids), std_alpha_em.shape[1]), np.nan)
-        full_avg_alpha_em[mask] = avg_alpha_em
-        full_std_alpha_em[mask] = std_alpha_em
-    return full_std_alpha_em, full_avg_alpha_em
+    else:
+        raise ValueError(f'Invalid data type: {data_type}')
+    
+    avg = np.nanmean(data_patch, axis=(2,3), dtype=np.float32) # return nan if all values are nan
+    std = np.nanstd(data_patch, axis=(2,3), dtype=np.float32)
+    for b in range(avg.shape[1]):
+        ref_df.loc[rowids, f'avg_{data_type}_band{b}'] = avg[:, b]
+        ref_df.loc[rowids, f'std_{data_type}_band{b}'] = std[:, b]
+    
+    for split, rowids_split in zip(['train', 'val'], [rowids_train, rowids_val]):
+        ref_df_split = ref_df.loc[rowids_split]
+        ref_df_split = gpd.GeoDataFrame(ref_df_split, geometry=gpd.points_from_xy(ref_df_split.Longitude, ref_df_split.Latitude), crs="EPSG:4326")
+        file_name = out_file.with_stem(f'{out_file.stem.replace("train", split)}')
+        ref_df_split.to_parquet(file_name)
+        ref_df_split.to_file(file_name.with_suffix('.fgb'), driver='FlatGeobuf')
+    
 
 def _cal_vsm_patch_stats(h5_file: str, out_file: str, cols: list, **kwargs):
     '''
@@ -363,14 +474,7 @@ def _cal_vsm_patch_stats(h5_file: str, out_file: str, cols: list, **kwargs):
     '''
     if out_file.exists():
         return
-    with h5py.File(h5_file, 'r') as f:
-        vsm_patches = f['data'][:]
-        naturalness = f['land_use_id'][:]
-        rowids = f['rowid'][:]
-        mask = np.isin(naturalness, [-1,1]) # unsure and no high resolution images
-        vsm_patches = vsm_patches[~mask]
-        naturalness = naturalness[~mask][:, np.newaxis]
-        rowids = rowids[~mask]
+    vsm_patches, naturalness, rowids = load_vsm_naturalness(h5_file)
     if rowids.size == 0:
         return
     fhd, enl1d, enl2d, cr = _chunk_diversity(vsm_patches, bin_width=5)
@@ -383,51 +487,56 @@ def _cal_vsm_patch_stats(h5_file: str, out_file: str, cols: list, **kwargs):
     std = res.variance**0.5 # (n_points, n_rhs*n_q)
     
     data = np.concatenate([std, avg, naturalness, std_indices, avg_indices], axis=1)
-    # add S2 patch statistics
-    s2_patch_file = kwargs.get('s2_patch_file', None)
-    if s2_patch_file is not None:
-        std_s2, avg_s2, slope = _cal_s2_patch_stats(s2_patch_file, rowids)
-        data = np.concatenate([data, std_s2, avg_s2, slope], axis=1)
-        s2_dim = std_s2.shape[1]
-        cols = cols + [f'std_s2_band{i}' for i in range(s2_dim)] + [f'avg_s2_band{i}' for i in range(s2_dim)] + ['slope']
-    
-    alpha_em_patch_file = kwargs.get('alpha_em_patch_file', None)
-    if alpha_em_patch_file is not None:
-        std_alpha_em, avg_alpha_em = _cal_alpha_em_patch_stats(alpha_em_patch_file, rowids)
-        data = np.concatenate([data, std_alpha_em, avg_alpha_em], axis=1)
-        alpha_em_dim = std_alpha_em.shape[1]
-        cols = cols + [f'std_alpha_em_band{i}' for i in range(alpha_em_dim)] + [f'avg_alpha_em_band{i}' for i in range(alpha_em_dim)]
     stats = pd.DataFrame(data, columns=cols, index=rowids) # (n_points, n_rhs*n_q + 1)
     stats.to_parquet(out_file)
 
-def cal_vsm_patch_stats(vsm_patches_dir: str, save_dir: str, **kwargs):
+
+
+def cal_vsm_patch_stats(ref_by_tile_dir: str, vsm_patches_dir: str, save_dir: str, **kwargs):
     '''
-    Calculate the statistics (mean and std) of the VSM patches
+    Calculate the statistics (mean and std) of the VSM patches (tiled)
     Args:
         vsm_patches_dir: path to the VSM patches directory
         save_dir: path to save the VSM patch statistics
     Returns:
         None
     '''
+    ref_by_tile_dir = Path(ref_by_tile_dir).expanduser()
     vsm_patches_dir = Path(vsm_patches_dir).expanduser()
     save_dir = Path(save_dir).expanduser()
     save_dir.mkdir(parents=True, exist_ok=True)
-    h5_files = vsm_patches_dir.glob('*.h5')
     std_cols = [f'std_RH{i}_Q1' for i in range(101)]
     avg_cols = [f'avg_RH{i}_Q1' for i in range(101)]
     indices_cols = [f'{metric}_{var}' for metric in ['std', 'avg'] for var in ['fhd', 'enl1d', 'enl2d', 'cr']]
     cols = std_cols + avg_cols + ['land_use_id'] + indices_cols
+    h5_files = vsm_patches_dir.glob('*.h5')
+    h5_files = list(h5_files)
+    
+    ref_by_tile_files = list(ref_by_tile_dir.glob('*.parquet'))
+    if len(ref_by_tile_files) == 0:
+        raise ValueError('ref_by_tile_dir does not contain any parquet files')
+    if len(h5_files) == 1: # for case where we only have one big h5 file
+        vsm_patches_file = str(h5_files[0])
+    else:
+        vsm_patches_file = str(vsm_patches_dir) + '/{tile_id}.h5'
+        
+    
     tasks = []
-    for h5_file in h5_files:
-        out_file = save_dir / f'{h5_file.name}.parquet'
-        # _cal_vsm_patch_stats(h5_file, out_file, cols, **kwargs)
-        tasks.append(dask.delayed(_cal_vsm_patch_stats)(h5_file, out_file, cols, **kwargs))
+    for ref_by_tile_file in ref_by_tile_files:
+        tile_id = ref_by_tile_file.stem
+        out_file = save_dir / f'{tile_id}.parquet'
+        vsm_patches_file = vsm_patches_file.format(tile_id=tile_id)
+        _cal_vsm_patch_stats(vsm_patches_file, out_file, cols, **kwargs)
+        tasks.append(dask.delayed(_cal_vsm_patch_stats)(vsm_patches_file, out_file, cols, **kwargs))
     with ProgressBar():
         dask.compute(*tasks)
     return
 
+# ----------------------------------------------------------------------------------------
+#  Step 3. Run classification
+# ----------------------------------------------------------------------------------------
 
-def logistic_regression(vsm_patch_stats_dir: str, vsm_patch_stats_dir_val: str, save_dir: str, **kwargs):
+def logistic_regression(x, x_val, y, **kwargs):
     '''
     Perform logistic regression on the VSM patches
     Args:
@@ -436,31 +545,42 @@ def logistic_regression(vsm_patch_stats_dir: str, vsm_patch_stats_dir_val: str, 
     Returns:
         None
     '''
-    vsm_patch_stats_dir = Path(vsm_patch_stats_dir).expanduser()
-    vsm_patch_stats_dir_val = Path(vsm_patch_stats_dir_val).expanduser()
+    x = sm.add_constant(x)
+    x_val = sm.add_constant(x_val)
+    model = sm.MNLogit(y, x)
+    clf = model.fit()
+    print(f'AIC={clf.aic:.0f}, BIC={clf.bic:.0f}, Pseudo R²={clf.prsquared:.4f}')
+    return clf, x_val
+
+
+def xgboost_classification(x, x_val, y, y_val, **kwargs):
+    '''
+    Perform XGBoost regression on the VSM patches
+    Args:
+        vsm_patch_stats_dir: path to the VSM patch statistics directory
+        save_dir: path to save the XGBoost regression model
+    Returns:
+        clf: XGBoost classifier
+        x_val: validation data
+    '''
+    clf = xgb.XGBClassifier(tree_method="hist", early_stopping_rounds=3)
+    clf.fit(x, y, eval_set=[(x_val, y_val)])
+    
+    return clf, x_val
+
+def run_classification(classifier: str, patch_stats_dir: str,  save_dir: str, **kwargs):
+    '''
+    Perform logistic regression on the VSM patches
+    Args:
+        patch_stats_dir: path to the VSM patch statistics directory, should contain *_train.parquet and *_val.parquet
+        save_dir: path to save the logistic regression model
+    Returns:
+        None
+    '''
     save_dir = Path(save_dir).expanduser()
     save_dir.mkdir(parents=True, exist_ok=True)
-    debug = kwargs.get('debug', False)
-    if debug:
-        files = list(vsm_patch_stats_dir.glob('*.parquet'))[:10]
-        files_val = list(vsm_patch_stats_dir_val.glob('*.parquet'))[:10]
-    else:
-        files = list(vsm_patch_stats_dir.glob('*.parquet'))
-        files_val = list(vsm_patch_stats_dir_val.glob('*.parquet'))
-    ddf = dd.read_parquet(files)
-    ddf = ddf.dropna(subset=['avg_s2_band0', 'std_alpha_em_band0'])
-    ddf = ddf.compute()
-    valid = ~ddf['land_use_id'].isin([-1, 1])
-    ddf = ddf[valid]
-    
-    ddf_val = dd.read_parquet(files_val)
-    ddf_val = ddf_val.dropna(subset=['avg_s2_band0'])
-    ddf_val = ddf_val.compute()
-    valid_val = ~ddf_val['land_use_id'].isin([-1, 1])
-    ddf_val = ddf_val[valid_val]
-    
-    y = ddf['land_use_id'].values.flatten().astype(int)
-    y_val = ddf_val['land_use_id'].values.flatten().astype(int)
+    ddf, y = _load_patch_stats(patch_stats_dir, 'train', **kwargs)
+    ddf_val, y_val = _load_patch_stats(patch_stats_dir, 'val', **kwargs)
     classes = np.unique(y)
     
     groups = {
@@ -483,12 +603,11 @@ def logistic_regression(vsm_patch_stats_dir: str, vsm_patch_stats_dir_val: str, 
         print(f'{name}')
         x = ddf[cols].values
         x_val = ddf_val[cols].values
-        x = sm.add_constant(x)
-        x_val = sm.add_constant(x_val)
-        model = sm.MNLogit(y, x)
-        result = model.fit()
-        print(f'{name}: AIC={result.aic:.0f}, BIC={result.bic:.0f}, Pseudo R²={result.prsquared:.4f}')
-        y_pred = result.predict(x_val).argmax(axis=1)
+        if classifier == 'logistic_regression':
+            clf, x_val = logistic_regression(x, x_val, y)
+        elif classifier == 'xgboost':
+            clf, x_val = xgboost_classification(x, x_val, y, y_val)
+        y_pred = clf.predict(x_val).argmax(axis=1)
         y_pred_classes = classes[y_pred]
 
         # Confusion matrix
@@ -522,19 +641,47 @@ def logistic_regression(vsm_patch_stats_dir: str, vsm_patch_stats_dir_val: str, 
     np.savez(save_dir / 'logistic_regression_confusion_matrices.npz', **all_cms)
     return all_summary_df, all_per_class_df, all_cms
 
+def check_distribution(vsm_patch_stats_dir: str, save_dir: str, feature_cols: list, **kwargs):
+    '''
+    Check the distribution of the VSM patches
+    Args:
+        vsm_patch_stats_dir: path to the VSM patch statistics directory
+        save_dir: path to save the distribution plots
+    Returns:
+        None
+    '''
+    save_dir = Path(save_dir).expanduser()
+    save_dir.mkdir(parents=True, exist_ok=True)
+    ddf, y = _load_patch_stats(vsm_patch_stats_dir, **kwargs)
+    for col in feature_cols:
+        fig, ax = plt.subplots(figsize=(10, 5))
+        groups = ddf.groupby('land_use_id')[col]
+        labels = sorted(ddf['land_use_id'].unique())
+        data = [groups.get_group(l).dropna().values for l in labels]
+        labels = [LAND_USE_NAMES.get(int(l), l)['short_name'] for l in labels]
+        ax.violinplot(data, positions=range(len(labels)), showmeans=True, showmedians=True)
+        ax.set_xticks(range(len(labels)))
+        ax.set_xticklabels(labels)
+        ax.set_xlabel('Forest Type')
+        ax.set_ylabel(col)
+        ax.set_title(f'Distribution of {col} by Forest Type')
+        plt.tight_layout()
+        plt.savefig(save_dir / f'violin_{col}.png', dpi=150, bbox_inches='tight')
+        plt.close()
 
-        
+    return
 
-    
 if __name__ == '__main__':
-    split = 'train'
-    vsm_patches_dir = f'~/data/gvs/downstream_tasks/naturalness/vsm_patches_ps11_{split}/'
-    vsm_patch_stats_dir = f'/projects/dereeco/data/gvs/downstream_tasks/naturalness/results_from_vsm_2020/vsm_s2_alpha_patch_stats_ps11_{split}/'
-    vsm_patch_stats_dir_val = f'/projects/dereeco/data/gvs/downstream_tasks/naturalness/results_from_vsm_2020/vsm_s2_alpha_patch_stats_ps11_val/'
+    # from evaluation.utils import verify_batch_binning
+    # verify_batch_binning()
+    # split = 'train'
+    # vsm_patches_dir = f'~/data/gvs/downstream_tasks/naturalness/vsm_patches_ps11_{split}/'
+    # vsm_patch_stats_dir = f'/projects/dereeco/data/gvs/downstream_tasks/naturalness/results_from_vsm_2020/vsm_s2_alpha_patch_stats_ps11_{split}/'
+    # vsm_patch_stats_dir_val = f'/projects/dereeco/data/gvs/downstream_tasks/naturalness/results_from_vsm_2020/vsm_s2_alpha_patch_stats_ps11_val/'
     save_dir = f'/projects/dereeco/data/gvs/downstream_tasks/naturalness/results_from_vsm_2020/logistic_regression_ps11/'
-    s2_patch_file = '~/data/gvs/downstream_tasks/naturalness/s2_2017_ps31.h5'
-    # cal_vsm_patch_stats(vsm_patches_dir, vsm_patch_stats_dir, s2_patch_file=s2_patch_file)
-    # all_summary_df, all_per_class_df, all_cms = logistic_regression(vsm_patch_stats_dir, vsm_patch_stats_dir_val, save_dir, debug=False)
+    # s2_patch_file = '~/data/gvs/downstream_tasks/naturalness/s2_2017_ps31.h5'
+    # # cal_vsm_patch_stats(vsm_patches_dir, vsm_patch_stats_dir, s2_patch_file=s2_patch_file)
+    # # all_summary_df, all_per_class_df, all_cms = run_classification(vsm_patch_stats_dir, vsm_patch_stats_dir_val, save_dir, debug=True)
     save_dir = Path(save_dir).expanduser()
     all_summary_df = pd.read_csv(save_dir / 'logistic_regression_summary_reports.csv', index_col=0)
     all_per_class_df = pd.read_csv(save_dir / 'logistic_regression_per_class_reports.csv', index_col=0)
@@ -542,7 +689,9 @@ if __name__ == '__main__':
     plot_bars(all_summary_df, all_per_class_df, metric='Recall', avg='macro', save_dir=save_dir)
     plot_bars(all_summary_df, all_per_class_df, metric='Precision', avg='macro', save_dir=save_dir)
     plot_bars(all_summary_df, all_per_class_df, metric='F1', avg='macro', save_dir=save_dir)
-    plot_improve_heatmap(all_summary_df, all_per_class_df, metric='Recall', avg='macro', save_dir=save_dir)
-    plot_improve_heatmap(all_summary_df, all_per_class_df, metric='Precision', avg='macro', save_dir=save_dir)
-    plot_improve_heatmap(all_summary_df, all_per_class_df, metric='F1', avg='macro', save_dir=save_dir)
-    plot_confusion_matrix(all_cms, save_dir)
+    # plot_improve_heatmap(all_summary_df, all_per_class_df, metric='Recall', avg='macro', save_dir=save_dir)
+    # plot_improve_heatmap(all_summary_df, all_per_class_df, metric='Precision', avg='macro', save_dir=save_dir)
+    # plot_improve_heatmap(all_summary_df, all_per_class_df, metric='F1', avg='macro', save_dir=save_dir)
+    # plot_confusion_matrix(all_cms, save_dir)
+    # feature_cols = ['std_RH98_Q1', 'avg_RH98_Q1'] + [f'std_fhd', 'avg_fhd'] + [f'std_enl1d', 'avg_enl1d'] + [f'std_enl2d', 'avg_enl2d'] + [f'std_cr', 'avg_cr']
+    # check_distribution(vsm_patch_stats_dir, save_dir, feature_cols)

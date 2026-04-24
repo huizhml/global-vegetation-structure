@@ -318,7 +318,7 @@ def _sample_tile_patches(loc_file: Path, pred_dir: Path, out_file: Path,
     da = da.assign_coords(points=loc_df.ID, bands=assets, 
                      lat=('points', loc_df.geometry.y), lon=('points', loc_df.geometry.x), 
                      flag=('points', loc_df.flag.values), land_use_id=('points', loc_df.Land_use_ID.values),
-                     rowid=('points', loc_df.rowid.values))
+                     rowid=('points', loc_df.rowid.values)) # TODO: this is specific to naturalness, adapt this to other point data
     da.name = 'data'
     da.to_netcdf(out_file.with_suffix('.h5'), format='NETCDF4', engine='h5netcdf')
 

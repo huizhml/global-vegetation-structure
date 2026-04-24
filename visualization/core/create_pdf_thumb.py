@@ -71,6 +71,8 @@ def get_vis_params(tif_file: Path):
     q_idx = re.search(r'Q(\d+)', tif_file.stem)
     if q_idx is None: # for Qskewness
         return -120, 120, 'RdBu_r'
+    if '-' in q_idx:
+        return 0, 500, 'blues'
     else:
         rh_idx = re.search(r'RH(\d+)', tif_file.stem).group(1)
         return rh_vis_params[f'RH{rh_idx}']['cmin'], rh_vis_params[f'RH{rh_idx}']['cmax'], 'inferno'
@@ -173,7 +175,8 @@ def plot_pdf_cover(params: dict, timestamp: str):
 
 
 def plot_tiff_image(tif_file: Path):
-    cmin, cmax, cmap = get_vis_params(tif_file)
+    # cmin, cmax, cmap = get_vis_params(tif_file)
+    cmin, cmax, cmap = 0, 500, 'viridis'
     fig = plt.figure(figsize=(6, 5))
     image = rio_read(tif_file)
     # with rasterio.open(tif_file) as src:
@@ -332,7 +335,7 @@ def make_global_mosaic_pdf(mosaic_dir: str, pdf_file: Path, **kwargs):
     '''
     timestamp = pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')
     mosaic_dir = Path(mosaic_dir).expanduser()
-    tif_files = list(mosaic_dir.glob('global_mosaic_*RH*Q*.cog.tif'))
+    tif_files = list(mosaic_dir.glob('global_mosaic_*RH*_Q0-Q2.cog.tif'))
     tif_files = sorted(tif_files)
     pdf_file = Path(pdf_file).expanduser()
     pdf_file.parent.mkdir(parents=True, exist_ok=True)
@@ -344,6 +347,7 @@ def make_global_mosaic_pdf(mosaic_dir: str, pdf_file: Path, **kwargs):
         for tif_file in tif_files:
             fig = plot_tiff_image(tif_file)
             pdf.savefig(fig, bbox_inches='tight')
+            fig.savefig(tif_file.with_suffix('.pdf'), bbox_inches='tight')
             plt.close(fig)
             
     print(f'saved to {pdf_file}')

@@ -10,7 +10,63 @@ from omegaconf import OmegaConf, MISSING
 from config.base_config_class import ClassConfig, FunctionConfig
 from const import KEY_RHS, CHM_COLS
 from postprocessing.core.utils import generate_run_log
+from tools.utils import resolve_args
 
+
+cs = ConfigStore.instance()
+    
+defaults = [
+    {'run': 'compute_entropy'},
+    "_self_"
+]
+
+@dataclass
+class RunConfig:
+    defaults: List[Any] = field(default_factory=lambda: defaults)
+    run: Any = MISSING
+
+# ================================ Main Config ================================
+cs.store(name='base_config', node=RunConfig) # NOTE: name here should match the default in ../config/base/no_log.yaml
+
+
+# =======================================
+#   Evaluate VSM on GEDI
+# =======================================
+@dataclass
+class EvaluateVSMOnGEDIConfig(FunctionConfig):
+    ref_dir: str = '~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_test/original/'
+    ours_dir: str = '~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_test/original_with_sota_chms_biome_and_ours_full/2020'
+    save_dir: str = '~/data/gvs/evaluation/with_gedi_on_diversity_indices/results/'
+    _target_: str = "evaluation.on_gedi.evaluate_vsm_on_gedi"
+    
+cs.store(group='run', name='evaluate_vsm_on_gedi', node=EvaluateVSMOnGEDIConfig)
+    
+# =======================================
+#   Evaluate VSM top height with SOTA CHMs
+# =======================================
+@dataclass
+class EvaluateVSMTopHeightWithSOTAChmsConfig(FunctionConfig):
+    year: int = 2020
+    split: str = 'test'
+    data_name: str = 'original_with_sota_chms_biome_and_ours_full'
+    ours_dir: str = '~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_{split}/{data_name}/{year}'
+    save_dir: str = '~/data/gvs/evaluation/with_sota_chm/results/'
+    _target_: str = "evaluation.on_sota_chm.evaluate_chm_with_sota"
+    
+cs.store(group='run', name='evaluate_chm_with_sota', node=EvaluateVSMTopHeightWithSOTAChmsConfig)
+
+
+# =======================================
+#   Evaluate CHM with ALS and LVIS
+# =======================================
+@dataclass
+class EvaluateCHMWithALSAndLVISConfig(FunctionConfig):
+    df_dir: str = '/projects/dereeco/data/gvs/evaluation/with_airborne_lidar/lidar_and_ours_year_matching'
+    save_dir: str = '/projects/dereeco/data/gvs/evaluation/with_airborne_lidar/figures/evaluated_on_ours_year_matching'
+    ref_col: str = 'als'
+    _target_: str = "evaluation.on_als.evaluate"
+
+cs.store(group='run', name='evaluate_chm_with_als_and_lvis', node=EvaluateCHMWithALSAndLVISConfig)
 
 # =======================================
 #   Biome analysis - diversity indices
@@ -22,7 +78,8 @@ class SamplePointsByBiomeConfig(FunctionConfig):
     save_dir: str = '~/data/gvs/analysis/biome_anlaysis/random_sample_100000_points_per_biome_veg'
     plot_points: bool = True
     _target_: str = "evaluation.utils.sample_points_by_biome"
-    
+
+cs.store(group='run', name='sample_points_by_biome', node=SamplePointsByBiomeConfig)
 @dataclass
 class PartitionPointsByTileConfig(FunctionConfig):
     gdf_file: str = '~/data/gvs/analysis/biome_anlaysis/random_sample_100000_points_per_biome_veg/random_sample_100000_points_per_biome.parquet'
@@ -30,6 +87,7 @@ class PartitionPointsByTileConfig(FunctionConfig):
     save_dir: str = '~/data/gvs/analysis/biome_anlaysis/random_sample_100000_points_per_biome_veg_by_tile'
     _target_: str = "evaluation.utils.partition_points_by_tile"
 
+cs.store(group='run', name='partition_points_by_tile', node=PartitionPointsByTileConfig)
 @dataclass
 class ComputeEntropyConfig(FunctionConfig):
     output_dir: str = '~/data/gvs/products/profile_entropy/2020/tiles/geotiff'
@@ -38,16 +96,18 @@ class ComputeEntropyConfig(FunctionConfig):
     chunk_size: int = 512
     max_workers: int = 8
     bin_width: int = 50
-    _target_: str = "evaluation.diversity_indices.compute_entropy"
+    _target_: str = "evaluation.on_diversity_indices.compute_entropy"
 
+cs.store(group='run', name='compute_entropy', node=ComputeEntropyConfig)
 @dataclass
 class ComputeDiversityIndicesConfig(FunctionConfig):
     save_dir: str = '~/data/gvs/evaluation/with_gedi_on_diversity_indices/indices_by_tile/'
     gedi_ours_dir: str = '~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_test/original_with_sota_chms_biome_and_ours_full/2020'
     bin_width: int = 5
     year: int = 2020
-    _target_: str = "evaluation.diversity_indices.cal_diversity_indices"
-
+    _target_: str = "evaluation.on_diversity_indices.cal_diversity_indices"
+    
+cs.store(group='run', name='compute_diversity_indices', node=ComputeDiversityIndicesConfig)
 @dataclass
 class EvaluateDiversityIndicesConfig(FunctionConfig):
     indices_dir: str = '~/data/gvs/evaluation/with_gedi_on_diversity_indices/indices_by_tile/bin_width_5m/2020'
@@ -57,33 +117,83 @@ class EvaluateDiversityIndicesConfig(FunctionConfig):
     plot_scatter: bool = False
     plot_boxplot: bool = True
     save_dir: str = '~/data/gvs/evaluation/with_gedi_on_diversity_indices/results/'
-    _target_: str = "evaluation.diversity_indices.eval_diversity_indices"
+    _target_: str = "evaluation.on_diversity_indices.eval_diversity_indices"
     
+cs.store(group='run', name='evaluate_diversity_indices', node=EvaluateDiversityIndicesConfig)
 
-@dataclass
-class ExtractPixelsAndSaveConfig(FunctionConfig):
-    ref_dir: str = '~/data/gvs/evaluation/with_airborne_lidar/ALS_MaxGEDIFootprint_GSD10m'
-    ours_root_dir: str = '~/data/gvs/predictions'
-    save_dir: str = '~/data/gvs/evaluation/with_airborne_lidar/lidar_and_ours_year_matching'
-    _target_: str = "evaluation.eval_als.extract_pixels_and_save"
-    
+# =======================================
+#   VSM on naturalness
+# =======================================
 @dataclass
 class PrepareNaturalnessLocParquetsConfig(FunctionConfig):
     naturalness_csv: str = '~/data/gvs/downstream_tasks/naturalness/reference_data_set_updated_train.csv'
     s2_grid_file: str = '~/data/gvs/state/s2_tiles_with_growing_months.parquet'
     save_dir: str = '~/data/gvs/downstream_tasks/naturalness/loc_by_tile_train'
-    _target_: str = "evaluation.naturalness.prepare_loc_parqs"
+    _target_: str = "evaluation.on_naturalness.prepare_loc_parqs"
     
+# cs.store(group='run', name='extract_pixels_and_save', node=ExtractPixelsAndSaveConfig)
+cs.store(group='run', name='prepare_naturalness_loc_parquets', node=PrepareNaturalnessLocParquetsConfig) 
+
+@dataclass
+class CalS2PatchStatsConfig(FunctionConfig):
+    year: int = 2017
+    data_type: str = 's2'
+    root_dir: str = '~/data/gvs/downstream_tasks/naturalness'
+    ref_csv_train: str = '{root_dir}/reference_data_set_updated_train.csv'
+    patch_file: str = '{root_dir}/results_from_vsm_{year}/s2_gedi_patches_ps31/s2_{year}_ps31.h5'
+    out_file: str = '{root_dir}/results_from_vsm_{year}/s2_patch_stats_ps11_train.parquet'
+    _target_: str = "evaluation.on_naturalness.cal_patch_stats"
     
+cs.store(group='run', name='cal_s2_patch_stats', node=CalS2PatchStatsConfig)
+
+@dataclass
+class CalAlphaEMPatchStatsConfig(FunctionConfig):
+    year: int = 2017
+    data_type: str = 'alpha_em'
+    root_dir: str = '~/data/gvs/downstream_tasks'
+    ref_csv_train: str = '{root_dir}/naturalness/reference_data_set_updated_train.csv'
+    patch_file: str = '{root_dir}/alphaearth_embeddings/alphaearth_embeddings.h5'
+    out_file: str = '{root_dir}/naturalness/results_from_vsm_{year}/alpha_em_patch_stats_ps11_train.parquet'
+    _target_: str = "evaluation.on_naturalness.cal_patch_stats"
+    
+cs.store(group='run', name='cal_alpha_em_patch_stats', node=CalAlphaEMPatchStatsConfig)
+
+@dataclass
+class CalVSM17PatchStatsConfig(FunctionConfig):
+    year: int = 2017
+    data_type: str = 'vsm'
+    root_dir: str = '~/data/gvs/downstream_tasks/naturalness'
+    ref_csv_train: str = '{root_dir}/reference_data_set_updated_train.csv'
+    patch_file: str = '{root_dir}/results_from_vsm_{year}/vsm_patches_ps15_single_h5/rhs_predictions_2017_cg11fpjr.h5'
+    out_file: str = '{root_dir}/results_from_vsm_{year}/vsm_patch_stats_ps11_train.parquet'
+    _target_: str = "evaluation.on_naturalness.cal_patch_stats"
+    
+cs.store(group='run', name='cal_vsm_17_patch_stats', node=CalVSM17PatchStatsConfig)
+
+@dataclass
+class RunNaturalnessClassificationConfig(FunctionConfig):
+    year: int = 2017
+    root_dir: str = '~/data/gvs/downstream_tasks/naturalness'
+    classifier: str = 'logistic_regression'
+    patch_stats_dir: str = '{root_dir}/results_from_vsm_{year}'
+    save_dir: str = '{root_dir}/results_from_vsm_{year}/naturalness_classification_ps11'
+    _target_: str = "evaluation.on_naturalness.run_classification"
+    
+cs.store(group='run', name='run_naturalness_classification', node=RunNaturalnessClassificationConfig)
+
 @dataclass
 class CalVSMPatchStatsConfig(FunctionConfig):
-    vsm_patches_dir: str = '~/data/gvs/downstream_tasks/naturalness/results_from_vsm_2020/vsm_patches_ps11_val'
-    save_dir: str = '~/data/gvs/downstream_tasks/naturalness/results_from_vsm_2020/vsm_s2_alpha_patch_stats_ps11_val'
-    s2_patch_file: str = '~/data/gvs/downstream_tasks/naturalness/results_from_vsm_2017/s2_gedi_patches_ps31/s2_2017_ps31.h5'
-    alpha_em_patch_file: str = '/projects/dereeco/data/gvs/downstream_tasks/alphaearth_embeddings/alphaearth_embeddings.h5'
-    _target_: str = "evaluation.naturalness.cal_vsm_patch_stats"
+    split: str = 'val'
+    year: int = 2017
+    root_dir: str = '~/data/gvs/downstream_tasks'
+    ref_by_tile_dir: str = '{root_dir}/naturalness/loc_by_tile_{split}'
+    vsm_patches_dir: str = '{root_dir}/naturalness/results_from_vsm_{year}/vsm_patches_ps15_single_h5'
+    save_dir: str = '{root_dir}/naturalness/results_from_vsm_{year}/vsm_s2_alpha_patch_stats_ps15_{split}'
+    s2_patch_file: str = '{root_dir}/naturalness/results_from_vsm_{year}/s2_gedi_patches_ps31/s2_{year}_ps31.h5'
+    alpha_em_patch_file: str = '{root_dir}/alphaearth_embeddings/alphaearth_embeddings.h5'
+    _target_: str = "evaluation.on_naturalness.cal_vsm_patch_stats"
     
-
+cs.store(group='run', name='cal_vsm_patch_stats', node=CalVSMPatchStatsConfig)
 @dataclass
 class PlotBiomeCombinedBoxplotConfig(FunctionConfig):
     indices_dir: str = '~/data/gvs/evaluation/with_gedi_on_diversity_indices/indices_by_tile/bin_width_5m/2020'
@@ -93,38 +203,32 @@ class PlotBiomeCombinedBoxplotConfig(FunctionConfig):
     plot_biome_combined_boxplot: bool = True
     max_height: int = 50
     save_dir: str = '~/data/gvs/evaluation/with_gedi_on_diversity_indices/results/'
-    _target_: str = "evaluation.diversity_indices.eval_diversity_indices"
-    
+    _target_: str = "evaluation.on_diversity_indices.eval_diversity_indices"
+   
+cs.store(group='run', name='plot_biome_combined_boxplot', node=PlotBiomeCombinedBoxplotConfig) 
+
+# =======================================
+#   Compute GLCM texture
+# =======================================
+
 @dataclass
-class RunConfig:
-    defaults: List[Any] = field(default_factory=lambda: defaults)
-    run: Any = MISSING
+class ComputeGLCMTextureConfig(FunctionConfig):
+    vsm_patches_dir: str = '~/data/gvs/downstream_tasks/naturalness/results_from_vsm_2020/vsm_patches_ps11_train'
+    save_dir: str = '/projects/dereeco/data/gvs/downstream_tasks/naturalness/results_from_vsm_2020/glcm_texture_train'
+    bin_width: int = 5
+    n_levels: int = 100
+    _target_: str = "evaluation.on_glcm_texture.cal_vsm_patch_texture"
     
-defaults = [
-    {'run': 'compute_entropy'},
-    "_self_"
-]
+cs.store(group='run', name='compute_glcm_texture', node=ComputeGLCMTextureConfig)
 
 
-cs = ConfigStore.instance()
-cs.store(group='run', name='compute_entropy', node=ComputeEntropyConfig)
-cs.store(group='run', name='compute_diversity_indices', node=ComputeDiversityIndicesConfig)
 
-cs.store(group='run', name='sample_points_by_biome', node=SamplePointsByBiomeConfig)
-cs.store(group='run', name='partition_points_by_tile', node=PartitionPointsByTileConfig)
-
-cs.store(group='run', name='evaluate_diversity_indices', node=EvaluateDiversityIndicesConfig)
-cs.store(group='run', name='plot_biome_combined_boxplot', node=PlotBiomeCombinedBoxplotConfig)
-cs.store(group='run', name='extract_pixels_and_save', node=ExtractPixelsAndSaveConfig)
-cs.store(group='run', name='prepare_naturalness_loc_parquets', node=PrepareNaturalnessLocParquetsConfig)
-cs.store(group='run', name='cal_vsm_patch_stats', node=CalVSMPatchStatsConfig)
-# ================================ Main Config ================================
-cs.store(name='base_config', node=RunConfig) # NOTE: name here should match the default in ../config/base/no_log.yaml
 
 @hydra.main(config_name='no_log', version_base='1.2', config_path='../config/base')
 def main(cfg):
     t0 = time.time()
     print(OmegaConf.to_yaml(cfg))
+    resolve_args(cfg.run)
     if cfg.run.target_type == 'function':
         instantiate(cfg.run)
     elif cfg.run.target_type == 'class':

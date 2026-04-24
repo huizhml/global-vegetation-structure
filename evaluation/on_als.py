@@ -98,7 +98,7 @@ def tile_level_evaluate(df: pd.DataFrame, ref_col: str, ours_col: str='ours_rh98
         'avg_height': avg_height
     }
 
-def evaluate(df_dir: str, save_dir: str = None, ref_col: str = 'als') -> dict:
+def evaluate(df_dir: str, save_dir: str = None, ref_col: str = 'als', **kwargs) -> dict:
     '''
     Correlation analysis between ALS and our predictions
     Args:

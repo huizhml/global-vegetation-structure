@@ -9,6 +9,7 @@ import geopandas as gpd
 from pathlib import Path
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
+import h5py
 import xarray as xr
 from tqdm import tqdm
 from concurrent.futures import as_completed
@@ -22,7 +23,8 @@ from concurrent.futures import ThreadPoolExecutor
 STAC_URL = "https://planetarycomputer.microsoft.com/api/stac/v1"
 
 NON_VEGETATION_CLASSES = {50, 60, 70, 80}
-
+MAX_HEIGHT = 100.0
+NODATA_IN = 32767
 
 class ProgressMonitor:
     """Background thread that prints speed and RAM stats."""
@@ -74,8 +76,159 @@ class ProgressMonitor:
             f"ETA {eta:.0f}s | "
             f"RAM {rss_gb:.2f} GB (total)"
         )
+        
+def load_vsm_naturalness(h5_file: Path, **kwargs):
+    '''
+    Load the VSM patch statistics.
+    Args:
+        vsm_patch_stats_dir: path to the VSM patch statistics directory
+    Returns:
+        ddf: DataFrame of the VSM patch statistics
+    '''
+    with h5py.File(h5_file, 'r') as f:
+        vsm_patches = f['vsm_median'][:]
+        naturalness = f['land_use_id'][:]
+        rowids = f['rowid'][:]
+    return vsm_patches, naturalness, rowids
 
 
+
+
+def batch_binning(tile, bin_width=5):
+    """
+    Vectorized binning for a batch of spatial chunks.
+    """
+    n_batch, n_bands, n_rows, n_cols = tile.shape
+    n_pixels = n_batch * n_rows * n_cols
+    n_bins = int(MAX_HEIGHT / bin_width)
+    valid = np.isfinite(tile) & (~np.isnan(tile) & (tile > 0) & (tile <= MAX_HEIGHT))  # ← add upper bound
+    nodata_mask = valid.sum(axis=1) == 0  # (n, rows, cols)
+    tile_clean = np.where(valid, tile, 0.0)
+    bin_idx = np.clip((tile_clean / bin_width).astype(np.int32), 0, n_bins - 1)
+    bin_idx = np.where(valid, bin_idx, -1)
+
+    # Reshape: merge batch, rows, cols into one pixel dimension
+    bin_flat = bin_idx.reshape(n_batch, n_bands, n_rows * n_cols)       # (n, 101, rows*cols)
+    bin_flat = bin_flat.transpose(1, 0, 2).reshape(n_bands, n_pixels)   # (101, n_pixels)
+
+    pixel_indices = np.broadcast_to(
+        np.arange(n_pixels)[np.newaxis, :], (n_bands, n_pixels)
+    )
+
+    hist = np.zeros((n_pixels, n_bins), dtype=np.float32)
+    flat_valid = bin_flat != -1
+    np.add.at(hist, (pixel_indices[flat_valid], bin_flat[flat_valid]), 1.0)
+
+    return hist, nodata_mask
+
+def loop_binning(tile, bin_width=5):
+    """
+    Per-pixel np.histogram as reference.
+ 
+    Parameters
+    ----------
+    tile : ndarray, shape (101, rows, cols)
+ 
+    Returns
+    -------
+    hist : ndarray, shape (rows, cols, n_bins)
+    """
+    n_batch, n_bands, n_rows, n_cols = tile.shape
+    n_bins = int(MAX_HEIGHT / bin_width)
+    bin_edges = np.arange(0, MAX_HEIGHT + bin_width, bin_width, dtype=np.float64)
+ 
+    hist = np.zeros((n_batch, n_rows, n_cols, n_bins), dtype=np.float32)
+    for b in range(n_batch):
+        for r in range(n_rows):
+            for c in range(n_cols):
+                col = tile[b, :, r, c]
+                valid = np.isfinite(col) & (col != NODATA_IN) & (col > 0)
+                if not valid.any():
+                    continue 
+                h, _ = np.histogram(col[valid], bins=bin_edges)
+                hist[b, r, c, :] = h
+ 
+    return hist
+
+def verify_batch_binning():
+    """
+    Verify the batch binning function.
+    """
+    np.random.seed(42)
+ 
+    # Simulate realistic data: 101 bands, 11x11 patch
+    # Values are height * 10 (so 0-1000 range), with some nodata and zeros
+    n_batch, n_bands, n_rows, n_cols = 10, 101, 11, 11
+    tile = np.random.uniform(0, 500, size=(n_batch, n_bands, n_rows, n_cols)).astype(np.float32)
+ 
+    # Add some nodata and invalid values
+    mask = np.random.random(tile.shape) < 0.3
+    tile[mask] = 0.0
+    mask2 = np.random.random(tile.shape[:-1]) < 0.05
+    tile[mask2] = NODATA_IN
+    mask3 = np.random.random(tile.shape[:-1]) < 0.05
+    tile[mask3] = np.nan
+ 
+    # Run both
+    hist_custom, nodata_mask = batch_binning(tile.copy(), bin_width=5)
+    hist_custom = hist_custom.reshape(n_batch, n_rows, n_cols, -1)
+    hist_loop = loop_binning(tile.copy(), bin_width=5)
+ 
+    # Compare
+    print("=" * 60)
+    print("SHAPE CHECK")
+    print("=" * 60)
+    print(f"Custom: {hist_custom.shape}")
+    print(f"Loop:   {hist_loop.shape}")
+ 
+    print()
+    print("=" * 60)
+    print("VALUE COMPARISON")
+    print("=" * 60)
+    max_diff = np.max(np.abs(hist_custom - hist_loop))
+    mean_diff = np.mean(np.abs(hist_custom - hist_loop))
+    print(f"Max absolute diff:  {max_diff:.8f}")
+    print(f"Mean absolute diff: {mean_diff:.8f}")
+    print(f"Match: {'YES' if max_diff < 1e-4 else 'NO'}")
+ 
+    # Show a few sample pixels
+    print()
+    print("=" * 60)
+    print("SAMPLE PIXELS (first 3 non-empty)")
+    print("=" * 60)
+    count = 0
+    for b in range(n_batch):
+        for r in range(n_rows):
+            for c in range(n_cols):
+                if hist_loop[b, r, c].sum() > 0 and count < 3:
+                    print(f"\nPixel ({r}, {c}):")
+                    print(f"  Loop:   {hist_loop[b, r, c]}")
+                    print(f"  Custom: {hist_custom[b, r, c]}")
+                    print(f"  Diff:   {hist_custom[b, r, c] - hist_loop[b, r, c]}")
+                    count += 1
+ 
+    # Benchmark on larger tile
+    print()
+    print("=" * 60)
+    print("BENCHMARK (101 x 64 x 64 tile)")
+    print("=" * 60)
+    big_tile = np.random.uniform(0, 500, size=(10, 101, 64, 64)).astype(np.float32)
+    mask = np.random.random(big_tile.shape) < 0.3
+    big_tile[mask] = 0.0
+ 
+    t0 = time.time()
+    _, _ = batch_binning(big_tile.copy(), bin_width=5)
+    t_custom = time.time() - t0
+ 
+    t0 = time.time()
+    _ = loop_binning(big_tile.copy(), bin_width=5)
+    t_loop = time.time() - t0
+ 
+    print(f"Custom:  {t_custom:.3f}s")
+    print(f"Loop:    {t_loop:.3f}s")
+    print(f"Speedup: {t_loop / t_custom:.1f}x")
+    
+    
 
 def plot_biome_samples(gdf_dissolved, points_gdf, save_path=None, figsize=(16, 10)):
     """Plot biome polygons with sampled points overlaid, no explicit loops."""
@@ -102,8 +255,6 @@ def plot_biome_samples(gdf_dissolved, points_gdf, save_path=None, figsize=(16, 1
         plt.savefig(save_path, dpi=200, bbox_inches="tight")
     plt.close()
     
-
-
 
 def _sample_tile(item, xs, ys, indices):
     """Read land cover values for points falling within one tile."""
@@ -279,6 +430,10 @@ def partition_points_by_tile(gdf_file: str, s2_tile_file: str, save_dir: str, **
         points_gdf_tile = points_gdf[points_gdf.Name == tile]
         points_gdf_tile.to_parquet(save_dir / f'{tile}.parquet')
         print(f"Saved {len(points_gdf_tile)} points to {save_dir / f'{tile}.parquet'}")
+
+
+
+
 
 if __name__ == "__main__":
     sample_points_by_biome(
