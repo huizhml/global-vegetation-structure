@@ -242,7 +242,7 @@ class BaseModel(LightningModule):
             self.predict_step = self._predict_step_for_large_tile
         else:            
             self.predict_step = self._predict_step_for_small_patch
-            self.trainer.datamodule.pred_dataset.init_out_h5(self.logger._experiment.id)
+            self.trainer.datamodule.pred_dataset.init_out_file(self.logger._experiment.id)
     
     @torch.no_grad()
     def _predict_step_for_large_tile(self, sample, batch_idx):

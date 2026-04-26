@@ -1,0 +1,11 @@
+1. Update the code for saving vsm predictions for naturalness (2017), somewhere in the predicting pipeline
+Changes:
+1.1 I changed the dataset name in the h5 file, to make it consistent with vsm for naturalness for 2020
+rhs_median -> vsm_median
+rhs_upper -> vsm_upper
+rhs_lower -> vsm_lower
+1.2 I add 'land_use_id' in the h5 file, to make it consistent with vsm for naturalness for 2020
+
+
+2. Re-predict vsm for 2017
+there are 32% nan predictions (samples)

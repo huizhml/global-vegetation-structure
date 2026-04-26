@@ -1,3 +1,4 @@
+import time
 import os
 from typing import Union
 from pathlib import Path
@@ -14,13 +15,129 @@ import pandas as pd
 from lightning.pytorch import LightningDataModule
 
 from download.core.utils import get_epsg_from_tile, get_dense_latlon
-from const import MASKED_VALUE, coverage_beams, power_beams
+from const import NO_DATA, SCL_EXCLUDE_LABELS, SCL_WATER, ESA_BUILT_UP, ESA_WATER, ESA_SNOW
 
+
+import zarr
+from zarr.codecs import BloscCodec, BloscShuffle
+
+def init_out_zarr(pred_fp: Path = None, length: int = None):
+    if not os.path.exists(pred_fp):
+        print(f'Creating empty Zarr store {pred_fp}')
+        store = zarr.open(str(pred_fp), mode='w', zarr_format=3)
+        
+        # Zarr v3 expects a bytes->bytes codec, not numcodecs.Blosc.
+        compressors = (BloscCodec(cname='zstd', clevel=1, shuffle=BloscShuffle.noshuffle),)
+        
+        # Chunk along loc in batches of 100 instead of 1
+        loc_chunk = 1 #min(100, length)
+        
+        store.create_dataset('slope',      shape=(length, 15, 15),       chunks=(loc_chunk, 15, 15),       dtype='float32',  fill_value=0)
+        store.create_dataset('centroid',   shape=(length, 2),            chunks=(length, 2),               dtype='float32',  fill_value=0)
+        store.create_dataset('rowid',      shape=(length,),              chunks=(length,),                 dtype='int32',    fill_value=0)
+        store.create_dataset('s2',         shape=(length, 12, 15, 15),   chunks=(loc_chunk, 12, 15, 15),  dtype='int16',    fill_value=NO_DATA)
+        store.create_dataset('rhs_median', shape=(length, 101, 15, 15),  chunks=(loc_chunk, 101, 15, 15), dtype='int16',    fill_value=NO_DATA)
+        store.create_dataset('rhs_lower',  shape=(length, 101, 15, 15),  chunks=(loc_chunk, 101, 15, 15), dtype='int16',    fill_value=NO_DATA)
+        store.create_dataset('rhs_upper',  shape=(length, 101, 15, 15),  chunks=(loc_chunk, 101, 15, 15), dtype='int16',    fill_value=NO_DATA)
+        
+        print(f'Zarr store {pred_fp} created')
+        
+        
+def init_out_h5(pred_fp: Path = None, length: int = None):
+    if not os.path.exists(pred_fp):
+        # Create empty datasets with xarray
+        print(f'Creating empty H5 file {pred_fp}')
+        ds = xr.Dataset(
+            data_vars={
+                'slope': (['loc', 'y', 'x'], np.zeros((length, 15, 15), dtype=np.float32)),
+                'centroid': (['loc', 'coord'], np.zeros((length, 2), dtype=np.float32)),
+                'rowid': (['loc'], np.zeros(length, dtype=np.int32)),
+                's2': (['loc', 'band', 'y', 'x'], np.zeros((length, 12, 15, 15), dtype=np.int16)),
+                'rhs_median': (['loc', 'rh', 'y', 'x'], np.zeros((length, 101, 15, 15), dtype=np.int16)),
+                'rhs_lower': (['loc', 'rh', 'y', 'x'], np.zeros((length, 101, 15, 15), dtype=np.int16)),
+                'rhs_upper': (['loc', 'rh', 'y', 'x'], np.zeros((length, 101, 15, 15), dtype=np.int16)),
+            },
+            coords={
+                'loc': np.arange(length),
+                'band': np.arange(12),
+                'y': np.arange(15),
+                'x': np.arange(15),
+                'coord': ['lon', 'lat'],
+                'rh': np.arange(101)
+            }
+        )
+        # Save as netCDF file
+        comp = {
+            'slope': {
+                'zlib': False,
+                'fletcher32': True,
+                'chunksizes': (1, 15, 15)
+            },
+            'centroid': {
+                'zlib': False,
+                'fletcher32': True,
+                'chunksizes': (1, 2)
+            },
+            'rowid': {
+                'zlib': False,
+                'fletcher32': True,
+                'chunksizes': (1,)
+            },
+            's2': {
+                'zlib': False,
+                'fletcher32': True,
+                'chunksizes': (1, 12, 15, 15)
+            },
+            'rhs_median': {
+                'zlib': False,
+                'fletcher32': True,
+                'chunksizes': (1, 101, 15, 15)
+            },
+            'rhs_lower': {
+                'zlib': False,
+                'fletcher32': True,
+                'chunksizes': (1, 101, 15, 15)
+            },
+            'rhs_upper': {
+                'zlib': False,
+                'fletcher32': True,
+                'chunksizes': (1, 101, 15, 15)
+            }
+        }
+        ds.to_netcdf(pred_fp, mode='w', format='NETCDF4', engine='h5netcdf', encoding=comp)
+        print(f'H5 file {pred_fp} created')
+        
+def write_patches_zarr(pred_fp: Path = None, rhs_median: torch.Tensor = None, rhs_lower: torch.Tensor = None, rhs_upper: torch.Tensor = None, image: torch.Tensor = None, coords: torch.Tensor = None, rowid: torch.Tensor = None, batch_size: int = 1, batch_idx: int = 0):
+    store = zarr.open(str(pred_fp), mode='r+')
+    
+    real_batch_size = rhs_median.shape[0]
+    idx_start = batch_idx * batch_size
+    idx_end = idx_start + real_batch_size
+    
+    store['rhs_median'][idx_start:idx_end] = rhs_median
+    store['rhs_lower'][idx_start:idx_end]  = rhs_lower
+    store['rhs_upper'][idx_start:idx_end]  = rhs_upper
+    store['s2'][idx_start:idx_end]         = image
+    store['centroid'][idx_start:idx_end]   = coords.cpu().numpy().astype(np.float32)
+    store['rowid'][idx_start:idx_end]      = rowid.cpu().numpy().astype(np.int32)
+    
+def write_patches_h5(pred_fp: Path = None, rhs_median: torch.Tensor = None, rhs_lower: torch.Tensor = None, rhs_upper: torch.Tensor = None, image: torch.Tensor = None, coords: torch.Tensor = None, rowid: torch.Tensor = None, batch_size: int = 1, batch_idx: int = 0):
+    with h5py.File(pred_fp, 'a') as f:
+        real_batch_size = rhs_median.shape[0]
+        idx_start = batch_idx * batch_size
+        idx_end = idx_start + real_batch_size
+        f['rhs_median'][idx_start:idx_end] = rhs_median
+        f['rhs_lower'][idx_start:idx_end] = rhs_lower
+        f['rhs_upper'][idx_start:idx_end] = rhs_upper
+        f['s2'][idx_start:idx_end] = image
+        f['centroid'][idx_start:idx_end] = coords.cpu().numpy().astype(np.float32)
+        f['rowid'][idx_start:idx_end] = rowid.cpu().numpy().astype(np.int32)
+        
 
 class SparsePredDataset(Dataset):
-    scl_exclude_labels = torch.tensor([0,1, 3, 8, 9, 10, 11], dtype=torch.uint16)  # Example SCL labels to exclude
+    scl_exclude_labels = torch.tensor(SCL_EXCLUDE_LABELS, dtype=torch.uint16)  # Example SCL labels to exclude
 
-    def __init__(self, h5_file:str, mask_with_scl:bool=True, pred_file_path:str=None, batch_size:int=1, patch_size:int=31) -> None:
+    def __init__(self, h5_file:str, mask_with_scl:bool=True, pred_file_path:str=None, batch_size:int=1, patch_size:int=31, out_file_format:str='zarr') -> None:
         super().__init__()
         self.patch_size = patch_size
         self.h5_file = Path(h5_file).expanduser()
@@ -32,7 +149,14 @@ class SparsePredDataset(Dataset):
             self.pred_fp = self.h5_file.parent / 'vs_prediction.h5'
         else:
             self.pred_fp = Path(pred_file_path).expanduser()
-    
+        self.out_file_format = out_file_format
+        if self.out_file_format == 'h5':
+            self.dump_data = write_patches_h5
+        elif self.out_file_format == 'zarr':
+            self.dump_data = write_patches_zarr
+        else:
+            raise ValueError(f'Unsupported file format: {self.out_file_format}')
+
     def __len__(self):
         return self.length
     
@@ -53,68 +177,19 @@ class SparsePredDataset(Dataset):
         if hasattr(self, 'data'):
             self.data.close()
     
-    def init_out_h5(self, run_id:str=None):
-        self.pred_fp = self.pred_fp.with_name(self.pred_fp.stem + f'_{run_id}_ps31').with_suffix('.h5')
-        if not os.path.exists(self.pred_fp):
-            # Create empty datasets with xarray
-            ds = xr.Dataset(
-                data_vars={
-                    'slope': (['loc', 'y', 'x'], np.zeros((self.length, 15, 15), dtype=np.float32)),
-                    'centroid': (['loc', 'coord'], np.zeros((self.length, 2), dtype=np.float32)),
-                    'rowid': (['loc'], np.zeros(self.length, dtype=np.int32)),
-                    's2': (['loc', 'band', 'y', 'x'], np.zeros((self.length, 12, 15, 15), dtype=np.int16)),
-                    'rhs_median': (['loc', 'rh', 'y', 'x'], np.zeros((self.length, 101, 15, 15), dtype=np.int16)),
-                    'rhs_lower': (['loc', 'rh', 'y', 'x'], np.zeros((self.length, 101, 15, 15), dtype=np.int16)),
-                    'rhs_upper': (['loc', 'rh', 'y', 'x'], np.zeros((self.length, 101, 15, 15), dtype=np.int16)),
-                },
-                coords={
-                    'loc': np.arange(self.length),
-                    'band': np.arange(12),
-                    'y': np.arange(15),
-                    'x': np.arange(15),
-                    'coord': ['lon', 'lat'],
-                    'rh': np.arange(101)
-                }
-            )
-            # Save as netCDF file
-            comp = {
-                'slope': {
-                    'zlib': False,
-                    'fletcher32': True,
-                    'chunksizes': (1, 15, 15)
-                },
-                'centroid': {
-                    'zlib': False,
-                    'fletcher32': True,
-                    'chunksizes': (1, 2)
-                },
-                'rowid': {
-                    'zlib': False,
-                    'fletcher32': True,
-                    'chunksizes': (1,)
-                },
-                's2': {
-                    'zlib': False,
-                    'fletcher32': True,
-                    'chunksizes': (1, 12, 15, 15)
-                },
-                'rhs_median': {
-                    'zlib': False,
-                    'fletcher32': True,
-                    'chunksizes': (1, 101, 15, 15)
-                },
-                'rhs_lower': {
-                    'zlib': False,
-                    'fletcher32': True,
-                    'chunksizes': (1, 101, 15, 15)
-                },
-                'rhs_upper': {
-                    'zlib': False,
-                    'fletcher32': True,
-                    'chunksizes': (1, 101, 15, 15)
-                }
-            }
-            ds.to_netcdf(self.pred_fp, mode='w', format='NETCDF4', engine='h5netcdf', encoding=comp)
+    
+    def init_out_file(self, run_id:str=None):
+        if self.out_file_format == 'h5':
+            self.pred_fp = self.pred_fp.with_name(self.pred_fp.stem + f'_{run_id}_ps31').with_suffix('.h5')
+            init_out_h5(self.pred_fp, self.length)
+        elif self.out_file_format == 'zarr':
+            self.pred_fp = self.pred_fp.with_name(self.pred_fp.stem + f'_{run_id}_ps31').with_suffix('.zarr')
+            init_out_zarr(self.pred_fp, self.length)
+        else:
+            raise ValueError(f'Unsupported file format: {self.out_file_format}')
+    
+    
+    
     
     def write_patch_predictions(self, prediction, image, scl, coords, rowid, batch_idx):
         """
@@ -135,37 +210,51 @@ class SparsePredDataset(Dataset):
             scl_mask = scl_mask.unsqueeze(1)  # (B, 1, 15, 15)
         else:
             scl_mask = torch.zeros_like(scl, dtype=torch.bool).unsqueeze(1)
+        
+        scl = scl.unsqueeze(1)
+        nodata_mask = scl == 0
 
-        # mask water (esa wc | scl water) and built-up (esa wc built-up), and snow (esa wc snow)
-        water_mask_scl = (scl == 6).unsqueeze(1)
-        esa_wc = torch.argmax(esa_wc, dim=1, keepdim=True).to(torch.int8)
-        built_up_mask = esa_wc == 5
-        water_mask_esa = esa_wc == 8 # predicted esa wc
-        esa_wc_mask = esa_wc == 7
-        rhs = torch.where(scl_mask | esa_wc_mask, 0, rhs)
-        rhs = torch.where(water_mask_scl | water_mask_esa | built_up_mask, 0, rhs)
+        # ESA class prediction
+        esa_wc = torch.argmax(esa_wc, dim=1, keepdim=True)
 
-        rhs = (rhs * 100).round()
-        # Reshape to (B, 101, 3, 15, 15)
-        border = (rhs.shape[2] - 15)//2
-        rhs = rhs[:, :, border:-border, border:-border].reshape(-1, 101, 3, 15, 15)
-        image = image[:, :, border:-border, border:-border]
+        # Build combined invalid mask, shape (B, 1, H, W)
+        invalid_mask = nodata_mask | scl_mask
+
+        water_mask_scl = scl == SCL_WATER
+        built_up_mask = esa_wc == ESA_BUILT_UP
+        water_mask_esa = esa_wc == ESA_WATER
+        esa_snow_mask = esa_wc == ESA_SNOW
+
+        invalid_mask |= water_mask_scl
+        invalid_mask |= built_up_mask
+        invalid_mask |= water_mask_esa
+        invalid_mask |= esa_snow_mask
+
+        # In-place broadcasted masking; avoids repeat(303) allocation
+        rhs.masked_fill_(invalid_mask, torch.nan)
+
+        rhs.mul_(10).round_()
+        rhs = torch.nan_to_num(rhs, nan=NO_DATA)
+
+        border = (rhs.shape[2] - 15) // 2
+
+        if border > 0:
+            rhs = rhs[:, :, border:-border, border:-border]
+            image = image[:, :, border:-border, border:-border]
+
+        rhs = rhs.reshape(-1, 101, 3, 15, 15)
+
+        # Move to CPU only after all GPU-side work is done
+        rhs = rhs.cpu().numpy().astype(np.int16)
+        image = image.cpu().numpy().astype(np.int16)
         rhs_median = rhs[:, :, 1, :, :]  # (B, 101, 15, 15)
         rhs_lower = rhs[:, :, 2, :, :]
         rhs_upper = rhs[:, :, 0, :, :]
 
         # Write to the output h5 file
-        with h5py.File(self.pred_fp, 'a') as f:
-            real_batch_size = rhs_median.shape[0]
-            idx_start = batch_idx * self.batch_size
-            idx_end = idx_start + real_batch_size
-            f['rhs_median'][idx_start:idx_end] = rhs_median
-            f['rhs_lower'][idx_start:idx_end] = rhs_lower
-            f['rhs_upper'][idx_start:idx_end] = rhs_upper
-            f['s2'][idx_start:idx_end] = image.cpu().numpy()
-            f['centroid'][idx_start:idx_end] = coords.cpu().numpy()
-            f['rowid'][idx_start:idx_end] = rowid.cpu().numpy()
-        
+        t0 = time.time()
+        self.dump_data(self.pred_fp, rhs_median, rhs_lower, rhs_upper, image, coords, rowid, self.batch_size, batch_idx)
+        print(f'File {self.pred_fp} updated in {time.time() - t0} seconds')
         
 class SparsePredDataModule(LightningDataModule):
     def __init__(self, pred_fp: str = None,  prediction_dir: str = None, batch_size: int = 1, num_workers: int = 4, **kwargs):

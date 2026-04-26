@@ -9,6 +9,12 @@ LON_COS_STD = 0.5706
 SLOPE_MEAN = 6.5781
 SLOPE_STD = 8.9007
 
+SCL_EXCLUDE_LABELS = [0, 1, 3, 8, 9, 10, 11, 65535]
+SCL_WATER = 6
+ESA_SNOW = 7
+ESA_BUILT_UP = 5
+ESA_WATER = 8
+
 ESA_WC = {
     'unknown': 0,
     'Tree cover': 10,

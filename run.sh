@@ -3,7 +3,7 @@
 #SBATCH --partition=ml4good
 ##SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=64G
+#SBATCH --mem=32G
 #SBATCH --gres=gpu:1
 #SBATCH --time=1-23:50:00
 #SBATCH --job-name=run
@@ -11,7 +11,7 @@
 #SBATCH --error=./logs/%x-%A_%a.err
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=huzh@di.ku.dk
-#SBATCH --exclude hendrixgpu26fl,hendrixgpu11fl,hendrixgpu12fl
+#SBATCH --exclude hendrixgpu11fl,hendrixgpu12fl
 ##SBATCH --exclude hendrixgpu04fl,hendrixgpu03fl,hendrixgpu08fl,hendrixgpu11fl,hendrixgpu12fl,hendrixgpu14fl,hendrixgpu15fl,hendrixgpu18fl #for using /scratch
 echo "***************************** JOB INFO *****************************"
 echo "Job Name: $SLURM_JOB_NAME"
@@ -227,9 +227,9 @@ run_id=cg11fpjr
 echo $run_id
 echo predict for downstream task;
 python run.py predict -c config/predict.yaml --model.backbone config/model/xception_mix_order.yaml \
-        --data.class_path datasets._h5_dataset.SparsePredDataModule \
-        --data.init_args.pred_fp ~/data/gvs/downstream_task_data/s2_2017_ps31.h5 \
-        --data.init_args.prediction_dir ~/data/gvs/downstream_task_data/rhs_predictions_2017 \
+        --data.class_path datasets.h5_dataset.SparsePredDataModule \
+        --data.init_args.pred_fp ~/data/gvs/downstream_tasks/naturalness/results_from_vsm_2017/s2_gedi_patches_ps31/s2_2017_ps31.h5 \
+        --data.init_args.prediction_dir ~/data/gvs/downstream_tasks/naturalness/results_from_vsm_2017/vsm_patches_ps15_single_h5/ \
         --data.init_args.batch_size 2048 \
         --trainer.logger.init_args.id $run_id
 ;;
@@ -239,7 +239,7 @@ run_id=0crmfaia
 echo $run_id
 echo downstream task training with full profile;
 python run.py fit -c config/train_naturalness.yaml --model.backbone config/model/xception_mix_order.yaml \
-        --data.class_path datasets._h5_dataset.NaturalnessDataModule \
+        --data.class_path datasets.h5_dataset.NaturalnessDataModule \
         --data.init_args.h5_file ~/data/gvs/downstream_task_data/rhs_predictions_2017_${run_id}_ps31.h5 \
         --data.init_args.naturalness_fp ~/data/gvs/downstream_task_data/naturalness/reference_data_set_updated.with_images.csv \
         --data.init_args.use_full_profile True \
@@ -256,7 +256,7 @@ run_id=0crmfaia
 echo $run_id
 echo downstream task training with s2 only;
 python run.py fit -c config/train_naturalness.yaml --model.backbone config/model/xception_mix_order.yaml \
-        --data.class_path datasets._h5_dataset.NaturalnessDataModule \
+        --data.class_path datasets.h5_dataset.NaturalnessDataModule \
         --data.init_args.h5_file ~/data/gvs/downstream_task_data/rhs_predictions_2017_${run_id}_ps31.h5 \
         --data.init_args.naturalness_fp ~/data/gvs/downstream_task_data/naturalness/reference_data_set_updated.with_images.csv \
         --model.init_args.mean_std_fp ~/data/gvs/downstream_task_data/naturalness/mean_std_${run_id}.npz \
@@ -272,7 +272,7 @@ run_id=0crmfaia
 echo $run_id
 echo downstream task training with s2 and top height;
 python run.py fit -c config/train_naturalness.yaml --model.backbone config/model/xception_mix_order.yaml \
-        --data.class_path datasets._h5_dataset.NaturalnessDataModule \
+        --data.class_path datasets.h5_dataset.NaturalnessDataModule \
         --data.init_args.h5_file ~/data/gvs/downstream_task_data/rhs_predictions_2017_${run_id}_ps31.h5 \
         --data.init_args.naturalness_fp ~/data/gvs/downstream_task_data/naturalness/reference_data_set_updated.with_images.csv \
         --data.init_args.mean_std_fp ~/data/gvs/downstream_task_data/naturalness/mean_std_${run_id}.npz \
@@ -290,7 +290,7 @@ run_id=0crmfaia
 echo $run_id
 echo downstream task training with rhs only;
 python run.py fit -c config/train_naturalness.yaml --model.backbone config/model/xception_mix_order.yaml \
-        --data.class_path datasets._h5_dataset.NaturalnessDataModule \
+        --data.class_path datasets.h5_dataset.NaturalnessDataModule \
         --data.init_args.h5_file ~/data/gvs/downstream_task_data/rhs_predictions_2017_${run_id}_ps31.h5 \
         --data.init_args.naturalness_fp ~/data/gvs/downstream_task_data/naturalness/reference_data_set_updated.with_images.csv \
         --data.init_args.use_full_profile True \
@@ -308,7 +308,7 @@ run_id=0crmfaia
 echo $run_id
 echo downstream task training with rhs only;
 python run.py fit -c config/train_naturalness.yaml --model.backbone config/model/xception_mix_order.yaml \
-        --data.class_path datasets._h5_dataset.NaturalnessDataModule \
+        --data.class_path datasets.h5_dataset.NaturalnessDataModule \
         --data.init_args.h5_file ~/data/gvs/downstream_task_data/rhs_predictions_2017_${run_id}_ps31.h5 \
         --data.init_args.naturalness_fp ~/data/gvs/downstream_task_data/naturalness/reference_data_set_updated.with_images.csv \
         --data.init_args.use_full_profile False \

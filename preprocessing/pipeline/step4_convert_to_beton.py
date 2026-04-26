@@ -9,7 +9,7 @@ from ffcv.writer import DatasetWriter
 from ffcv.loader import Loader, OrderOption
 from ffcv.fields import NDArrayField, IntField, FloatField
 from tqdm import tqdm
-from datasets._h5_dataset import S2Dataset
+from datasets.h5_dataset import S2Dataset
 import random
 import pandas as pd
 import geopandas as gpd

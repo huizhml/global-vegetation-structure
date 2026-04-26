@@ -15,7 +15,7 @@ lr_scheduler:
 
 
 data:
-  class_path: datasets._h5_dataset.NaturalnessDataModule
+  class_path: datasets.h5_dataset.NaturalnessDataModule
   init_args: 
     h5_file: ~/data/gvs/downstream_task_data/rhs_predictions_2017_izraz2av.h5
     naturalness_fp: ~/data/gvs/downstream_task_data/naturalness/reference_data_set_updated.csv

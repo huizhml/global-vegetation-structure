@@ -33,6 +33,8 @@ import pystac_client
 from download.core.stackstac_lib import stack
 from download.core.constants import S2_ITEM_PROPS
 from download.core.utils import get_patch, row_to_stac_item, harmonize_to_old
+from const import SCL_EXCLUDE_LABELS, SCL_WATER, ESA_BUILT_UP, ESA_WATER, ESA_SNOW
+
 
 MASKED_VALUE = {
     'int16': 32767,
@@ -158,12 +160,8 @@ class BaseDeployDataset(Dataset):
         self.nodata_value = MASKED_VALUE[self.output_dtype]
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         # cloud shadows, CLOUD_MEDIUM_PROBABILITY, CLOUD_HIGH_PROBABILITY, SNOW, water, nodata
-        self.scl_exclude_labels = torch.tensor([0, 1, 3, 8, 9, 10, 11, 65535], dtype=torch.uint16, device=device) # scl is uint16
+        self.scl_exclude_labels = torch.tensor(SCL_EXCLUDE_LABELS, dtype=torch.uint16, device=device) # scl is uint16
         # self.esa_exclude_labels = torch.tensor([5, 8], dtype=torch.uint8, device=device) # built-up, water
-        self.scl_water = 6
-        self.esa_snow = 7
-        self.esa_built_up = 5
-        self.esa_water = 8
         # self.scl_zero_canopy_height = torch.tensor([5, 6], dtype=torch.uint16, device=device)  # "not vegetated", "water"
         self.prediction_cache = defaultdict(list)
         
@@ -270,14 +268,14 @@ class BaseDeployDataset(Dataset):
         esa_wc[nodata_mask] = float('nan')
         nodata_mask = nodata_mask.repeat(1, 303, 1, 1)
         prediction_no_border[nodata_mask] = float('nan') # mask the prediction when input is nodata
-        water_mask_scl = torch.mode(scl, dim=0).values == self.scl_water #!!! this is not nan mode,mode value could be nan, resulting in all-false water mask
+        water_mask_scl = torch.mode(scl, dim=0).values == SCL_WATER #!!! this is not nan mode,mode value could be nan, resulting in all-false water mask
         
         # NOTE: this cannot mask all water pixels neither, there are cloud pixels, scl shows as cloud or even vegetation instead of water, 
         # and the predicted land cover also fails because of the cloud pixels.
         # water_mask_scl = (scl == self.scl_water).any(dim=0) 
-        built_up_mask = torch.mode(esa_wc, dim=0).values == self.esa_built_up
-        water_mask_esa = torch.mode(esa_wc, dim=0).values == self.esa_water # predicted esa wc
-        esa_wc_mask = esa_wc == self.esa_snow
+        built_up_mask = torch.mode(esa_wc, dim=0).values == ESA_BUILT_UP
+        water_mask_esa = torch.mode(esa_wc, dim=0).values == ESA_WATER # predicted esa wc
+        esa_wc_mask = esa_wc == ESA_SNOW
         prediction_no_border = torch.where(scl_mask | esa_wc_mask, torch.nan, prediction_no_border)
         if self.save_intermediate_tif:
             prediction_no_border = prediction_no_border[:, 295, :, :]
