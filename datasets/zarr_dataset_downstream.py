@@ -129,12 +129,12 @@ class ZarrSentinel2Downstream(Dataset):
         prediction = (prediction * 100).round()
         prediction = np.nan_to_num(prediction.cpu().numpy(), nan=MASKED_VALUE).astype(np.int16)
         rhs = prediction[:, :303, :, :].reshape(-1, 101, 3, 15, 15)
-        rhs_median = rhs[:,:,1,:,: ]
-        rhs_lower = rhs[:,:,0,:,: ]
-        rhs_upper = rhs[:,:,2,:,: ]
-        ds = xr.Dataset(data_vars={'rhs_median': (['rowid','rh', 'y', 'x'], rhs_median),
-                                   'rhs_lower': (['rowid', 'rh', 'y', 'x'], rhs_lower),
-                                   'rhs_upper': (['rowid', 'rh', 'y', 'x'], rhs_upper),
+        vsm_median = rhs[:,:,1,:,: ]
+        vsm_lower = rhs[:,:,0,:,: ]
+        vsm_upper = rhs[:,:,2,:,: ]
+        ds = xr.Dataset(data_vars={'vsm_median': (['rowid','rh', 'y', 'x'], vsm_median),
+                                   'vsm_lower': (['rowid', 'rh', 'y', 'x'], vsm_lower),
+                                   'vsm_upper': (['rowid', 'rh', 'y', 'x'], vsm_upper),
                                    'centroid': (['rowid', 'coords'], coords.cpu().numpy())},
                         coords={'rowid': rowid.cpu().numpy().squeeze(), 'rh': list(range(101)), 'y': list(range(15)), 'x': list(range(15)), 'coords': ['lat', 'lon']})
         if not os.path.exists(self.pred_zarr_path):

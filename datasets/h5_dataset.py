@@ -36,9 +36,9 @@ def init_out_zarr(pred_fp: Path = None, length: int = None):
         store.create_dataset('centroid',   shape=(length, 2),            chunks=(length, 2),               dtype='float32',  fill_value=0)
         store.create_dataset('rowid',      shape=(length,),              chunks=(length,),                 dtype='int32',    fill_value=0)
         store.create_dataset('s2',         shape=(length, 12, 15, 15),   chunks=(loc_chunk, 12, 15, 15),  dtype='int16',    fill_value=NO_DATA)
-        store.create_dataset('rhs_median', shape=(length, 101, 15, 15),  chunks=(loc_chunk, 101, 15, 15), dtype='int16',    fill_value=NO_DATA)
-        store.create_dataset('rhs_lower',  shape=(length, 101, 15, 15),  chunks=(loc_chunk, 101, 15, 15), dtype='int16',    fill_value=NO_DATA)
-        store.create_dataset('rhs_upper',  shape=(length, 101, 15, 15),  chunks=(loc_chunk, 101, 15, 15), dtype='int16',    fill_value=NO_DATA)
+        store.create_dataset('vsm_median', shape=(length, 101, 15, 15),  chunks=(loc_chunk, 101, 15, 15), dtype='int16',    fill_value=NO_DATA)
+        store.create_dataset('vsm_lower',  shape=(length, 101, 15, 15),  chunks=(loc_chunk, 101, 15, 15), dtype='int16',    fill_value=NO_DATA)
+        store.create_dataset('vsm_upper',  shape=(length, 101, 15, 15),  chunks=(loc_chunk, 101, 15, 15), dtype='int16',    fill_value=NO_DATA)
         
         print(f'Zarr store {pred_fp} created')
         
@@ -53,9 +53,9 @@ def init_out_h5(pred_fp: Path = None, length: int = None):
                 'centroid': (['loc', 'coord'], np.zeros((length, 2), dtype=np.float32)),
                 'rowid': (['loc'], np.zeros(length, dtype=np.int32)),
                 's2': (['loc', 'band', 'y', 'x'], np.zeros((length, 12, 15, 15), dtype=np.int16)),
-                'rhs_median': (['loc', 'rh', 'y', 'x'], np.zeros((length, 101, 15, 15), dtype=np.int16)),
-                'rhs_lower': (['loc', 'rh', 'y', 'x'], np.zeros((length, 101, 15, 15), dtype=np.int16)),
-                'rhs_upper': (['loc', 'rh', 'y', 'x'], np.zeros((length, 101, 15, 15), dtype=np.int16)),
+                'vsm_median': (['loc', 'rh', 'y', 'x'], np.zeros((length, 101, 15, 15), dtype=np.int16)),
+                'vsm_lower': (['loc', 'rh', 'y', 'x'], np.zeros((length, 101, 15, 15), dtype=np.int16)),
+                'vsm_upper': (['loc', 'rh', 'y', 'x'], np.zeros((length, 101, 15, 15), dtype=np.int16)),
             },
             coords={
                 'loc': np.arange(length),
@@ -88,17 +88,17 @@ def init_out_h5(pred_fp: Path = None, length: int = None):
                 'fletcher32': True,
                 'chunksizes': (1, 12, 15, 15)
             },
-            'rhs_median': {
+            'vsm_median': {
                 'zlib': False,
                 'fletcher32': True,
                 'chunksizes': (1, 101, 15, 15)
             },
-            'rhs_lower': {
+            'vsm_lower': {
                 'zlib': False,
                 'fletcher32': True,
                 'chunksizes': (1, 101, 15, 15)
             },
-            'rhs_upper': {
+            'vsm_upper': {
                 'zlib': False,
                 'fletcher32': True,
                 'chunksizes': (1, 101, 15, 15)
@@ -107,28 +107,28 @@ def init_out_h5(pred_fp: Path = None, length: int = None):
         ds.to_netcdf(pred_fp, mode='w', format='NETCDF4', engine='h5netcdf', encoding=comp)
         print(f'H5 file {pred_fp} created')
         
-def write_patches_zarr(pred_fp: Path = None, rhs_median: torch.Tensor = None, rhs_lower: torch.Tensor = None, rhs_upper: torch.Tensor = None, image: torch.Tensor = None, coords: torch.Tensor = None, rowid: torch.Tensor = None, batch_size: int = 1, batch_idx: int = 0):
+def write_patches_zarr(pred_fp: Path = None, vsm_median: torch.Tensor = None, vsm_lower: torch.Tensor = None, vsm_upper: torch.Tensor = None, image: torch.Tensor = None, coords: torch.Tensor = None, rowid: torch.Tensor = None, batch_size: int = 1, batch_idx: int = 0):
     store = zarr.open(str(pred_fp), mode='r+')
     
-    real_batch_size = rhs_median.shape[0]
+    real_batch_size = vsm_median.shape[0]
     idx_start = batch_idx * batch_size
     idx_end = idx_start + real_batch_size
     
-    store['rhs_median'][idx_start:idx_end] = rhs_median
-    store['rhs_lower'][idx_start:idx_end]  = rhs_lower
-    store['rhs_upper'][idx_start:idx_end]  = rhs_upper
+    store['vsm_median'][idx_start:idx_end] = vsm_median
+    store['vsm_lower'][idx_start:idx_end]  = vsm_lower
+    store['vsm_upper'][idx_start:idx_end]  = vsm_upper
     store['s2'][idx_start:idx_end]         = image
     store['centroid'][idx_start:idx_end]   = coords.cpu().numpy().astype(np.float32)
     store['rowid'][idx_start:idx_end]      = rowid.cpu().numpy().astype(np.int32)
     
-def write_patches_h5(pred_fp: Path = None, rhs_median: torch.Tensor = None, rhs_lower: torch.Tensor = None, rhs_upper: torch.Tensor = None, image: torch.Tensor = None, coords: torch.Tensor = None, rowid: torch.Tensor = None, batch_size: int = 1, batch_idx: int = 0):
+def write_patches_h5(pred_fp: Path = None, vsm_median: torch.Tensor = None, vsm_lower: torch.Tensor = None, vsm_upper: torch.Tensor = None, image: torch.Tensor = None, coords: torch.Tensor = None, rowid: torch.Tensor = None, batch_size: int = 1, batch_idx: int = 0):
     with h5py.File(pred_fp, 'a') as f:
-        real_batch_size = rhs_median.shape[0]
+        real_batch_size = vsm_median.shape[0]
         idx_start = batch_idx * batch_size
         idx_end = idx_start + real_batch_size
-        f['rhs_median'][idx_start:idx_end] = rhs_median
-        f['rhs_lower'][idx_start:idx_end] = rhs_lower
-        f['rhs_upper'][idx_start:idx_end] = rhs_upper
+        f['vsm_median'][idx_start:idx_end] = vsm_median
+        f['vsm_lower'][idx_start:idx_end] = vsm_lower
+        f['vsm_upper'][idx_start:idx_end] = vsm_upper
         f['s2'][idx_start:idx_end] = image
         f['centroid'][idx_start:idx_end] = coords.cpu().numpy().astype(np.float32)
         f['rowid'][idx_start:idx_end] = rowid.cpu().numpy().astype(np.int32)
@@ -247,13 +247,13 @@ class SparsePredDataset(Dataset):
         # Move to CPU only after all GPU-side work is done
         rhs = rhs.cpu().numpy().astype(np.int16)
         image = image.cpu().numpy().astype(np.int16)
-        rhs_median = rhs[:, :, 1, :, :]  # (B, 101, 15, 15)
-        rhs_lower = rhs[:, :, 2, :, :]
-        rhs_upper = rhs[:, :, 0, :, :]
+        vsm_median = rhs[:, :, 1, :, :]  # (B, 101, 15, 15)
+        vsm_lower = rhs[:, :, 2, :, :]
+        vsm_upper = rhs[:, :, 0, :, :]
 
         # Write to the output h5 file
         t0 = time.time()
-        self.dump_data(self.pred_fp, rhs_median, rhs_lower, rhs_upper, image, coords, rowid, self.batch_size, batch_idx)
+        self.dump_data(self.pred_fp, vsm_median, vsm_lower, vsm_upper, image, coords, rowid, self.batch_size, batch_idx)
         print(f'File {self.pred_fp} updated in {time.time() - t0} seconds')
         
 class SparsePredDataModule(LightningDataModule):
@@ -282,13 +282,19 @@ class NaturalnessDataset(Dataset):
         
     def __len__(self):
         if not hasattr(self, 'data'):
-            self.data = h5py.File(self.rhs_fp)
-        return len(self.data['rhs_median'])
+            if self.rhs_fp.suffix == '.zarr':
+                self.data = zarr.open(str(self.rhs_fp), mode='r')
+            else:
+                self.data = h5py.File(self.rhs_fp)
+        return len(self.data['vsm_median'])
     
     def __getitem__(self, idx):
         if not hasattr(self, 'data'):
-            self.data = h5py.File(self.rhs_fp)
-        rhs = self.data['rhs_median'][idx, self.idx]
+            if self.rhs_fp.suffix == '.zarr':
+                self.data = zarr.open(str(self.rhs_fp), mode='r')
+            else:
+                self.data = h5py.File(self.rhs_fp)
+        rhs = self.data['vsm_median'][idx, self.idx]
         s2 = self.data['s2'][idx]
         rowid = self.data['rowid'][idx]
         # Return the mapped class index instead of original land use ID

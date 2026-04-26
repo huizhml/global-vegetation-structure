@@ -27,12 +27,12 @@ class NaturalnessDataset(Dataset):
     def __len__(self):
         if not hasattr(self, 'data'):
             self.data = h5py.File(self.rhs_fp)
-        return len(self.data['rhs_median'])
+        return len(self.data['vsm_median'])
     
     def __getitem__(self, idx):
         if not hasattr(self, 'data'):
             self.data = h5py.File(self.rhs_fp)
-        rhs = self.data['rhs_median'][idx, self.idx] # [101, 15, 15]
+        rhs = self.data['vsm_median'][idx, self.idx] # [101, 15, 15]
         s2 = self.data['s2'][idx] # [12, 15, 15]
         rowid = self.data['rowid'][idx]
         # Return the mapped class index instead of original land use ID
