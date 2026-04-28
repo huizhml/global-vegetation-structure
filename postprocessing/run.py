@@ -35,7 +35,7 @@ class MakeParqSubcolumnsConfig(FunctionConfig):
     parq_dir: str = '~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_test/original_with_sota_chms_ours_blended/2020'
     subcolumns: list[str] = field(default_factory=lambda: CHM_COLS)
     save_fp: str = '~/data/gvs/evaluation/sota_chm_gedi_ours_test.parquet'
-    _target_: str = "tools.make_parq_subcolumns.make_parq_subcolumns"
+    _target_: str = "tools.parq_ops.make_parq_subcolumns"
 
 @dataclass
 class GetTilesNodataConfig(FunctionConfig):

@@ -12,3 +12,5 @@ def resolve_args(args: DictConfig):
         if isinstance(value, str) and '{' in value:
             args[key] = value.format(**args)
     return args
+
+

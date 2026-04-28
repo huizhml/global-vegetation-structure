@@ -121,6 +121,20 @@ class EvaluateDiversityIndicesConfig(FunctionConfig):
     
 cs.store(group='run', name='evaluate_diversity_indices', node=EvaluateDiversityIndicesConfig)
 
+@dataclass
+class PlotBiomeCombinedBoxplotConfig(FunctionConfig):
+    indices_dir: str = '~/data/gvs/evaluation/with_gedi_on_diversity_indices/indices_by_tile/bin_width_5m/2020'
+    group_by: Optional[str] = None
+    filter_steep_slope: bool = True
+    year: int = 2020
+    plot_biome_combined_boxplot: bool = True
+    max_height: int = 50
+    save_dir: str = '~/data/gvs/evaluation/with_gedi_on_diversity_indices/results/'
+    _target_: str = "evaluation.on_diversity_indices.eval_diversity_indices"
+   
+cs.store(group='run', name='plot_biome_combined_boxplot', node=PlotBiomeCombinedBoxplotConfig) 
+
+
 # =======================================
 #   VSM on naturalness
 # =======================================
@@ -137,11 +151,12 @@ cs.store(group='run', name='prepare_naturalness_loc_parquets', node=PrepareNatur
 @dataclass
 class CalS2PatchStatsConfig(FunctionConfig):
     year: int = 2017
+    ps: int = 15
     data_type: str = 's2'
     root_dir: str = '~/data/gvs/downstream_tasks/naturalness'
     ref_csv_train: str = '{root_dir}/reference_data_set_updated_train.csv'
     patch_file: str = '{root_dir}/results_from_vsm_{year}/s2_gedi_patches_ps31/s2_{year}_ps31.h5'
-    out_file: str = '{root_dir}/results_from_vsm_{year}/s2_patch_stats_ps11_train.parquet'
+    out_file: str = '{root_dir}/results_from_vsm_{year}/intermediates/s2_patch_stats_ps{ps}_train.parquet'
     _target_: str = "evaluation.on_naturalness.cal_patch_stats"
     
 cs.store(group='run', name='cal_s2_patch_stats', node=CalS2PatchStatsConfig)
@@ -149,42 +164,34 @@ cs.store(group='run', name='cal_s2_patch_stats', node=CalS2PatchStatsConfig)
 @dataclass
 class CalAlphaEMPatchStatsConfig(FunctionConfig):
     year: int = 2017
+    ps: int = 15
     data_type: str = 'alpha_em'
     root_dir: str = '~/data/gvs/downstream_tasks'
     ref_csv_train: str = '{root_dir}/naturalness/reference_data_set_updated_train.csv'
     patch_file: str = '{root_dir}/alphaearth_embeddings/alphaearth_embeddings.h5'
-    out_file: str = '{root_dir}/naturalness/results_from_vsm_{year}/alpha_em_patch_stats_ps11_train.parquet'
+    out_file: str = '{root_dir}/naturalness/results_from_vsm_{year}/intermediates/alpha_em_patch_stats_ps{ps}_train.parquet'
     _target_: str = "evaluation.on_naturalness.cal_patch_stats"
     
 cs.store(group='run', name='cal_alpha_em_patch_stats', node=CalAlphaEMPatchStatsConfig)
 
 @dataclass
-class CalVSM17PatchStatsConfig(FunctionConfig):
+class CalVSM17PatchStatsConfig(FunctionConfig): # extract both train and val patches at once
     year: int = 2017
+    ps: int = 15
     data_type: str = 'vsm'
     root_dir: str = '~/data/gvs/downstream_tasks/naturalness'
     ref_csv_train: str = '{root_dir}/reference_data_set_updated_train.csv'
-    patch_file: str = '{root_dir}/results_from_vsm_{year}/vsm_patches_ps15_single_h5/rhs_predictions_2017_cg11fpjr.h5'
-    out_file: str = '{root_dir}/results_from_vsm_{year}/vsm_patch_stats_ps11_train.parquet'
+    patch_file: str = '{root_dir}/results_from_vsm_{year}/vsm_patches_ps15_single_h5_72xl3wma_ps31.zarr'
+    # patch_file: str = '{root_dir}/results_from_vsm_{year}/vsm_patches_ps15_single_h5/rhs_predictions_2017_cg11fpjr_old.h5'
+    out_file: str = '{root_dir}/results_from_vsm_{year}/intermediates/vsm_patch_stats_ps{ps}_train.parquet'
     _target_: str = "evaluation.on_naturalness.cal_patch_stats"
     
 cs.store(group='run', name='cal_vsm_17_patch_stats', node=CalVSM17PatchStatsConfig)
-
-@dataclass
-class RunNaturalnessClassificationConfig(FunctionConfig):
-    year: int = 2017
-    root_dir: str = '~/data/gvs/downstream_tasks/naturalness'
-    classifier: str = 'logistic_regression'
-    patch_stats_dir: str = '{root_dir}/results_from_vsm_{year}'
-    save_dir: str = '{root_dir}/results_from_vsm_{year}/naturalness_classification_ps11'
-    _target_: str = "evaluation.on_naturalness.run_classification"
-    
-cs.store(group='run', name='run_naturalness_classification', node=RunNaturalnessClassificationConfig)
-
+# For 2020
 @dataclass
 class CalVSMPatchStatsConfig(FunctionConfig):
     split: str = 'val'
-    year: int = 2017
+    year: int = 2020
     root_dir: str = '~/data/gvs/downstream_tasks'
     ref_by_tile_dir: str = '{root_dir}/naturalness/loc_by_tile_{split}'
     vsm_patches_dir: str = '{root_dir}/naturalness/results_from_vsm_{year}/vsm_patches_ps15_single_h5'
@@ -195,17 +202,53 @@ class CalVSMPatchStatsConfig(FunctionConfig):
     
 cs.store(group='run', name='cal_vsm_patch_stats', node=CalVSMPatchStatsConfig)
 @dataclass
-class PlotBiomeCombinedBoxplotConfig(FunctionConfig):
-    indices_dir: str = '~/data/gvs/evaluation/with_gedi_on_diversity_indices/indices_by_tile/bin_width_5m/2020'
-    group_by: Optional[str] = None
-    filter_steep_slope: bool = True
-    year: int = 2020
-    plot_biome_combined_boxplot: bool = True
-    max_height: int = 50
-    save_dir: str = '~/data/gvs/evaluation/with_gedi_on_diversity_indices/results/'
-    _target_: str = "evaluation.on_diversity_indices.eval_diversity_indices"
-   
-cs.store(group='run', name='plot_biome_combined_boxplot', node=PlotBiomeCombinedBoxplotConfig) 
+class MergePatchStatsConfig(FunctionConfig):
+    parq_dir: str = '~/data/gvs/downstream_tasks/naturalness/results_from_vsm_2017/intermediates'
+    ps: int = 15
+    filename_pattern: str = '*train.parquet'
+    save_fp: str = '~/data/gvs/downstream_tasks/naturalness/results_from_vsm_2017/vsm_patch_stats_ps{ps}_train.parquet'
+    _target_: str = "tools.parq_ops.merge_parq_cols"
+    
+cs.store(group='run', name='merge_patch_stats', node=MergePatchStatsConfig)
+
+@dataclass
+class RunNaturalnessClassificationConfig(FunctionConfig):
+    year: int = 2017
+    ps: int = 15
+    root_dir: str = '~/data/gvs/downstream_tasks/naturalness'
+    classifier: str = 'logistic_regression'
+    patch_stats_dir: str = '{root_dir}/results_from_vsm_{year}'
+    save_dir: str = '{root_dir}/results_from_vsm_{year}/naturalness_classification_ps{ps}'
+    _target_: str = "evaluation.on_naturalness.run_classification"
+    
+cs.store(group='run', name='run_naturalness_classification', node=RunNaturalnessClassificationConfig)
+
+@dataclass
+class PlotBarsConfig(FunctionConfig):
+    root_dir: str = '~/data/gvs/downstream_tasks/naturalness/results_from_vsm_2017/naturalness_classification_ps15'
+    summary_file: str = '{root_dir}/logistic_regression_summary_reports.csv'
+    per_class_file: str = '{root_dir}/logistic_regression_per_class_reports.csv'
+    all_cms_file: str = '{root_dir}/logistic_regression_confusion_matrices.npz'
+    save_dir: str = '{root_dir}'
+    baseline_name: str = 'rh98'
+    groups: tuple[str] = field(default_factory=lambda: ('rh98', 'full_profile', 'rh98_s2', 'key_rhs', 'rh98_cr', 'rh98_fhd', 'rh98_enl2d', 'rh98_fhd_enl1d_enl2d_cr', 'full_profile_s2'))
+    _target_: str = "evaluation.on_naturalness.plot_results"
+    
+cs.store(group='run', name='plot_bars_spatial_context', node=PlotBarsConfig)
+
+@dataclass
+class PlotBarsCenterPixelConfig(FunctionConfig):
+    root_dir: str = '~/data/gvs/downstream_tasks/naturalness/results_from_vsm_2017/naturalness_classification_ps15'
+    summary_file: str = '{root_dir}/logistic_regression_summary_reports.csv'
+    per_class_file: str = '{root_dir}/logistic_regression_per_class_reports.csv'
+    all_cms_file: str = '{root_dir}/logistic_regression_confusion_matrices.npz'
+    save_dir: str = '{root_dir}'
+    baseline_name: str = 'full_profile_center'
+    groups: tuple[str] = field(default_factory=lambda: ('full_profile_center', 'full_profile'))
+    _target_: str = "evaluation.on_naturalness.plot_results"
+    
+cs.store(group='run', name='plot_bars_center_pixel', node=PlotBarsCenterPixelConfig)
+
 
 # =======================================
 #   Compute GLCM texture

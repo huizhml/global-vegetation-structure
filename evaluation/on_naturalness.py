@@ -5,6 +5,7 @@ import geopandas as gpd
 import dask
 import scipy
 import statsmodels.api as sm
+import zarr
 from patsy import dmatrices
 from sklearn.metrics import confusion_matrix, classification_report, f1_score, accuracy_score, recall_score, precision_score
 import numpy as np
@@ -16,6 +17,7 @@ import seaborn as sns
 import xgboost as xgb
 import warnings
 from evaluation.utils import load_vsm_naturalness, batch_binning
+from const import NO_DATA
 warnings.filterwarnings('ignore')
 warnings.filterwarnings(action='ignore', category=DeprecationWarning)
 pd.set_option('display.max_columns', None)
@@ -42,6 +44,9 @@ MODEL_NAMES = {
     'rh98_enl2d': 'RH98 + ENL2D',
     'key_rhs': 'RH98 + RH25, RH50, RH75, RH90, RH95',
     'rh98_fhd_enl1d_enl2d_cr': 'RH98 + FHD + ENL1D + ENL2D + CR',
+    'rh98_center': 'RH98 (Center Pixel)',
+    'full_profile_center': 'Full Profile (Center Pixel)',
+    'full_profile_s2': 'Full Profile + S2',
 }
 
 
@@ -99,32 +104,30 @@ def _load_patch_stats(patch_stats_dir: str, name_pattern: str='train', **kwargs)
         None
     '''
     patch_stats_dir = Path(patch_stats_dir).expanduser()
-    files = list(patch_stats_dir.glob(f'*{name_pattern}*.parquet'))
-    if len(files) == 0:
-        raise ValueError(f'No parquet files found in {patch_stats_dir} with name pattern {name_pattern}')
-    dfs = []
-    for file in files:
-        df = pd.read_parquet(file)
-        dfs.append(df)
-    import ipdb; ipdb.set_trace()
-    df = pd.concat(dfs, axis=1)
-    df = df.loc[:, ~df.columns.duplicated()]
+    patch_stats_file = list(patch_stats_dir.glob(f'*{name_pattern}.parquet'))[0]
+    df = pd.read_parquet(patch_stats_file)
     df = df.dropna()
-    ddf = ddf.dropna(subset=['avg_s2_band0', 'std_alpha_em_band0'])
-    valid = ~ddf['Land_use_ID'].isin([-1, 1])
-    ddf = ddf[valid]
+    valid = ~df['Land_use_ID'].isin([-1, 1])
+    df = df[valid]
     
-    y = ddf['Land_use_ID'].values.flatten().astype(int)
-    return ddf, y
+    y = df['Land_use_ID'].values.flatten().astype(int)
+    return df, y
 
 # ---------------------------------------
 #   Plot functions
 # ---------------------------------------
-def plot_bars(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, metric: str='Recall', avg:str='macro', save_dir: str=None, show_improve: bool=True, include_alpha_em: bool=False, **kwargs):
+def plot_bars(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, groups: tuple[str], metric: str='Recall', avg:str='macro', baseline_name: str='rh98', save_dir: str=None, show_improve: bool=True, include_alpha_em: bool=False, **kwargs):
     '''
     Plot the summary reports
+    Args:
+        summary_df: dataframe of summary reports
+        per_class_df: dataframe of per-class reports
+        groups: tuple of group names
+        metric: metric to plot
+        avg: 'macro' or 'weighted'
+        save_dir: path to save the plots
+        show_improve: if True, show delta relative to rh98 baseline
     '''
-    
     assert avg in ['macro', 'weighted']
     mask = summary_df.Metric == f'{avg} avg'
     summary_df = summary_df.loc[mask,[metric]]
@@ -133,17 +136,15 @@ def plot_bars(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, metric: str=
         summary_df = summary_df.drop(index='alpha_em')
         per_class_df = per_class_df.drop(index='alpha_em')
         
-    baseline_name = 'rh98'
-    
     # forest_types = list(per_class_df.Class.unique()) 
     forest_types = [c['short_name'] for c in LAND_USE_NAMES.values()]
-    model_names = ['rh98', 'rh98_cr', 'rh98_enl2d', 'rh98_fhd', 'rh98_fhd_enl1d_enl2d_cr', 'key_rhs', 'rh98_s2', 'full_profile'] #list(per_class_df.index.unique()) 
-    print(model_names)
-    n_models = len(model_names)
+    # model_names = ['rh98', 'rh98_cr', 'rh98_enl2d', 'rh98_fhd', 'rh98_fhd_enl1d_enl2d_cr', 'key_rhs', 'rh98_s2', 'full_profile'] #list(per_class_df.index.unique()) 
+    print(groups)
+    n_models = len(groups)
 
     # Build values dict: model_name -> list of values (per class + ALL)
     values_dict = {}
-    for model_name in model_names:
+    for model_name in groups:
         values_dict[model_name] = (
             per_class_df.loc[model_name, metric].values.tolist()
             + [summary_df.loc[model_name, metric]]
@@ -170,12 +171,12 @@ def plot_bars(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, metric: str=
     group_spacing = 0.5
     x_pos = np.arange(len(class_names)) * (n_models * bar_width + group_spacing)
 
-    fig, ax = plt.subplots(figsize=(20, 8))
+    fig, ax = plt.subplots(figsize=(20, 12))
 
     # First pass: draw bars, collect annotations
     annotations = {j: [] for j in range(len(class_names))}
 
-    for i, model_name in enumerate(model_names):
+    for i, model_name in enumerate(groups):
         values = np.array(values_dict[model_name])
         offsets = x_pos + i * bar_width
 
@@ -221,7 +222,7 @@ def plot_bars(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, metric: str=
     ax.legend(bbox_to_anchor=(0.66, 1), loc='upper left', fontsize=18)
     ax.grid(axis='y', alpha=0.3)
     plt.tight_layout()
-    plt.savefig(save_dir / f'barplot_{metric}_{avg}.pdf', dpi=150, bbox_inches='tight')
+    plt.savefig(save_dir / f'barplot_{metric}_{avg}_baseline_{baseline_name}.pdf', dpi=150, bbox_inches='tight')
     plt.close()
     
 def plot_improve_heatmap(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, metric: str='Recall', avg: str='macro', save_dir: str=None, show_improve: bool=True, include_alpha_em: bool=False, **kwargs):
@@ -303,7 +304,7 @@ def plot_confusion_matrix(all_cms: dict, save_dir: Path, include_alpha_em: bool 
     # --- Confusion matrix heatmaps ---
     class_labels = [l['short_name'] for l in LAND_USE_NAMES.values()]
     if not include_alpha_em:
-        all_cms = all_cms.drop(index='alpha_em')
+        all_cms = {k: all_cms[k] for k in all_cms.files if k != 'alpha_em'}
         
     n_models = len(all_cms)
     ncols = 3
@@ -337,7 +338,33 @@ def plot_confusion_matrix(all_cms: dict, save_dir: Path, include_alpha_em: bool 
     plt.savefig(save_dir / 'confusion_matrices.png', dpi=150, bbox_inches='tight')
     plt.close()
     
+def add_accuracy_from_cms(summary_df, per_class_df, all_cms, labels):
+    summary_df = summary_df.copy()
+    per_class_df = per_class_df.copy()
+    summary_df['Accuracy'] = np.nan
+    per_class_df['Accuracy'] = np.nan
 
+    for model_name, cm in all_cms.items():
+        cm = np.asarray(cm)
+        total = cm.sum()
+        if total == 0:
+            continue
+        tp = np.diag(cm).astype(float)
+        fn = cm.sum(axis=1) - tp
+        fp = cm.sum(axis=0) - tp
+        tn = total - tp - fn - fp
+        per_class_acc = (tp + tn) / total
+        overall_acc = np.trace(cm) / total
+
+        for cls, acc in zip(labels, per_class_acc):
+            mask = (per_class_df.index == model_name) & (per_class_df['Class'] == cls)
+            per_class_df.loc[mask, 'Accuracy'] = acc
+
+        for avg_row in ('macro avg', 'weighted avg'):
+            mask = (summary_df.index == model_name) & (summary_df['Metric'] == avg_row)
+            summary_df.loc[mask, 'Accuracy'] = overall_acc
+
+    return summary_df, per_class_df
 
 # ----------------------------------------------------------------------------------------
 #  Step 0. Prepare location parquets
@@ -384,7 +411,7 @@ def prepare_loc_parqs(naturalness_csv: str, s2_grid_file: str, save_dir: str, **
 # ----------------------------------------------------------------------------------------
 
 # ----------------------------------------------------------------------------------------
-#  Step 2. Calculate VSM patch statistics (mean and std)
+#  Step 2. Calculate VSM patch statistics (mean and std, center pixel)
 # ----------------------------------------------------------------------------------------
 def _read_s2(patch_file: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     with h5py.File(patch_file, 'r') as f:
@@ -399,15 +426,27 @@ def _read_alpha_em(patch_file: Path):
         rowids = f['rowid'][:]
     return alpha_em, rowids
 
-def _read_vsm(patch_file: Path):
-    with h5py.File(patch_file, 'r') as f:
-        vsm = f['vsm_median'][:, :, 2:-2, 2:-2]
-        rowids = f['rowid'][:]
+def _read_vsm(patch_file: Path, ps: int=15):
+    if patch_file.suffix == '.zarr':
+        store = zarr.open(str(patch_file), mode='r')
+        vsm = store['vsm_median'][:]
+        vsm = vsm.astype(np.float32)
+        vsm[vsm == NO_DATA] = np.nan
+        rowids = store['rowid'][:]
+    else:
+        with h5py.File(patch_file, 'r') as f:
+            vsm = f['vsm_median'][:]
+            vsm = vsm.astype(np.float32)
+            vsm[vsm == NO_DATA] = np.nan
+            rowids = f['rowid'][:]
+    if ps < 15:
+        border = (15 - ps) // 2
+        vsm = vsm[:, :, border:-border, border:-border]
     return vsm, rowids
     
 def cal_patch_stats(patch_file: str, ref_csv_train: str, out_file: str, data_type: str='s2', **kwargs):
     '''
-    Calculate the statistics (mean and std) of the patches (S2 patches or AlphaEarth embeddings)
+    Calculate the statistics (mean and std) of the patches (S2 patches, VSM patches or AlphaEarth embeddings)
     Args:
         patch_file: path to the patch file
         ref_csv_train: path to the reference csv file for training
@@ -427,7 +466,7 @@ def cal_patch_stats(patch_file: str, ref_csv_train: str, out_file: str, data_typ
     rowids_val = ref_df_val['rowid'].unique()
     rowids = np.concatenate([rowids_train, rowids_val])
     ref_df = pd.concat([ref_df_train, ref_df_val])
-    ref_df = ref_df.astype({'rowid': 'int32', 'ID': 'int32', 'Land_use_ID': 'uint8', 'flag': 'uint8'})
+    ref_df = ref_df.astype({'rowid': 'int32', 'ID': 'int32', 'Land_use_ID': 'int8', 'flag': 'int8'})
     ref_df = ref_df.set_index('rowid')
 
     if data_type == 's2':
@@ -454,6 +493,9 @@ def cal_patch_stats(patch_file: str, ref_csv_train: str, out_file: str, data_typ
     for b in range(avg.shape[1]):
         ref_df.loc[rowids, f'avg_{data_type}_band{b}'] = avg[:, b]
         ref_df.loc[rowids, f'std_{data_type}_band{b}'] = std[:, b]
+    center = data_patch[:, :, data_patch.shape[2]//2, data_patch.shape[3]//2]
+    for b in range(center.shape[1]):
+        ref_df.loc[rowids, f'center_{data_type}_band{b}'] = center[:, b]
     
     for split, rowids_split in zip(['train', 'val'], [rowids_train, rowids_val]):
         ref_df_split = ref_df.loc[rowids_split]
@@ -461,8 +503,11 @@ def cal_patch_stats(patch_file: str, ref_csv_train: str, out_file: str, data_typ
         file_name = out_file.with_stem(f'{out_file.stem.replace("train", split)}')
         ref_df_split.to_parquet(file_name)
         ref_df_split.to_file(file_name.with_suffix('.fgb'), driver='FlatGeobuf')
+        
     
-
+# ------------------------------
+# When the patches are tiled, use dask for parallel computation
+# ------------------------------
 def _cal_vsm_patch_stats(h5_file: str, out_file: str, cols: list, **kwargs):
     '''
     Calculate the statistics (mean and std) of the VSM patches
@@ -491,7 +536,6 @@ def _cal_vsm_patch_stats(h5_file: str, out_file: str, cols: list, **kwargs):
     stats.to_parquet(out_file)
 
 
-
 def cal_vsm_patch_stats(ref_by_tile_dir: str, vsm_patches_dir: str, save_dir: str, **kwargs):
     '''
     Calculate the statistics (mean and std) of the VSM patches (tiled)
@@ -505,8 +549,8 @@ def cal_vsm_patch_stats(ref_by_tile_dir: str, vsm_patches_dir: str, save_dir: st
     vsm_patches_dir = Path(vsm_patches_dir).expanduser()
     save_dir = Path(save_dir).expanduser()
     save_dir.mkdir(parents=True, exist_ok=True)
-    std_cols = [f'std_RH{i}_Q1' for i in range(101)]
-    avg_cols = [f'avg_RH{i}_Q1' for i in range(101)]
+    std_cols = [f'std_vsm_band{i}' for i in range(101)]
+    avg_cols = [f'avg_vsm_band{i}' for i in range(101)]
     indices_cols = [f'{metric}_{var}' for metric in ['std', 'avg'] for var in ['fhd', 'enl1d', 'enl2d', 'cr']]
     cols = std_cols + avg_cols + ['land_use_id'] + indices_cols
     h5_files = vsm_patches_dir.glob('*.h5')
@@ -533,7 +577,10 @@ def cal_vsm_patch_stats(ref_by_tile_dir: str, vsm_patches_dir: str, save_dir: st
     return
 
 # ----------------------------------------------------------------------------------------
-#  Step 3. Run classification
+#  Step 3. Merge patch statistics from different data -- tools.parq_ops.merge_parq_cols
+# ----------------------------------------------------------------------------------------
+# ----------------------------------------------------------------------------------------
+#  Step 4. Run classification
 # ----------------------------------------------------------------------------------------
 
 def logistic_regression(x, x_val, y, **kwargs):
@@ -584,16 +631,19 @@ def run_classification(classifier: str, patch_stats_dir: str,  save_dir: str, **
     classes = np.unique(y)
     
     groups = {
-        # 'alpha_em': [f'std_alpha_em_band{i}' for i in range(64)] + [f'avg_alpha_em_band{i}' for i in range(64)],
-        'rh98': ['std_RH98_Q1', 'avg_RH98_Q1'],
-        'full_profile': [f'std_RH{i}_Q1' for i in range(101)] + [f'avg_RH{i}_Q1' for i in range(101)],
-        'rh98_s2': [f'std_s2_band{i}' for i in range(12)] + [f'avg_s2_band{i}' for i in range(12)] + ['std_RH98_Q1', 'avg_RH98_Q1'],
+        'alpha_em': [f'std_alpha_em_band{i}' for i in range(64)] + [f'avg_alpha_em_band{i}' for i in range(64)],
+        'rh98': ['std_vsm_band98', 'avg_vsm_band98'],
+        'full_profile': [f'std_vsm_band{i}' for i in range(101)] + [f'avg_vsm_band{i}' for i in range(101)],
+        'rh98_s2': [f'std_s2_band{i}' for i in range(12)] + [f'avg_s2_band{i}' for i in range(12)] + ['std_vsm_band98', 'avg_vsm_band98'],
         # 's2_only': [f'std_s2_band{i}' for i in range(12)] + [f'avg_s2_band{i}' for i in range(12)],
-        'key_rhs': [f'std_RH{i}_Q1' for i in [25, 50, 75, 90, 95, 98]] + [f'avg_RH{i}_Q1' for i in [25, 50, 75, 90, 95, 98]],
-        'rh98_cr': ['std_RH98_Q1', 'avg_RH98_Q1'] + [f'{metric}_{var}' for metric in ['std', 'avg'] for var in ['cr']],
-        'rh98_fhd': ['std_RH98_Q1', 'avg_RH98_Q1'] + [f'{metric}_{var}' for metric in ['std', 'avg'] for var in ['fhd']],
-        'rh98_enl2d': ['std_RH98_Q1', 'avg_RH98_Q1'] +[f'{metric}_{var}' for metric in ['std', 'avg'] for var in ['enl2d']],
-        'rh98_fhd_enl1d_enl2d_cr': ['std_RH98_Q1', 'avg_RH98_Q1'] + [f'{metric}_{var}' for metric in ['std', 'avg'] for var in ['fhd', 'enl1d', 'enl2d', 'cr']],
+        'key_rhs': [f'std_vsm_band{i}' for i in [25, 50, 75, 90, 95, 98]] + [f'avg_vsm_band{i}' for i in [25, 50, 75, 90, 95, 98]],
+        'rh98_cr': ['std_vsm_band98', 'avg_vsm_band98'] + [f'{metric}_{var}' for metric in ['std', 'avg'] for var in ['cr']],
+        'rh98_fhd': ['std_vsm_band98', 'avg_vsm_band98'] + [f'{metric}_{var}' for metric in ['std', 'avg'] for var in ['fhd']],
+        'rh98_enl2d': ['std_vsm_band98', 'avg_vsm_band98'] +[f'{metric}_{var}' for metric in ['std', 'avg'] for var in ['enl2d']],
+        'rh98_fhd_enl1d_enl2d_cr': ['std_vsm_band98', 'avg_vsm_band98'] + [f'{metric}_{var}' for metric in ['std', 'avg'] for var in ['fhd', 'enl1d', 'enl2d', 'cr']],
+        'rh98_center': ['center_vsm_band98'],
+        'full_profile_center': [f'center_vsm_band{i}' for i in range(101)],
+        'full_profile_s2': [f'std_s2_band{i}' for i in range(12)] + [f'avg_s2_band{i}' for i in range(12)] + [f'std_vsm_band{i}' for i in range(101)] + [f'avg_vsm_band{i}' for i in range(101)],
     }
     # Store results for comparison plots
     all_summary_reports = {}
@@ -640,6 +690,32 @@ def run_classification(classifier: str, patch_stats_dir: str,  save_dir: str, **
     all_per_class_df.to_csv(save_dir / 'logistic_regression_per_class_reports.csv')
     np.savez(save_dir / 'logistic_regression_confusion_matrices.npz', **all_cms)
     return all_summary_df, all_per_class_df, all_cms
+
+def plot_results(summary_file: str, per_class_file: str, all_cms_file: str, save_dir: str, groups: tuple[str]=None, baseline_name: str='rh98', **kwargs):
+    '''
+    Plot the results
+    Args:
+        summary_df_file: path to the summary dataframe
+        per_class_df_file: path to the per-class dataframe
+        save_dir: path to save the plots
+    Returns:
+    '''
+    all_cms_file = Path(all_cms_file).expanduser()
+    summary_file = Path(summary_file).expanduser()
+    per_class_file = Path(per_class_file).expanduser()
+    save_dir = Path(save_dir).expanduser()
+    save_dir.mkdir(parents=True, exist_ok=True)
+    all_cms = np.load(all_cms_file)
+    summary_df = pd.read_csv(summary_file, index_col=0)
+    per_class_df = pd.read_csv(per_class_file, index_col=0)
+    labels = [v['short_name'] for v in LAND_USE_NAMES.values()]
+    summary_df, per_class_df = add_accuracy_from_cms(summary_df, per_class_df, all_cms, labels)
+    plot_bars(summary_df, per_class_df, groups=groups, metric='Recall', avg='macro', baseline_name=baseline_name, save_dir=save_dir)
+    plot_bars(summary_df, per_class_df, groups=groups, metric='Precision', avg='macro', baseline_name=baseline_name, save_dir=save_dir)
+    plot_bars(summary_df, per_class_df, groups=groups, metric='F1', avg='macro', baseline_name=baseline_name, save_dir=save_dir)
+    plot_bars(summary_df, per_class_df, groups=groups, metric='Accuracy', avg='macro', baseline_name=baseline_name, save_dir=save_dir)
+    plot_confusion_matrix(all_cms, save_dir)
+
 
 def check_distribution(vsm_patch_stats_dir: str, save_dir: str, feature_cols: list, **kwargs):
     '''
@@ -693,5 +769,5 @@ if __name__ == '__main__':
     # plot_improve_heatmap(all_summary_df, all_per_class_df, metric='Precision', avg='macro', save_dir=save_dir)
     # plot_improve_heatmap(all_summary_df, all_per_class_df, metric='F1', avg='macro', save_dir=save_dir)
     # plot_confusion_matrix(all_cms, save_dir)
-    # feature_cols = ['std_RH98_Q1', 'avg_RH98_Q1'] + [f'std_fhd', 'avg_fhd'] + [f'std_enl1d', 'avg_enl1d'] + [f'std_enl2d', 'avg_enl2d'] + [f'std_cr', 'avg_cr']
+    # feature_cols = ['std_vsm_band98', 'avg_vsm_band98'] + [f'std_fhd', 'avg_fhd'] + [f'std_enl1d', 'avg_enl1d'] + [f'std_enl2d', 'avg_enl2d'] + [f'std_cr', 'avg_cr']
     # check_distribution(vsm_patch_stats_dir, save_dir, feature_cols)
