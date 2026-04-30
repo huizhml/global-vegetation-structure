@@ -11,17 +11,70 @@ import numpy as np
 from config.base_config_class import ClassConfig, FunctionConfig
 from const import KEY_RHS, CHM_COLS
 from postprocessing.core.utils import generate_run_log
+from tools.utils import resolve_args
 
+
+defaults = [
+    {'run': 'add_ours_to_sota_gedi'}, # default group
+    "_self_"
+]
 
 @dataclass
+class RunConfig:
+    defaults: List[Any] = field(default_factory=lambda: defaults)
+    run: Any = MISSING
+
+# ================================ Main Config ================================
+cs = ConfigStore.instance()
+cs.store(name='base_config', node=RunConfig) # NOTE: name here should match the default in ../config/base/no_log.yaml
+
+
+# -----------------------------------------------------------------
+#  Mask snow and water predictions, only for coastal tiles
+# -----------------------------------------------------------------
+@dataclass
+class MaskSnowWaterPredsConfig(FunctionConfig):
+    stac_collection_dir: str = '~/data/gvs/products/gvsm_stac_catalog/vsm_local'
+    year: int = 2020
+    tile_id: str = '57UVU'
+    save_dir: str = '~/data/gvs/predictions/{year}/masked/tiles/'
+    _target_: str = "postprocessing.core.mask_snow_water_preds.mask_snow_water_preds"
+
+cs.store(group='run', name='mask_snow_water_preds', node=MaskSnowWaterPredsConfig)
+
+
+# -----------------------------------------------------------------
+#  Create global mosaics
+# -----------------------------------------------------------------
+@dataclass
+class CreateMaskedGlobalMosaicConfig(FunctionConfig):
+    year: int = 2020
+    rh_idx: int = 98
+    q_idx: int = 1
+    stac_collection_dir: str = '~/data/gvs/products/gvsm_stac_catalog/vsm_local'
+    total_tile_file: str = '~/data/gvs/assets/worklists/total_tiles_2020.txt'
+    coastal_tile_file: str = '~/data/gvs/assets/worklists/tiles_coastal_snow_regions.txt'
+    save_dir: str = '~/data/gvs/predictions/{year}/masked/'
+    _target_: str = "visualization.core.create_global_view.create_global_masked_mosaic"
+
+cs.store(group='run', name='create_masked_global_mosaic', node=CreateMaskedGlobalMosaicConfig)
+
+# -----------------------------------------------------------------
+#  Stac collection operations
+# -----------------------------------------------------------------
+@dataclass
 class UpdateStacCollectionConfig(ClassConfig):
+    year: int = 2020
     collection_id: str = 'vsm'
     catalog_dir: str = '~/data/gvs/products/gvsm_stac_catalog'
     data_source: str = 'local'
     data_dir: str = '~/data/gvs/predictions'
-    new_predictions_dir: str = '~/data/gvs/predictions/2024/original/tiles/cog'
+    original_predictions_dir: str = '~/data/gvs/predictions/{year}/original/tiles/cog'
+    new_predictions_dir: str = '~/data/gvs/predictions/{year}/original/tiles/geotiff'
     target_method: str = 'update_collection'
     _target_: str = "postprocessing.core.stac_collection.StacCatalog"
+
+cs.store(group='run', name='update_stac_collection', node=UpdateStacCollectionConfig)
 
 @dataclass
 class SampleForestTempConfig(FunctionConfig):
@@ -202,17 +255,8 @@ class CreateVRTConfig(FunctionConfig):
     _target_: str = "postprocessing.core.create_vrt.create_vrt"
     
 
-defaults = [
-    {'run': 'add_ours_to_sota_gedi'}, # default group
-    "_self_"
-]
-
-@dataclass
-class RunConfig:
-    defaults: List[Any] = field(default_factory=lambda: defaults)
-    run: Any = MISSING
     
-cs = ConfigStore.instance()
+
 cs.store(group='run', name='make_parq_subcolumns', node=MakeParqSubcolumnsConfig)
 cs.store(group='run', name='get_tiles_reblend', node=GetTilesReblendConfig)
 cs.store(group='run', name='repartition_data', node=RepartitionDataConfig)
@@ -236,14 +280,13 @@ cs.store(group='run', name='translate_predictions', node=TranslatePredictionsCon
 cs.store(group='run', name='get_tiles_redundant', node=GetTilesRedundantConfig)
 cs.store(group='run', name='get_tiles_nodata', node=GetTilesNodataConfig)
 cs.store(group='run', name='sample_forest_temp', node=SampleForestTempConfig)
-cs.store(group='run', name='update_stac_collection', node=UpdateStacCollectionConfig)
-# ================================ Main Config ================================
-cs.store(name='base_config', node=RunConfig) # NOTE: name here should match the default in ../config/base/no_log.yaml
+
 
 @hydra.main(config_name='no_log', version_base='1.2', config_path='../config/base')
 def main(cfg):
     t0 = time.time()
     print(OmegaConf.to_yaml(cfg))
+    resolve_args(cfg.run)
     if cfg.run.target_type == 'function':
         instantiate(cfg.run)
     elif cfg.run.target_type == 'class':

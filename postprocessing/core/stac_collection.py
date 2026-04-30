@@ -21,15 +21,36 @@ class StacCatalog:
     Predictions for different year will be organized in different items, i.e., {tile_id}_{year}
     data_dir: 
     '''
+    EXPECTED_PREDICTION_COUNT = 303
+    PREDICTION_GLOB = 'RH*Q*.tif'
+    REFERENCE_ASSET_KEY = 'RH98_Q1'
+    RH_COUNT = 101
+    Q_COUNT = 3
     
-    def __init__(self, collection_id:str=None, catalog_dir: str=None, data_source: str=None, data_dir: str=None,  new_predictions_dir: str=None, **kwargs): 
+    def __init__(self, collection_id:str=None, catalog_dir: str=None, data_source: str=None, data_dir: str=None, original_predictions_dir: str=None, new_predictions_dir: str=None, **kwargs): 
         self.collection_id = f'{collection_id}_{data_source}'
         
         self.catalog_dir = Path(f'{catalog_dir}').expanduser()
         self.catalog_dir.mkdir(exist_ok=True)
         self.data_dir = Path(f'{data_dir}').expanduser()
         self.new_predictions_dir = new_predictions_dir
+        self.original_predictions_dir = Path(original_predictions_dir).expanduser()
         
+    def _count_predictions(self, directory: Path) -> int:
+        return len(list(directory.glob(self.PREDICTION_GLOB)))
+
+    def _asset_href_matches(self, item: pystac.Item, directory: Path) -> bool:
+        href = item.assets[self.REFERENCE_ASSET_KEY].href.replace('file://', '')
+        return href == str(directory / f'{self.REFERENCE_ASSET_KEY}.tif')
+
+    def update_asset_href(self, item: pystac.Item, pred_dir: Path):
+        for rh_idx in range(self.RH_COUNT):
+            for q_idx in range(self.Q_COUNT):
+                item.assets[f'RH{rh_idx}_Q{q_idx}'].href = (
+                    f"file://{pred_dir / f'RH{rh_idx}_Q{q_idx}.tif'}"
+                )
+        return item
+    
     def create_catalog(self):
         catalog  = pystac.Catalog(id='gvsm', description='Global Vegetation Structure Model')
         self.collection = self.create_collection()
@@ -155,8 +176,8 @@ class StacCatalog:
             }
         )
 
-        for rh_idx in range(101):
-            for q_idx in range(3):
+        for rh_idx in range(self.RH_COUNT):
+            for q_idx in range(self.Q_COUNT):
                 item.add_asset(
                     f"RH{rh_idx}_Q{q_idx}",
                     pystac.Asset(
@@ -177,31 +198,43 @@ class StacCatalog:
         self.collection.add_item(item)
 
     def update_collection(self):
-        '''
-        Usually the updated predictions should overwrite the original predictions, to make further operation logic simpler. Old predictions can be achieved in a separate folder.
-        This function is mainly for case that the original prediction folder is no longer editable, e.g., in LUMI old project.
-        '''
         year = re.search(r'\d{4}', self.new_predictions_dir).group(0)
         year = int(year)
         new_predictions_dir = Path(self.new_predictions_dir).expanduser()
         collection_dir = f'{self.catalog_dir}/{self.collection_id}'
         collection_dir = Path(collection_dir).expanduser()
         # item_dirs = collection_dir.glob(f'*_{year}')
-        tiles = os.listdir(new_predictions_dir)
+        # tiles = os.listdir(new_predictions_dir)
+        tiles = os.listdir(self.original_predictions_dir)
         tasks = []
         for tile_id in tiles:
+            # self.update_item(tile_id, year, new_predictions_dir)
             tasks.append(dask.delayed(self.update_item)(tile_id, year, new_predictions_dir))
         dask.compute(*tasks)
 
-    def update_item(self, tile_id: str, year: int=2024, new_predictions_dir: str=None):
+    def update_item(self, tile_id: str, year: int = 2024, new_predictions_dir: str = None):
         item_path = f'{self.catalog_dir}/{self.collection_id}/{tile_id}_{year}/{tile_id}_{year}.json'
         item = pystac.Item.from_file(item_path)
-        if len(list((new_predictions_dir/tile_id).glob('RH*Q*.tif'))) != 303:
-            print(f'Not enough predictions for tile {tile_id} in year {year}, skipping')
+
+        new_tile_dir = new_predictions_dir / tile_id
+        original_tile_dir = self.original_predictions_dir / tile_id
+
+        if self._count_predictions(new_tile_dir) == self.EXPECTED_PREDICTION_COUNT:
+            target_dir = new_tile_dir
+        else:
+            print(f'Not enough predictions for tile {tile_id} in year {year}, falling back to original')
+            if self._count_predictions(original_tile_dir) != self.EXPECTED_PREDICTION_COUNT:
+                raise ValueError(
+                    f'Neither new nor original predictions have {self.EXPECTED_PREDICTION_COUNT} files '
+                    f'for tile {tile_id} in year {year}'
+                )
+            target_dir = original_tile_dir
+
+        if self._asset_href_matches(item, target_dir):
+            print(f'Tile {tile_id} in year {year} already up to date')
             return
-        for rh_idx in range(101):
-            for q_idx in range(3):
-                item.assets[f'RH{rh_idx}_Q{q_idx}'].href = f"file://{new_predictions_dir / tile_id / f'RH{rh_idx}_Q{q_idx}.tif'}"
+
+        item = self.update_asset_href(item, target_dir)
         item.save_object(dest_href=item_path)
         print(f'Updated STAC item saved to {item_path}')
 
