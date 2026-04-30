@@ -11,10 +11,18 @@ SLOPE_STD = 8.9007
 
 SCL_EXCLUDE_LABELS = [0, 1, 3, 8, 9, 10, 11, 65535]
 SCL_WATER = 6
-ESA_SNOW = 7
-ESA_BUILT_UP = 5
-ESA_WATER = 8
+# predicted land cover labels
+ESA_SNOW = 7 # = 70 in ESA World Cover
+ESA_BUILT_UP = 5 # = 50 in ESA World Cover
+ESA_WATER = 8 # = 80 in ESA World Cover
 
+# ESA World cover original labels
+ESA_SNOW_RAW = 70
+ESA_BUILT_UP_RAW = 50
+ESA_WATER_RAW = 80
+ESA_UNKNOWN_RAW = 0
+
+ESA_DATETIME = '2021-01-01/2021-12-31'
 ESA_WC = {
     'unknown': 0,
     'Tree cover': 10,

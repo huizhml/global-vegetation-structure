@@ -10,8 +10,13 @@ import numpy as np
 from rio_cogeo.cogeo import cog_translate
 from rio_cogeo.profiles import cog_profiles
 import pystac
-from const import NO_DATA
+from const import NO_DATA, ESA_DATETIME, ESA_UNKNOWN_RAW, ESA_SNOW_RAW, ESA_WATER_RAW
 import re
+import rasterio
+import pystac_client
+import planetary_computer
+from pystac_client.stac_api_io import StacApiIO
+import stackstac
 try:
     import resource  # Posix: bump soft limit for open files if possible
     soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
@@ -29,6 +34,8 @@ gdal.SetConfigOption("CPL_VSIL_CURL_ALLOWED_EXTENSIONS", ".tif,.vrt")  # if read
 gdal.SetConfigOption("OGR_CT_FORCE_TRADITIONAL_GIS_ORDER", "YES")
 
 gdal.UseExceptions()
+stac_api_io = StacApiIO()
+stac_endpoint = 'https://planetarycomputer.microsoft.com/api/stac/v1'
 
 
 # Prefilter: keep only tiles that can transform to EPSG:4326 (avoid PROJ errors)
@@ -100,7 +107,7 @@ def get_bias_correction_offset(
 
 class GlobalMosaicker:
     '''
-    Global mosaicker to create global mosaic of Sentinel-2 tile based data.
+    Global mosaicker to create global mosaic of Sentinel-2 tile based data. This runs for one global layer, e.g, RH98_Q1
     Tile-level data is in local UTM projection, this class will transform the data to global projection defined by target_crs.
     And then mosaic the tiles to create a global mosaic.
     '''
@@ -112,7 +119,7 @@ class GlobalMosaicker:
                  q_idx: int = 1,
                  left_q_idx: int = 0,
                  right_q_idx: int = 2,
-                 tile_id_list_file: Union[str, Path] = None,
+                 total_tiles_file: Union[str, Path] = None,
                  bias_dir: Union[str, Path] = None,
                  stac_collection_dir: Union[str, Path] = None,
                  bias_cutoff: float = None,
@@ -132,7 +139,6 @@ class GlobalMosaicker:
         self.year = re.search(r'\d{4}', tiles_dir).group(0)
         self.rh_idx = rh_idx
         self.q_idx = q_idx
-        self.tile_id_list_file = tile_id_list_file
         self.target_res = target_res
         self.resample_alg = resample_alg
         self.dst_nodata = dst_nodata
@@ -147,6 +153,7 @@ class GlobalMosaicker:
         self.average_across_rhs = average_across_rhs
         # Ensure save directory exists
         self.save_dir.mkdir(parents=True, exist_ok=True)
+        self.tile_ids = self.get_all_tile_ids(total_tiles_file)
 
     @property
     def downsample_warp_options(self):
@@ -217,11 +224,11 @@ class GlobalMosaicker:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    def get_all_tile_ids(self):
+    def get_all_tile_ids(self, total_tiles_file: Union[str, Path]):
         '''
         Get all tile ids from the tile id list file
         '''
-        tiles_file = Path(self.tile_id_list_file).expanduser()
+        tiles_file = Path(total_tiles_file).expanduser()
         tiles = np.loadtxt(tiles_file, dtype=str)
         return tiles
 
@@ -301,7 +308,48 @@ class GlobalMosaicker:
         out_band.FlushCache()
         out_ds = None
 
-    def _warp_tile(self, dst_path: Path, src_path: Path, warp_options: dict):
+    def _mask_tile(self, pred_fp: Path, stac_item: pystac.Item, geotiff_path: Path, cog_path: Path, rh_idx: int, q_idx: int):
+        '''
+        Mask a tile with water, snow, and built-up masks from ESA World Cover
+        '''
+        if cog_path.exists():
+            return str(cog_path)
+        if not geotiff_path.exists():
+            tile_id = stac_item.id.split("_")[0]
+            bounds = stac_item.bbox
+            epsg = stac_item.properties['proj:epsg']
+            width = stac_item.assets[f'RH{rh_idx}_Q{q_idx}'].extra_fields['proj:shape'][0]
+            height = stac_item.assets[f'RH{rh_idx}_Q{q_idx}'].extra_fields['proj:shape'][1]
+            datetime = stac_item.datetime
+            
+            api = pystac_client.Client.open(stac_endpoint, modifier=planetary_computer.sign_inplace, stac_io=stac_api_io)
+            search = api.search(collections='esa-worldcover', bbox=bounds, datetime=datetime)
+            items = search.item_collection()
+            import ipdb; ipdb.set_trace()
+            if len(items) == 0:
+                raise ValueError(f'No ESA World Cover items found for tile {tile_id}')
+            wc_image = stackstac.stack(items, ['map'], bounds=bounds, epsg=epsg, resolution=10, dtype='uint16', fill_value=np.uint16(0),rescale=False)
+            wc_image = wc_image.max(dim='time', skipna=True).squeeze()
+            assert wc_image.shape == (height, width)
+            water_snow_mask = wc_image.isin([ESA_UNKNOWN_RAW, ESA_SNOW_RAW, ESA_WATER_RAW]) # nodata, snow and ice, water
+            water_snow_mask = water_snow_mask.compute()
+            
+            geotiff_path.parent.mkdir(parents=True, exist_ok=True)
+            with rasterio.open(pred_fp) as src:
+                nodata = src.nodata
+                profile = src.profile
+                data = src.read(1)
+                data[water_snow_mask] = nodata
+                with rasterio.open(str(geotiff_path), 'w', **profile) as dst:
+                    dst.write(data, indexes=1)
+        output_profile, config = self.get_cog_profile_and_config()
+        cog_path.parent.mkdir(parents=True, exist_ok=True)
+        cog_translate(geotiff_path, cog_path, output_profile, config=config,
+                      in_memory=False, quiet=True, use_cog_driver=True)
+        return str(cog_path)
+        
+    @staticmethod
+    def _warp_tile(dst_path: Path, src_path: Path, warp_options: dict):
         '''
         Warp a tile to the target projection and resolution
         '''
@@ -386,18 +434,19 @@ class GlobalMosaicker:
                       in_memory=False, quiet=True, use_cog_driver=True)
         return cog_path
         
-        
+    
+
+    
     def create_global_mosaic(self):
         '''
         Create a global mosaic
         '''
         temp_dir_name = f"tmp_tiles_resampled_1km_RH{self.rh_idx}_Q{self.q_idx}"
         temp_dir = self.init_tmp_dir(self.save_dir / temp_dir_name)
-        tile_ids = self.get_all_tile_ids()
         warp_options = dict(self.downsample_warp_options)
         tasks = [
             dask.delayed(self._warp_tile)(tile_id, temp_dir, warp_options)
-            for tile_id in tile_ids]
+            for tile_id in self.tile_ids]
         downsampled_paths = dask.compute(*tasks, scheduler="processes", num_workers=8)
 
         mosaic_path = self.save_dir / f"global_mosaic_{self.year}_RH{self.rh_idx}_Q{self.q_idx}.tif"
@@ -405,18 +454,17 @@ class GlobalMosaicker:
         cog_path = self._to_cog(mosaic_path)
         print(f"✅ Global mosaic written to {cog_path}")
     
-    def create_global_diff_mosaic(self):
+    def create_global_diff_mosaic(self, left_q_idx: int, right_q_idx: int):
         '''
         Create a global mosaic of the difference between two tiles
         '''
         # Step 1: Warp the tiles to 1km resolution
-        temp_dir_name = f"tmp_tiles_resampled_1km_RH{self.rh_idx}_Q{self.left_q_idx}-Q{self.right_q_idx}"
+        temp_dir_name = f"tmp_tiles_resampled_1km_RH{self.rh_idx}_Q{left_q_idx}-Q{right_q_idx}"
         temp_dir = self.init_tmp_dir(self.save_dir / temp_dir_name)
-        tile_ids = self.get_all_tile_ids()
         tasks = [
             dask.delayed(self._warp_tile_diff)(tile_id, temp_dir, self.downsample_warp_options_mem)
             # self._warp_tile_diff(tile_id, temp_dir, self.downsample_warp_options_mem)
-            for tile_id in tile_ids]
+            for tile_id in self.tile_ids]
         diff_paths = dask.compute(*tasks, scheduler="processes", num_workers=8)
 
         # Step 2: Mosaic the tiles
@@ -434,12 +482,11 @@ class GlobalMosaicker:
         downsampled_tmp_dir = self.init_tmp_dir(
             self.save_dir / f"tmp_tiles_resampled_1km_RH{self.rh_idx}_Q{self.q_idx}")
         vrt_tmp_dir = self.init_tmp_dir(self.save_dir / f"vrt_tmp")
-        tile_ids = self.get_all_tile_ids()
 
         warp_options = dict(self.downsample_warp_options)
         tasks = [
             dask.delayed(self._warp_tile_bias_correction)(tile_id, downsampled_tmp_dir, vrt_tmp_dir, warp_options)
-            for tile_id in tile_ids]
+            for tile_id in self.tile_ids]
         downsampled_paths = dask.compute(*tasks, scheduler="processes", num_workers=8)
 
         thumb_path = self.save_dir / f"global_mosaic_{self.year}_RH{self.rh_idx}_Q{self.q_idx}.tif"
@@ -448,6 +495,44 @@ class GlobalMosaicker:
         print(f"✅ Global mosaic written to {cog_path}")
 
 
+def get_pred_fp(stac_collection_dir: str, tile_id: str, year: int, rh_idx: int, q_idx: int):
+    '''
+    Get the prediction file path from the stac file
+    '''
+    stac_file = stac_collection_dir / f'{tile_id}_{year}/{tile_id}_{year}.json'
+    stac_item = pystac.Item.from_file(str(stac_file))
+    pred_fp = Path(stac_item.assets[f'RH{rh_idx}_Q{q_idx}'].href.replace('file://', '')).expanduser()
+    return pred_fp, stac_item
+
+def create_global_masked_mosaic(stac_collection_dir: str, total_tile_file: str, coastal_tile_file: str, save_dir: str, year: int, rh_idx: int, q_idx: int, **kwargs):
+    '''
+    Create a global mosaic with water, snow, and built-up masks from ESA World Cover
+    '''
+    stac_collection_dir = Path(stac_collection_dir).expanduser()
+    total_tile_file = Path(total_tile_file).expanduser()
+    coastal_tile_file = Path(coastal_tile_file).expanduser()
+    save_dir = Path(save_dir).expanduser()
+    save_dir.mkdir(parents=True, exist_ok=True)
+    total_tile_ids = np.loadtxt(total_tile_file, dtype=str)
+    coastal_tile_ids = np.loadtxt(coastal_tile_file, dtype=str)
+
+    tasks = []
+    for tile_id in total_tile_ids:
+        pred_fp, stac_item = get_pred_fp(stac_collection_dir, tile_id, year, rh_idx, q_idx)
+        # pred_fp, stac_item = dask.delayed(get_pred_fp)(stac_collection_dir, tile_id, year, rh_idx, q_idx)
+        import ipdb; ipdb.set_trace()
+        if tile_id in coastal_tile_ids:
+            geotiff_path = save_dir / f"tiles/geotiff/{tile_id}/RH{rh_idx}_Q{q_idx}.tif"
+            cog_path = save_dir / f"tiles/cog/{tile_id}/RH{rh_idx}_Q{q_idx}.cog.tif"
+            pred_fp = _mask_tile(pred_fp, stac_item, geotiff_path, cog_path, rh_idx, q_idx)
+            # pred_fp = dask.delayed(GlobalMosaicker._mask_tile)(pred_fp, stac_item, save_dir, rh_idx, q_idx)
+        
+        path = dask.delayed(GlobalMosaicker._warp_tile)(pred_fp, save_dir / f"{tile_id}_resampled.tif", global_mosaicker.downsample_warp_options_mem)
+        tasks.append(path)
+    mosaic_path = save_dir / f"global_masked_mosaic_{year}_RH{rh_idx}_Q{q_idx}.tif"
+    global_mosaicker._mosaic_tiles(tasks, mosaic_path)
+    cog_path = global_mosaicker._to_cog(mosaic_path)    
+    print(f"✅ Global masked mosaic written to {cog_path}")
 
 
 def _make_offset_vrt(src_path: Union[str, Path], vrt_dir: Path, offset: float, nodata: float) -> Path:
@@ -557,7 +642,7 @@ def _make_offset_vrt(src_path: Union[str, Path], vrt_dir: Path, offset: float, n
 #         dstSRS="EPSG:4326",
 #         resampleAlg="average",
 #         dstNodata=NO_DATA,
-#         creationOptions=["COMPRESS=LERC_ZSTD", "TILED=YES"],
+#         creationOptions=["COMPRESS=ZSTD", "TILED=YES"],
 #         warpOptions=["WRAP_DATELINE=YES", "INIT_DEST=NO_DATA"],
 #     )
 #     # if countries is not None:
@@ -677,7 +762,7 @@ def resample_and_mosaic(year=2020, rh_idx=98, q_idx=1, countries: str = None, s2
         dstSRS="EPSG:4326",
         resampleAlg="average",
         dstNodata=NO_DATA,
-        creationOptions=["COMPRESS=LERC_ZSTD", "TILED=YES"],
+        creationOptions=["COMPRESS=ZSTD", "TILED=YES"],
         warpOptions=["WRAP_DATELINE=YES", "INIT_DEST=NO_DATA"],
     )
     if countries is not None:
@@ -696,7 +781,7 @@ def resample_and_mosaic(year=2020, rh_idx=98, q_idx=1, countries: str = None, s2
 
     # translate to cog
     cog_path = thumb_path.with_suffix('.cog.tif')
-    output_profile = cog_profiles.get("LERC_ZSTD")
+    output_profile = cog_profiles.get("ZSTD")
     output_profile.update(dict(
         BIGTIFF="IF_SAFER",
         ZSTD_LEVEL=1,

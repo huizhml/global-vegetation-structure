@@ -49,14 +49,14 @@ gdal_calc.py -A ${data_root_dir}/${a_filename_pattern} -B ${data_root_dir}/${b_f
     --calc="A-B" --format=GTiff \
     --co="TILED=YES" \
     --co="COPY_SRC_OVERVIEWS=YES" \
-    --co="COMPRESS=LERC_ZSTD" \
+    --co="COMPRESS=ZSTD" \
     --type='Int16' \
     --NoDataValue=32767 \
     --overwrite
 
 gdal_translate ${data_root_dir}/${out_filename}.tif ${data_root_dir}/${out_filename}.cog.tif \
     -of COG \
-    -co COMPRESS=LERC_ZSTD \
+    -co COMPRESS=ZSTD \
     -co MAX_Z_ERROR=0
     
 rm ${data_root_dir}/${out_filename}.tif

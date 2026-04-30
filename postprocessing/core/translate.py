@@ -61,7 +61,7 @@ def translate_tile(src_dir, dst_dir, profile="ZSTD", **kwargs):
 class TranslateConfig:
     src_dir: str='~/data/gvs/deploy/predictions_2020/09WWQ_fp32_infer'
     dst_dir: str='~/data/gvs/deploy/predictions_2020/09WWQ_fp32_infer_cog'
-    profile: str = "LERC_ZSTD"
+    profile: str = "ZSTD"
     
 cs = ConfigStore.instance()
 cs.store(name="config", node=TranslateConfig)
