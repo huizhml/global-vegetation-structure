@@ -77,6 +77,30 @@ class UpdateStacCollectionConfig(ClassConfig):
 cs.store(group='run', name='update_stac_collection', node=UpdateStacCollectionConfig)
 
 @dataclass
+class CreateUpdatedStacCollectionConfig(ClassConfig):
+    year: int = 2020
+    collection_id: str = 'vsm'
+    catalog_dir: str = '~/data/gvs/products/gvsm_stac_catalog'
+    data_source: str = 'local'
+    data_dir: str = '~/data/gvs/predictions'
+    original_predictions_dir: str = '~/data/gvs/predictions/{year}/original/tiles/cog'
+    func_args: dict = field(default_factory=lambda: {
+        'year':  2020,
+        'new_collection_id':  'vsm_local_masked',
+        'prediction_sources': [
+            '~/data/gvs/predictions/{year}/masked/tiles/geotiff',
+            '~/data/gvs/predictions/{year}/original/tiles/geotiff',
+            '~/data/gvs/predictions/{year}/original/tiles/cog',
+        ],
+    })
+
+    _target_: str = "postprocessing.core.stac_collection.StacCatalog"
+    target_method: str = 'create_updated_collection'
+    
+    
+cs.store(group='run', name='create_updated_stac_collection', node=CreateUpdatedStacCollectionConfig)
+
+@dataclass
 class SampleForestTempConfig(FunctionConfig):
     tif_dir: str = '~/data/gvs/downstream_tasks/forest_temp/'
     p: float = 1e-4
@@ -292,7 +316,7 @@ def main(cfg):
     elif cfg.run.target_type == 'class':
         obj = instantiate(cfg.run)
         excute_method = getattr(obj, cfg.run.target_method)
-        excute_method()
+        excute_method(**cfg.run.func_args)
     else:
         raise ValueError(f"Invalid target: {cfg.run.target_type}")
     t1 = time.time()

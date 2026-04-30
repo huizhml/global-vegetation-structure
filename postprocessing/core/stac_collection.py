@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 import pystac
 from tqdm import tqdm
 import dask
+import json
 from const import LUMI_PROJECT
 load_dotenv('.planetarycomputer/settings.env')
 
@@ -21,7 +22,7 @@ class StacCatalog:
     Predictions for different year will be organized in different items, i.e., {tile_id}_{year}
     data_dir: 
     '''
-    EXPECTED_PREDICTION_COUNT = 303
+    EXPECTED_PREDICTION_COUNT = 101
     PREDICTION_GLOB = 'RH*Q*.tif'
     REFERENCE_ASSET_KEY = 'RH98_Q1'
     RH_COUNT = 101
@@ -197,7 +198,7 @@ class StacCatalog:
         # test = image.isel(time=0, band=0).compute() #@2025-10-02, tested, works well, can load image from tif files
         self.collection.add_item(item)
 
-    def update_collection(self):
+    def update_collection(self, new_col_dir: str = None):
         year = re.search(r'\d{4}', self.new_predictions_dir).group(0)
         year = int(year)
         new_predictions_dir = Path(self.new_predictions_dir).expanduser()
@@ -237,6 +238,91 @@ class StacCatalog:
         item = self.update_asset_href(item, target_dir)
         item.save_object(dest_href=item_path)
         print(f'Updated STAC item saved to {item_path}')
+
+
+
+    def remove_item_links(self, item_ids: list[str]):
+        collection_path = self.catalog_dir / self.collection_id / 'collection.json'
+        
+        with open(collection_path) as f:
+            collection_json = json.load(f)
+
+        collection_json['links'] = [
+            link for link in collection_json['links']
+            if not (link.get('rel') == 'item' and any(iid in link.get('href', '') for iid in item_ids))
+        ]
+        with open(collection_path, 'w') as f:
+            json.dump(collection_json, f, indent=2)
+        print(f'Removed {len(item_ids)} item links from {collection_path}')
+        
+    def create_updated_collection(
+        self,
+        year: int=2020,
+        new_collection_id: str = None,
+        prediction_sources: list[str] = None,
+    ):
+        """
+        Create a new collection by checking prediction directories in priority order.
+        
+        prediction_sources: ordered list of directories to check, highest priority first.
+            e.g. [masked/tiles/geotiff, original/tiles/geotiff, original/tiles/cog]
+        """
+        # Load the source collection
+        source_collection_path = self.catalog_dir / self.collection_id / 'collection.json'
+        source_collection = pystac.Collection.from_file(str(source_collection_path))
+
+        # Create the new collection as a copy
+        new_collection = pystac.Collection(
+            id=new_collection_id,
+            description=source_collection.description,
+            extent=source_collection.extent,
+        )
+
+        tiles = os.listdir(self.original_predictions_dir)
+        for tile_id in tqdm(tiles, desc='Building updated collection'):
+            item_path = (
+                self.catalog_dir / self.collection_id
+                / f'{tile_id}_{year}' / f'{tile_id}_{year}.json'
+            )
+            if not item_path.exists():
+                print(f'No existing item for {tile_id}_{year}, skipping')
+                continue
+
+            item = pystac.Item.from_file(str(item_path))
+            pred_dir = self._resolve_prediction_dir(tile_id, prediction_sources)
+
+            if pred_dir is None:
+                print(f'No valid predictions for {tile_id}, skipping')
+                continue
+
+            item = self.update_asset_href(item, pred_dir)
+            new_collection.add_item(item)
+
+        # Save the new collection alongside the original
+        catalog = pystac.Catalog.from_file(str(self.catalog_dir / 'catalog.json'))
+        catalog.add_child(new_collection)
+        catalog.normalize_hrefs(str(self.catalog_dir))
+        catalog.save(
+            catalog_type=pystac.CatalogType.SELF_CONTAINED,
+            dest_href=str(self.catalog_dir),
+        )
+        print(f'New collection "{new_collection_id}" saved to {self.catalog_dir}')
+
+
+    def _resolve_prediction_dir(
+        self,
+        tile_id: str,
+        prediction_sources: list[str],
+    ) -> Path | None:
+        """Return the first directory in priority order that has enough predictions."""
+        for source_dir in prediction_sources:
+            tile_dir = Path(source_dir).expanduser() / tile_id
+            if (
+                tile_dir.exists()
+                and self._count_predictions(tile_dir) >= 101# TODO: should be self.EXPECTED_PREDICTION_COUNT, temporarily set to 101 for incomplete masked predictions
+            ):
+                return tile_dir
+        return None
 
     
     # def update_item(self, tile_id: str, year: int=2024):
