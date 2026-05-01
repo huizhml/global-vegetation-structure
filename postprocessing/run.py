@@ -4,7 +4,7 @@ import time
 from typing import List, Optional, Any
 from hydra.core.config_store import ConfigStore
 from hydra.utils import instantiate
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field
 import hydra
 from omegaconf import OmegaConf, MISSING
 import numpy as np

@@ -6,7 +6,39 @@ from dataclasses import dataclass, field
 import hydra
 from omegaconf import OmegaConf, MISSING
 from config.base_config_class import FunctionConfig, ClassConfig
+from tools.utils import resolve_args
 
+
+defaults = [
+    {'run': 'resample_and_mosaic'},
+    "_self_"
+]
+
+@dataclass
+class RunConfig:
+    defaults: List[Any] = field(default_factory=lambda: defaults)
+    run: Any = MISSING
+    
+cs = ConfigStore.instance()
+
+cs.store(name='base_config', node=RunConfig) # NOTE: name here should match the default in ../config/base/no_log.yaml
+
+
+# -----------------------------------------------------------------
+#  Create global mosaics
+# -----------------------------------------------------------------
+@dataclass
+class CreateGlobalMosaicConfig(ClassConfig):
+    year: int = 2020
+    rh_idx: int = 99
+    q_idx: int = 1
+    stac_collection_dir: str = '~/data/gvs/products/gvsm_stac_catalog/vsm_local_masked'
+    total_tiles_file: str = '~/data/gvs/assets/worklists/total_tiles_2020.txt'
+    save_dir: str = '~/data/gvs/predictions/{year}/masked/mosaic/'
+    _target_: str = "visualization.core.create_global_view.GlobalMosaicker"
+    target_method: str = 'create_global_mosaic'
+    
+cs.store(group='run', name='create_global_mosaic', node=CreateGlobalMosaicConfig)
 @dataclass
 class CreateGlobalMosaicPdfConfig(FunctionConfig):
     mosaic_dir: str = '~/data/gvs/predictions/2020/blended/mosaic/'
@@ -74,17 +106,6 @@ class CheckfterBiasCorrectionConfig:
     _target_: str = "visualization.core.create_global_view.check_mosaic_after_bias_correction"
     
 
-defaults = [
-    {'run': 'resample_and_mosaic'},
-    "_self_"
-]
-
-@dataclass
-class RunConfig:
-    defaults: List[Any] = field(default_factory=lambda: defaults)
-    run: Any = MISSING
-    
-cs = ConfigStore.instance()
 cs.store(group='run', name='resample_and_mosaic', node=ResampleAndMosaicConfig)
 cs.store(group='run', name='check_after_bias_correction', node=CheckfterBiasCorrectionConfig)
 cs.store(group='run', name='create_pdf_thumb', node=CreateRhPairPdfConfig)
@@ -93,18 +114,19 @@ cs.store(group='run', name='create_cloud_cover_boxplot', node=CreateCloudCoverBo
 cs.store(group='run', name='create_global_diff_mosaic', node=CreateGlobalDiffMosaicConfig)
 cs.store(group='run', name='create_global_mosaic_pdf', node=CreateGlobalMosaicPdfConfig)
 # ================================ Main Config ================================
-cs.store(name='base_config', node=RunConfig) # NOTE: name here should match the default in ../config/base/no_log.yaml
+
 
 @hydra.main(config_name='no_log', version_base='1.2', config_path='../config/base')
 def main(cfg):
     t0 = time.time()
     print(OmegaConf.to_yaml(cfg))
+    resolve_args(cfg)
     if cfg.run.target_type == 'function':
         instantiate(cfg.run)
     elif cfg.run.target_type == 'class':
         obj = instantiate(cfg.run)
         excute_method = getattr(obj, cfg.run.target_method)
-        excute_method()
+        excute_method(**cfg.run.func_args)
     else:
         raise ValueError(f"Invalid target: {cfg.run.target_type}")
     t1 = time.time()
