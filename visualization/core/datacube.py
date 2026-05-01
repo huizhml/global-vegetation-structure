@@ -1,8 +1,11 @@
-import numpy as np
+import os
+# os.environ["PYVISTA_OFF_SCREEN"] = "true"
+# os.environ["VTK_DEFAULT_OPENGL_WINDOW"] = "vtkEGLRenderWindow"
+
 import pandas as pd
 import xarray as xr
-import time
-import lexcube
+import rioxarray
+from rasterio.enums import Resampling
 import matplotlib.pyplot as plt
 import pystac
 from pathlib import Path
@@ -11,14 +14,156 @@ from shapely.geometry import Point
 from pyproj import CRS, Transformer
 import stackstac
 import datetime
+from dask.utils import natural_sort_key
+import rasterio
+import pyvista as pv
+import numpy as np
 
-def get_epsg_from_tile(tile_name):
-    zone = int(tile_name[:2])
-    band = tile_name[2]
-    hemisphere = 'south' if band <= 'M' else 'north'
-    epsg = 32700 + zone if hemisphere == 'south' else 32600 + zone
-    return epsg
+from download.core.utils import get_epsg_from_tile
 
+pv.OFF_SCREEN = True
+
+def plot_datacube(data: np.array, lons: np.array, lats: np.array, save_path: str):
+    # latitude ascending
+    if lats[0] > lats[-1]:
+        lats = lats[::-1]
+        data = data[::-1, :, :]
+
+    # longitude: convert 0..360 to -180..180, then sort
+    if np.nanmax(lons) > 180:
+        lons = ((lons + 180) % 360) - 180
+        order = np.argsort(lons)
+        lons = lons[order]
+        data = data[:, order, :]
+
+    data = data/10
+    ny, nx, nz = data.shape
+
+    vmin = 0 # np.nanpercentile(data, 2)
+    vmax = 50 #np.nanpercentile(data, 98)
+    print('vmin, vmax:', vmin, vmax)
+
+    # Create a sharp cutoff: transparent only for sentinel values, opaque for everything else
+    sentinel = -1  # vmin - 50.0
+    # opacity_points = [
+    #     (sentinel, 0.0),        # NaN sentinel: invisible
+    #     (sentinel + 1, 0.8),    # just above sentinel: visible
+    #     (vmax * 0.5, 0.85),
+    #     (vmax, 1.0),
+    # ]
+    # Extract just the opacity values for the linear mapping
+    opacity = [0.0, 0.8, 0.8, 0.85, 0.9, 1.0]
+    vol = np.nan_to_num(data, nan=sentinel)
+    vol = np.clip(vol, sentinel, vmax)
+
+    # CRITICAL FIX:
+    # input is lat, lon, time
+    # VTK wants x, y, z = lon, lat, time
+    vol_vtk = np.transpose(vol, (1, 0, 2))
+
+    z_spacing = 6.0
+
+    grid = pv.ImageData()
+    grid.dimensions = (nx, ny, nz)
+    grid.origin = (float(lons.min()), float(lats.min()), 0.0)
+    grid.spacing = (
+        float((lons.max() - lons.min()) / max(nx - 1, 1)),
+        float((lats.max() - lats.min()) / max(ny - 1, 1)),
+        z_spacing,
+    )
+
+    grid.point_data["values"] = vol_vtk.ravel(order="F")
+
+    p = pv.Plotter(off_screen=True, window_size=(2200, 1200))
+    
+    p.enable_parallel_projection()
+
+    p.add_volume(
+        grid,
+        scalars="values",
+        cmap="inferno",
+        clim=(sentinel, vmax),
+        opacity=opacity,
+        shade=False,
+        show_scalar_bar=False,
+    )
+
+    # Dummy mesh for clean scalar bar
+    dummy = pv.PolyData(np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]))
+    dummy["values"] = np.array([0.0, vmax])
+    p.add_mesh(
+        dummy,
+        scalars="values",
+        cmap="inferno",
+        clim=(0, vmax),
+        show_scalar_bar=True,
+        opacity=0.0,
+        scalar_bar_args={
+            "title": "Height [m]",
+            "color": "white",
+            "vertical": True,
+            "position_x": 0.2,
+            "position_y": 0.26,
+            "height": 0.52,
+            "width": 0.03,
+        },
+    )
+
+    # p.add_mesh(grid.outline(), color="black", opacity=0.7, line_width=1)
+
+    # -----------------------
+    # More top-down oblique camera
+    # -----------------------
+    bounds = grid.bounds
+    xmin, xmax, ymin, ymax, zmin, zmax = bounds
+
+    cx = 0.5 * (xmin + xmax)
+    cy = 0.5 * (ymin + ymax)
+    cz = 0.5 * (zmin + zmax)
+
+    p.camera_position = [
+        (cx, ymin - 80, zmax + 300),  # 更高、更少侧向偏移
+        (cx, cy, cz),
+        (0, 0, 1),
+    ]
+
+    p.enable_parallel_projection()
+    p.camera.zoom(0.6)
+
+    p.set_background("black")
+    p.show(auto_close=False)
+    p.screenshot(save_path, transparent_background=False)
+    p.close()
+
+def read_overview(file: str, overview_level: int=4):
+    with rasterio.open(file, overview_level=overview_level) as src:
+        data = src.read(1)  # Reads directly from the overview, very fast
+    return data
+
+def read_coords(file: str, overview_level: int=4):
+    with rasterio.open(file, overview_level=overview_level) as src:
+        transform = src.transform
+        cols = np.arange(src.width)
+        rows = np.arange(src.height)
+        lons = transform[2] + cols * transform[0]
+        lats = transform[5] + rows * transform[4]
+        nodata = src.nodata
+    return lons, lats, nodata
+
+def read_datacube(data_dir: str, filename_pattern: str='.cog.tif', overview_level: int=4):
+    data_dir = Path(data_dir).expanduser()
+    files = list(data_dir.glob(filename_pattern))
+    files = [str(file) for file in files]
+    files = sorted(files, key=natural_sort_key)
+    data = []
+    for file in files[::2]:
+        data_i = read_overview(file, overview_level=overview_level)
+        data.append(data_i[:, :, None])
+    data = np.concatenate(data, axis=2)
+    lons, lats, nodata = read_coords(files[0], overview_level=overview_level)
+    data =  data.astype(np.float32)
+    data[data == nodata] = np.nan
+    return data, lons, lats
 
 def get_patch_by_latlon(lat, lon, s2_grid: gpd.GeoDataFrame = None, year: int = 2020, buffer_km=3, q_idx=1):
     # Get the tile and bounds
@@ -53,13 +198,8 @@ def get_patch_by_latlon(lat, lon, s2_grid: gpd.GeoDataFrame = None, year: int = 
     )
     return image.squeeze()
     
-    
-s2_grid_file = '~/data/gvs/deploy/deploy_status.parquet'
-s2_grid = gpd.read_parquet(s2_grid_file).to_crs("EPSG:4326")
-year = 2020
-lat, lon = -2.346071, 114.03641  
-patch = get_patch_by_latlon(lat, lon, s2_grid, year, buffer_km=3, q_idx=1)
-wd = lexcube.Cube3DWidget(patch, cmap='inferno', vmin=0, vmax=500, isometric_mode=True)
-wd.plot()
-import ipdb; ipdb.set_trace()
-wd.savefig('output/patch.png', include_ui=True, dpi_scale=2)
+if __name__ == '__main__':
+    data_dir = '~/data/gvs/predictions/2020/masked/mosaic/'
+    save_path = '/projects/dereeco/data/gvs/results/vsm_datacube/every2rhs_black_bg_v2.png'
+    data, lons, lats = read_datacube(data_dir, filename_pattern='*cog.tif')
+    plot_datacube(data, lons, lats, save_path)
