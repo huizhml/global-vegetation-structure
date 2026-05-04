@@ -41,9 +41,14 @@ class CreateGlobalMosaicConfig(ClassConfig):
 cs.store(group='run', name='create_global_mosaic', node=CreateGlobalMosaicConfig)
 @dataclass
 class CreateGlobalMosaicPdfConfig(FunctionConfig):
-    mosaic_dir: str = '~/data/gvs/predictions/2020/blended/mosaic/'
-    pdf_file: str = '~/data/gvs/results/pred_thumbs/global_mosaic.pdf'
+    year: int = 2020
+    version: str = 'masked'
+    mosaic_dir: str = '~/data/gvs/predictions/{year}/{version}/mosaic/'
+    tif_filename_pattern: str = '*.cog.tif'
+    pdf_file: str = '~/data/gvs/results/diversity_indices/global_mosaic_{year}_{version}.pdf'
+    multi_pages: bool = False
     _target_: str = "visualization.core.create_pdf_thumb.make_global_mosaic_pdf"
+cs.store(group='run', name='create_global_mosaic_pdf', node=CreateGlobalMosaicPdfConfig)
 
 @dataclass
 class CreateGlobalDiffMosaicConfig(ClassConfig):
@@ -112,7 +117,7 @@ cs.store(group='run', name='create_pdf_thumb', node=CreateRhPairPdfConfig)
 cs.store(group='run', name='create_pred_neighbor_pdf', node=CreatePredNeighborPdfConfig)
 cs.store(group='run', name='create_cloud_cover_boxplot', node=CreateCloudCoverBoxplotConfig)
 cs.store(group='run', name='create_global_diff_mosaic', node=CreateGlobalDiffMosaicConfig)
-cs.store(group='run', name='create_global_mosaic_pdf', node=CreateGlobalMosaicPdfConfig)
+
 # ================================ Main Config ================================
 
 

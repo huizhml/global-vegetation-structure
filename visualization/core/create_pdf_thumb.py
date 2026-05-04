@@ -3,6 +3,7 @@ import pandas as pd
 import rasterio
 import re
 import rioxarray as rio
+from torch import clamp_min_
 import h5py
 import xarray as xr
 import numpy as np
@@ -21,10 +22,50 @@ from postprocessing.core.s2_tiling import find_intersecting_s2_tiles
 from const import rh_vis_params
 
 os.environ['HYDRA_FULL_ERROR'] = '1'
+VIS_PARAMS = {
+    'fhd': {
+        'cmin': None,
+        'cmax': None,
+        'cmap': 'viridis'
+    },
+    'enl1d':{
+        'cmin': None,
+        'cmax': None,
+        'cmap': 'viridis'
+    },
+    'enl2d':{
+        'cmin': None,  # derive from data: 2% and 98% percentiles
+        'cmax': None,
+        'cmap': 'viridis'
+    },
+    'cr':{
+        'cmin': 0,
+        'cmax': 1,
+        'cmap': 'viridis_r'
+    },
+    'qskewness':{
+        'cmin': -120,
+        'cmax': 120,
+        'cmap': 'RdBu_r'
+    },
+    'q2':{
+        'cmin': 0,
+        'cmax': 500,
+        'cmap': 'viridis_r'
+    }
+}
 
 # --------- I/O Functions ---------
 def rio_read(tif_file: Path, overview_level: int = 0):
-    return rio.open_rasterio(tif_file, overview_level=overview_level, masked=True).squeeze()
+    '''
+    NOTE: overview_level 0 is the 1/2 resolution, 1 is 1/4, 2 is 1/8, etc.
+    '''
+    data =rio.open_rasterio(tif_file, overview_level=overview_level, masked=True)
+    with rasterio.open(tif_file) as src:
+        band_names = list(src.descriptions)
+
+    data = data.assign_coords(band=band_names)
+    return data
 
 def read_rh_8neighbors(tile_id: str, s2_grid: gpd.GeoDataFrame, stac_collection_dir: Path, year: int = 2020, resolution: int = 100):
     """
@@ -174,32 +215,45 @@ def plot_pdf_cover(params: dict, timestamp: str):
     return fig_cover
 
 
-def plot_tiff_image(tif_file: Path):
-    # cmin, cmax, cmap = get_vis_params(tif_file)
-    cmin, cmax, cmap = 0, 500, 'viridis'
-    fig = plt.figure(figsize=(6, 5))
-    image = rio_read(tif_file)
-    # with rasterio.open(tif_file) as src:
-    #     image = src.read(1)
-    #     nodata = src.nodata
-    # # image = image.astype(np.float32)
-    # image[image == nodata] = 0
-    ax = plt.gca()
-    ax.imshow(image, cmap=cmap, vmin=cmin, vmax=cmax)
-    im = ax.get_images()[0]
-    ax.set_title(tif_file.stem)
-    ax.set_xticks([])
-    ax.set_yticks([])
-    ax.set_xlabel('')
-    ax.set_ylabel('')
-    fig.tight_layout()
-    cax = fig.add_axes([0.06, 0.3, 0.02, 0.15])
-    cbar = fig.colorbar(im, cax=cax, orientation='vertical')
-    cbar.set_ticks([cmin, cmax])
-    cbar.set_ticklabels([f'{cmin / 10:.0f}', f'{cmax / 10:.0f}'])
-    cbar.ax.tick_params(size=0, pad=2)
-    cbar.outline.set_visible(False)
-    return fig
+def plot_tiff_image(image: xr.DataArray):
+    '''
+    Plot as single-band image with a colorbar.
+    
+    '''
+    if image.ndim == 2:
+        image = image.expand_dims('band')
+    figs = {}
+    for band in image.band:
+        cmap = VIS_PARAMS[band.item()]['cmap']
+        cmin = VIS_PARAMS[band.item()]['cmin']
+        cmax = VIS_PARAMS[band.item()]['cmax']
+
+        fig = plt.figure(figsize=(6, 5))
+        ax = plt.gca()
+        data = image.sel(band=band)
+        if cmin is None or cmax is None:
+            cmin = float(np.nanpercentile(data, 2))
+            cmax = float(np.nanpercentile(data, 98))
+            
+        print(f'{band.item()} cmin: {cmin}, cmax: {cmax}')
+        ax.imshow(data, cmap=cmap, vmin=cmin, vmax=cmax)
+        im = ax.get_images()[0]
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.set_xlabel('')
+        ax.set_ylabel('')
+        fig.tight_layout()
+        cax = fig.add_axes([0.06, 0.3, 0.02, 0.15])
+        cbar = fig.colorbar(im, cax=cax, orientation='vertical')
+        cbar.set_ticks([cmin, cmax])
+        if 'rh' in band.item().lower():
+            cbar.set_ticklabels([f'{cmin / 10:.0f}', f'{cmax / 10:.0f}'])
+        else:
+            cbar.set_ticklabels([f'{cmin:.0f}', f'{cmax:.0f}'])
+        cbar.ax.tick_params(size=0, pad=2)
+        cbar.outline.set_visible(False)
+        figs[band.item()] = fig
+    return figs
 
 
 # --------- Main Functions ---------
@@ -329,25 +383,36 @@ def make_rh_pair_pdf(
             plt.close(fig)
     print(f'saved to {pdf_file}')
     
-def make_global_mosaic_pdf(mosaic_dir: str, pdf_file: Path, **kwargs):
+def make_global_mosaic_pdf(mosaic_dir: str, tif_filename_pattern: str = 'global_mosaic_*RH*_Q0-Q2.cog.tif', pdf_file: Path=None, multi_pages: bool = False, cmin: float = None, cmax: float = None, cmap: str = 'viridis_r', **kwargs):
     '''
     Make a PDF file where each page renders a global mosaic of a TIFF image
     '''
-    timestamp = pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')
+    timestamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
     mosaic_dir = Path(mosaic_dir).expanduser()
-    tif_files = list(mosaic_dir.glob('global_mosaic_*RH*_Q0-Q2.cog.tif'))
+    tif_files = list(mosaic_dir.glob(tif_filename_pattern))
     tif_files = sorted(tif_files)
     pdf_file = Path(pdf_file).expanduser()
     pdf_file.parent.mkdir(parents=True, exist_ok=True)
-    pdf_file = pdf_file.with_stem(f'{pdf_file.stem}_{timestamp}')
-    with PdfPages(pdf_file) as pdf:
-        fig_cover = plot_pdf_cover(locals(), timestamp)
-        pdf.savefig(fig_cover)
-        plt.close(fig_cover)
+    if multi_pages:
+        pdf_file = pdf_file.with_stem(f'{pdf_file.stem}_{timestamp}')
+        with PdfPages(pdf_file) as pdf:
+            fig_cover = plot_pdf_cover(locals(), timestamp)
+            pdf.savefig(fig_cover)
+            plt.close(fig_cover)
+            for tif_file in tif_files:
+                image = rio_read(tif_file)
+                figs = plot_tiff_image(image)
+                for band, fig in figs.items():
+                    pdf.savefig(fig, bbox_inches='tight', dpi=300)
+                    plt.close(fig)
+        print(f'saved to {pdf_file}')
+    else:
         for tif_file in tif_files:
-            fig = plot_tiff_image(tif_file)
-            pdf.savefig(fig, bbox_inches='tight')
-            fig.savefig(tif_file.with_suffix('.pdf'), bbox_inches='tight')
-            plt.close(fig)
-            
-    print(f'saved to {pdf_file}')
+            image = rio_read(tif_file)
+            figs = plot_tiff_image(image)
+            for band, fig in figs.items():
+                _pdf_file = pdf_file.parent / f'{pdf_file.stem}_{tif_file.stem}_{band}.pdf'
+                fig.savefig(_pdf_file, bbox_inches='tight', dpi=300)
+                plt.close(fig)
+                print(f'saved to {_pdf_file}')
+    
