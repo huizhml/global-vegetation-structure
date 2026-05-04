@@ -360,10 +360,11 @@ def pixel_diversity_indices(rhs, bin_width=5, max_height=None):
     if np.isinf(enl2d):
         print(f'ENL2D is inf, setting to 0, rhs: {rhs}, p: {p}')
         enl2d = 0.0
+    rh25 = max(rhs[25], 0)
     if rhs[98] <= 0:
         cr = 0
     else:
-        cr = (rhs[98] - rhs[25])/rhs[98]
+        cr = (rhs[98] - rh25)/rhs[98]
     
     return fhd, enl1d, enl2d, cr
 
@@ -456,7 +457,8 @@ def _chunk_diversity(tile, bin_width=5, nodata_out=NODATA_OUT):
     entropy[nodata_mask] = nodata_out
     enl1d[nodata_mask] = nodata_out
     enl2d[nodata_mask] = nodata_out
-    cr = (tile[98] - tile[25])/(tile[98] + 1e-6)
+    rh25 = np.maximum(tile[25], 0)
+    cr = (tile[98] - rh25)/(tile[98] + 1e-6)
     cr[nodata_mask] = nodata_out
     return entropy, enl1d, enl2d, cr
 
