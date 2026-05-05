@@ -74,15 +74,17 @@ run_blending_loop1 $task_tiles $flag_dir $year
 #   NOTE: there are some tiles in the txt file don't have cog files, need to skip them (not yet implemented)
 # ---------------------------------------
 year=${2:-2020}
+q_idx=${3:-1}
+filename_pattern="*Q${q_idx}.tif"
 tile_id_file="${HOME}/data/gvs/assets/worklists/tiles_coastal_snow_regions.txt" 
-n_per_task=6 # 554
+n_per_task=554
 array_task_id=${SLURM_ARRAY_TASK_ID:-0}
 start_idx=$((array_task_id * n_per_task + 1))
 end_idx=$((start_idx + n_per_task - 1))
 mapfile -t tile_ids < <(sed -n "${start_idx},${end_idx}p" "$tile_id_file")
 for tile_id in ${tile_ids[@]}; do
     echo "Processing tile $tile_id"
-    python -m postprocessing.run run=mask_snow_water_preds run.tile_id=$tile_id
+    python -m postprocessing.run run=mask_snow_water_preds run.tile_id=$tile_id run.filename_pattern=$filename_pattern
 done
 
 ;;

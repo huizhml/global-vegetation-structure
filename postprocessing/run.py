@@ -37,6 +37,7 @@ class MaskSnowWaterPredsConfig(FunctionConfig):
     stac_collection_dir: str = '~/data/gvs/products/gvsm_stac_catalog/vsm_local'
     year: int = 2020
     tile_id: str = '57UVU'
+    filename_pattern: str = '*Q1.tif'
     save_dir: str = '~/data/gvs/predictions/{year}/masked/tiles/'
     _target_: str = "postprocessing.core.mask_snow_water_preds.mask_snow_water_preds"
 
