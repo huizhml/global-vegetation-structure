@@ -86,7 +86,11 @@ def mask_snow_water_preds(stac_collection_dir: str, year: int = 2020, tile_id: s
         print(f'{tile_id} already has 101 files, skipping')
         return
     stac_collection_dir = Path(stac_collection_dir).expanduser()
-    stac_item = pystac.Item.from_file(str(stac_collection_dir / f'{tile_id}_{year}/{tile_id}_{year}.json'))
+    stac_item_file = stac_collection_dir / f'{tile_id}_{year}/{tile_id}_{year}.json'
+    if not stac_item_file.exists():
+        print(f'{stac_item_file} not found, skipping')
+        return
+    stac_item = pystac.Item.from_file(str(stac_item_file))
     water_snow_mask = get_water_snow_mask(stac_item)
     pred_dir = Path(stac_item.assets['RH98_Q1'].href.replace('file://', '')).expanduser()
     pred_files = list(pred_dir.parent.glob(filename_pattern))

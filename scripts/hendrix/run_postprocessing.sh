@@ -13,6 +13,56 @@ source scripts/core/run_python.sh
 source scripts/core/configer.sh
 source scripts/core/utils.sh
 
+collect_unfinished_tiles() {
+    local tile_id_file="$1"
+    local save_dir="$2"
+    local filename_pattern="$3"
+    local min_count="$4"
+    local out_file="$5"
+
+    mapfile -t tiles < "$tile_id_file"
+    shopt -s nullglob
+    local unfinished_tiles=()
+
+    for tile_id in "${tiles[@]}"; do
+        # Keep dir part quoted but leave filename pattern unquoted for glob expansion.
+        local files=( "${save_dir}/${tile_id}"/${filename_pattern} )
+        if (( ${#files[@]} < min_count )); then
+            unfinished_tiles+=( "$tile_id" )
+        fi
+    done
+
+    printf "%s\n" "${unfinished_tiles[@]}" > "$out_file"
+}
+
+run_mask_snow_water_array_task() {
+    local tile_id_file="$1"
+    local n_per_task="$2"
+    local filename_pattern="$3"
+    local translate="$4"
+    local array_task_id="${SLURM_ARRAY_TASK_ID:-0}"
+    local start_idx=$((array_task_id * n_per_task + 1))
+    local end_idx=$((start_idx + n_per_task - 1))
+
+    mapfile -t tile_ids < <(sed -n "${start_idx},${end_idx}p" "$tile_id_file")
+    for tile_id in "${tile_ids[@]}"; do
+        echo "Processing tile $tile_id"
+        python -m postprocessing.run \
+            run=mask_snow_water_preds \
+            run.tile_id="$tile_id" \
+            run.filename_pattern="$filename_pattern" \
+            run.translate="$translate"
+    done
+}
+
+get_n_tiles_per_task() {
+    local cfg_file=${1:-}
+    local n_array_tasks=${2:-1}
+    n_unfinished_tiles=$(wc -l $cfg_file | awk '{print $1}')
+    n_per_task=$(( (n_unfinished_tiles + n_array_tasks - 1) / n_array_tasks ))
+    echo $n_per_task
+}
+
 case $1 in
 0)
 # ---------------------------------------
@@ -75,19 +125,46 @@ run_blending_loop1 $task_tiles $flag_dir $year
 # ---------------------------------------
 year=${2:-2020}
 q_idx=${3:-1}
+translate=${4:-False}
 filename_pattern="*Q${q_idx}.tif"
 tile_id_file="${HOME}/data/gvs/assets/worklists/tiles_coastal_snow_regions.txt" 
-n_per_task=554
-array_task_id=${SLURM_ARRAY_TASK_ID:-0}
-start_idx=$((array_task_id * n_per_task + 1))
-end_idx=$((start_idx + n_per_task - 1))
-mapfile -t tile_ids < <(sed -n "${start_idx},${end_idx}p" "$tile_id_file")
-for tile_id in ${tile_ids[@]}; do
-    echo "Processing tile $tile_id"
-    python -m postprocessing.run run=mask_snow_water_preds run.tile_id=$tile_id run.filename_pattern=$filename_pattern
+n_per_task=$(get_n_tiles_per_task $tile_id_file $SLURM_ARRAY_TASK_COUNT)
+echo "Number of tiles per task: $n_per_task"
+run_mask_snow_water_array_task "$tile_id_file" "$n_per_task" "$filename_pattern" "$translate"
+;;
+
+4.1)
+# Second pass: mask snow and water predictions for remaining unfinished tiles
+year=${2:-2020}
+q_idx=${3:-1}
+translate=${4:-False}
+filename_pattern="*Q${q_idx}.tif"
+tile_id_file="${HOME}/data/gvs/assets/worklists/tiles_coastal_snow_regions.txt"
+if [ "$translate" == "True" ]; then
+    save_dir="${HOME}/data/gvs/predictions/${year}/masked/tiles/cog/"
+else
+    save_dir="${HOME}/data/gvs/predictions/${year}/masked/tiles/geotiff/"
+fi
+tmp_file="${HOME}/data/gvs/assets/worklists/tiles_coastal_snow_regions_unfinished_${q_idx}.txt"
+array_task_id="${SLURM_ARRAY_TASK_ID:-0}"
+# First task generates the file
+if [ "$array_task_id" -eq 0 ]; then
+    if [ ! -f $tmp_file ]; then
+        collect_unfinished_tiles "$tile_id_file" "$save_dir" "$filename_pattern" 101 "$tmp_file"
+    fi
+fi
+
+# Other tasks wait for it
+while [ ! -f "$tmp_file" ]; do
+    echo "Waiting for $tmp_file to be created..."
+    sleep 5
 done
 
+n_per_task=$(get_n_tiles_per_task $tmp_file $SLURM_ARRAY_TASK_COUNT)
+echo "Number of tiles per task: $n_per_task"
+run_mask_snow_water_array_task "$tmp_file" "$n_per_task" "$filename_pattern" "$translate"
 ;;
+
 # =======================================
 #    Old scripts
 # =======================================

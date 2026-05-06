@@ -38,6 +38,7 @@ class MaskSnowWaterPredsConfig(FunctionConfig):
     year: int = 2020
     tile_id: str = '57UVU'
     filename_pattern: str = '*Q1.tif'
+    translate: bool = False
     save_dir: str = '~/data/gvs/predictions/{year}/masked/tiles/'
     _target_: str = "postprocessing.core.mask_snow_water_preds.mask_snow_water_preds"
 
