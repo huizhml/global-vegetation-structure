@@ -199,7 +199,7 @@ def get_patch_by_latlon(lat, lon, s2_grid: gpd.GeoDataFrame = None, year: int = 
     return image.squeeze()
     
 if __name__ == '__main__':
-    data_dir = '~/data/gvs/predictions/2020/masked/mosaic/'
+    data_dir = '~/data/gvs/products/vsm/2020/masked/mosaic/'
     save_path = '/projects/dereeco/data/gvs/results/vsm_datacube/every2rhs_black_bg_v2.png'
     data, lons, lats = read_datacube(data_dir, filename_pattern='*cog.tif')
     plot_datacube(data, lons, lats, save_path)

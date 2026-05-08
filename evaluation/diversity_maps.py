@@ -237,8 +237,8 @@ def to_cog(gtif_path: Path):
     
     
 if __name__ == '__main__':
-    output_path = '~/data/gvs/predictions/2020/masked/mosaic/diversity_maps.tif'
-    tif_dir = '~/data/gvs/predictions/2020/masked/mosaic/cog'
+    output_path = '~/data/gvs/products/vsm/2020/masked/mosaic/diversity_maps.tif'
+    tif_dir = '~/data/gvs/products/vsm/2020/masked/mosaic/cog'
     bin_width = 1
     # create_global_diversity_maps(output_path=output_path, tif_dir=tif_dir, bin_width=bin_width)
     to_cog(output_path)

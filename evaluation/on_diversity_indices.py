@@ -512,8 +512,8 @@ def compute_entropy(output_dir, tile_id, year, vrt_path=None,
 
     # Create VRT if not provided
     if vrt_path is None:
-        tile_dir = f"~/data/gvs/predictions/{year}/original/tiles/cog/{tile_id}"
-        vrt_path = f"~/data/gvs/predictions/{year}/original/vrt/{tile_id}_Q1.vrt"
+        tile_dir = f"~/data/gvs/products/vsm/{year}/original/tiles/cog/{tile_id}"
+        vrt_path = f"~/data/gvs/products/vsm/{year}/original/vrt/{tile_id}_Q1.vrt"
         create_vrt(tile_dir, vrt_path)
 
     vrt_path = str(Path(vrt_path).expanduser())
@@ -696,8 +696,8 @@ def vertical_profile_biome_analysis_ours(points_file, save_dir, s2_grid_file=Non
         # extract the vertical profile from the predicted RH98
             # Create VRT if not provided
         if vrt_path is None:
-            tile_dir = f"~/data/gvs/predictions/{year}/original/tiles/cog/{tile_id}"
-            vrt_path = f"~/data/gvs/predictions/{year}/original/vrt/{tile_id}_Q1.vrt"
+            tile_dir = f"~/data/gvs/products/vsm/{year}/original/tiles/cog/{tile_id}"
+            vrt_path = f"~/data/gvs/products/vsm/{year}/original/vrt/{tile_id}_Q1.vrt"
             create_vrt(tile_dir, vrt_path)
         vrt_path = str(Path(vrt_path).expanduser())
         #TODO: ...
@@ -855,11 +855,11 @@ if __name__ == "__main__":
     # cal_diversity_indices(save_dir, gedi_ours_dir)
     tile_id = '36NTF'
     year = 2020
-    vrt_path = f"~/data/gvs/predictions/{year}/original/vrt/{tile_id}_Q1.vrt"
+    vrt_path = f"~/data/gvs/products/vsm/{year}/original/vrt/{tile_id}_Q1.vrt"
     output_dir = f"~/data/gvs/products/profile_entropy/{year}/tiles/geotiff"
 
     # # Create VRT if needed
-    tile_dir = f"~/data/gvs/predictions/{year}/original/tiles/cog/{tile_id}"
+    tile_dir = f"~/data/gvs/products/vsm/{year}/original/tiles/cog/{tile_id}"
     vrt_resolved = Path(vrt_path).expanduser()
     if not vrt_resolved.exists():
         create_vrt(tile_dir, vrt_path)

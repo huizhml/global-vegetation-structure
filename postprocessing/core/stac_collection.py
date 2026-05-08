@@ -328,8 +328,8 @@ class StacCatalog:
     # def update_item(self, tile_id: str, year: int=2024):
     #     item_path = f'{self.catalog_dir}/{self.collection_id}/{tile_id}_{year}/{tile_id}_{year}.json'
     #     item = pystac.Item.from_file(item_path)
-    #     gtif_dir = Path(f'~/data/gvs/predictions/{year}/original/tiles/geotiff/{tile_id}').expanduser()
-    #     cog_dir = Path(f'~/data/gvs/predictions/{year}/original/tiles/cog/{tile_id}').expanduser()
+    #     gtif_dir = Path(f'~/data/gvs/products/vsm/{year}/original/tiles/geotiff/{tile_id}').expanduser()
+    #     cog_dir = Path(f'~/data/gvs/products/vsm/{year}/original/tiles/cog/{tile_id}').expanduser()
     #     file_path = item.assets['RH98_Q1'].href.replace('file://', '')
     #     file_path = Path(file_path).expanduser()
     #     if file_path.exists() and len(list(file_path.parent.glob('*.tif'))) == 303:

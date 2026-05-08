@@ -39,27 +39,11 @@ class MaskSnowWaterPredsConfig(FunctionConfig):
     tile_id: str = '57UVU'
     filename_pattern: str = '*Q1.tif'
     translate: bool = False
-    save_dir: str = '~/data/gvs/predictions/{year}/masked/tiles/'
+    save_dir: str = '~/data/gvs/products/vsm/{year}/masked/tiles/'
     _target_: str = "postprocessing.core.mask_snow_water_preds.mask_snow_water_preds"
 
 cs.store(group='run', name='mask_snow_water_preds', node=MaskSnowWaterPredsConfig)
 
-
-# -----------------------------------------------------------------
-#  Create global mosaics
-# -----------------------------------------------------------------
-@dataclass
-class CreateMaskedGlobalMosaicConfig(FunctionConfig):
-    year: int = 2020
-    rh_idx: int = 98
-    q_idx: int = 1
-    stac_collection_dir: str = '~/data/gvs/products/gvsm_stac_catalog/vsm_local'
-    total_tile_file: str = '~/data/gvs/assets/worklists/total_tiles_2020.txt'
-    coastal_tile_file: str = '~/data/gvs/assets/worklists/tiles_coastal_snow_regions.txt'
-    save_dir: str = '~/data/gvs/predictions/{year}/masked/'
-    _target_: str = "visualization.core.create_global_view.create_global_masked_mosaic"
-
-cs.store(group='run', name='create_masked_global_mosaic', node=CreateMaskedGlobalMosaicConfig)
 
 # -----------------------------------------------------------------
 #  Stac collection operations
@@ -70,9 +54,9 @@ class UpdateStacCollectionConfig(ClassConfig):
     collection_id: str = 'vsm'
     catalog_dir: str = '~/data/gvs/products/gvsm_stac_catalog'
     data_source: str = 'local'
-    data_dir: str = '~/data/gvs/predictions'
-    original_predictions_dir: str = '~/data/gvs/predictions/{year}/original/tiles/cog'
-    new_predictions_dir: str = '~/data/gvs/predictions/{year}/original/tiles/geotiff'
+    data_dir: str = '~/data/gvs/products/vsm'
+    original_predictions_dir: str = '~/data/gvs/products/vsm/{year}/original/tiles/cog'
+    new_predictions_dir: str = '~/data/gvs/products/vsm/{year}/original/tiles/geotiff'
     target_method: str = 'update_collection'
     _target_: str = "postprocessing.core.stac_collection.StacCatalog"
 
@@ -84,15 +68,15 @@ class CreateUpdatedStacCollectionConfig(ClassConfig):
     collection_id: str = 'vsm'
     catalog_dir: str = '~/data/gvs/products/gvsm_stac_catalog'
     data_source: str = 'local'
-    data_dir: str = '~/data/gvs/predictions'
-    original_predictions_dir: str = '~/data/gvs/predictions/{year}/original/tiles/cog'
+    data_dir: str = '~/data/gvs/products/vsm'
+    original_predictions_dir: str = '~/data/gvs/products/vsm/{year}/original/tiles/cog'
     func_args: dict = field(default_factory=lambda: {
         'year':  2020,
         'new_collection_id':  'vsm_local_masked',
         'prediction_sources': [
-            '~/data/gvs/predictions/{year}/masked/tiles/geotiff',
-            '~/data/gvs/predictions/{year}/original/tiles/geotiff',
-            '~/data/gvs/predictions/{year}/original/tiles/cog',
+            '~/data/gvs/products/vsm/{year}/masked/tiles/geotiff',
+            '~/data/gvs/products/vsm/{year}/original/tiles/geotiff',
+            '~/data/gvs/products/vsm/{year}/original/tiles/cog',
         ],
     })
 
@@ -118,13 +102,13 @@ class MakeParqSubcolumnsConfig(FunctionConfig):
 
 @dataclass
 class GetTilesNodataConfig(FunctionConfig):
-    cog_dir: str = '~/data/gvs/predictions/2020/blended/tiles/cog'
+    cog_dir: str = '~/data/gvs/products/vsm/2020/blended/tiles/cog'
     _target_: str = "postprocessing.core.s2_tiling.get_tiles_nodata"
 
 @dataclass
 class GetTilesRedundantConfig(FunctionConfig):
     s2_grid_file: str = '~/data/gvs/state/deploy_status.fgb'
-    cog_dir: str = '~/data/gvs/predictions/2020/blended/tiles/cog'
+    cog_dir: str = '~/data/gvs/products/vsm/2020/blended/tiles/cog'
     save_dir: str = '~/data/gvs/assets/worklists/'
     _target_: str = "postprocessing.core.s2_tiling.get_tiles_redundant"
 
@@ -137,8 +121,8 @@ class GetTilesReblendConfig(FunctionConfig):
 
 @dataclass
 class TranslatePredictionsConfig(FunctionConfig):
-    src_dir: str = '~/data/gvs/predictions/2020/original/tiles/geotiff'
-    dst_dir: str = '~/data/gvs/predictions/2020/original/tiles/cog'
+    src_dir: str = '~/data/gvs/products/vsm/2020/original/tiles/geotiff'
+    dst_dir: str = '~/data/gvs/products/vsm/2020/original/tiles/cog'
     _target_: str = "postprocessing.core.translate.translate_tile"
 
 @dataclass
@@ -188,7 +172,7 @@ class RunBlendingConfig(ClassConfig):
     year: int = 2020
     tile_id: str = '20MRS'
     flag_dir: str = '~/data/gvs/state/2020/blended'
-    output_dir: str = '~/data/gvs/predictions/2020/blended/tiles'
+    output_dir: str = '~/data/gvs/products/vsm/2020/blended/tiles'
     stac_collection_dir: str = '~/data/gvs/products/gvsm_stac_catalog/vsm_local'
     distance_map_dir: str = '~/data/gvs/assets/blending/distance_maps'
     s2_grid_file: str = '~/data/gvs/state/s2_tiles_with_growing_months.parquet'
@@ -211,7 +195,7 @@ class GetTilesWooEnoughGEDIConfig(FunctionConfig):
 class CheckfterBiasCorrectionConfig(FunctionConfig):
     year: int = 2020
     bias_dir: str = '~/data/gvs/assets/bias_correction_stats/slope_lt20_minpoints2000/2020/stats_by_tile'
-    save_dir: str = '~/data/gvs/predictions/2020/bias_corrected_slope_lt20_minpoints2000/mosaic'
+    save_dir: str = '~/data/gvs/products/vsm/2020/bias_corrected_slope_lt20_minpoints2000/mosaic'
     bias_cutoff: Optional[float] = None
     average_across_rhs: bool = False
     _target_: str = "visualization.create_global_view.check_mosaic_after_bias_correction"
@@ -230,7 +214,7 @@ class AddOursBlendedToSOTAGEDIConfig(FunctionConfig):
     year: int = 2020
     gedi_chm_reference_dir: str = '~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_test/original_with_sota_chms/2020'
     save_dir: str = '~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_test/original_with_sota_chms_ours_blended/2020'
-    pred_parent_dir: str = '~/data/gvs/predictions/2020/blended/tiles/cog'
+    pred_parent_dir: str = '~/data/gvs/products/vsm/2020/blended/tiles/cog'
     rh_idxs: list[int] = field(default_factory=lambda: KEY_RHS)
     _target_: str = "postprocessing.core.extract_sparse_points.pair_predictions_with_gedi_ref_data"
 
@@ -277,7 +261,7 @@ class CreateVRTConfig(FunctionConfig):
     tile_list_file: str = '~/data/gvs/assets/worklists/total_tiles_2020.txt'
     year: int = 2020
     q_idx: str = '1'
-    vrt_dir: str = '~/data/gvs/predictions/2020/original/vrt_q1'
+    vrt_dir: str = '~/data/gvs/products/vsm/2020/original/vrt_q1'
     _target_: str = "postprocessing.core.create_vrt.create_vrt"
     
 

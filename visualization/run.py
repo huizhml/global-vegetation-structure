@@ -30,36 +30,56 @@ cs.store(name='base_config', node=RunConfig) # NOTE: name here should match the 
 @dataclass
 class CreateGlobalMosaicConfig(ClassConfig):
     year: int = 2020
+    version: str = 'masked'
     rh_idx: int = 99
     q_idx: int = 1
     stac_collection_dir: str = '~/data/gvs/products/gvsm_stac_catalog/vsm_local_masked'
     total_tiles_file: str = '~/data/gvs/assets/worklists/total_tiles_2020.txt'
-    save_dir: str = '~/data/gvs/predictions/{year}/masked/mosaic/'
+    save_dir: str = '~/data/gvs/products/vsm/{year}/{version}/mosaic/'
     _target_: str = "visualization.core.create_global_view.GlobalMosaicker"
     target_method: str = 'create_global_mosaic'
     
 cs.store(group='run', name='create_global_mosaic', node=CreateGlobalMosaicConfig)
+
+
+@dataclass
+class CreateGlobalDiffMosaicConfig(ClassConfig):
+    year: int = 2020
+    version: str = 'masked'
+    rh_idx: int = 99
+    stac_collection_dir: str = '~/data/gvs/products/gvsm_stac_catalog/vsm_local_masked'
+    total_tiles_file: str = '~/data/gvs/assets/worklists/total_tiles_2020.txt'
+    save_dir: str = '~/data/gvs/products/prediction_intervals/{year}/{version}/mosaic/'
+    _target_: str = "visualization.core.create_global_view.GlobalMosaicker"
+    target_method: str = 'create_global_diff_mosaic'
+    
+cs.store(group='run', name='create_global_diff_mosaic', node=CreateGlobalDiffMosaicConfig)
+
+@dataclass
+class CreateGlobalRelativeDiffMosaicConfig(ClassConfig):
+    year: int = 2020
+    version: str = 'masked'
+    rh_idx: int = 99
+    q_idx: int = 1
+    stac_collection_dir: str = '~/data/gvs/products/gvsm_stac_catalog/vsm_local_masked'
+    total_tiles_file: str = '~/data/gvs/assets/worklists/total_tiles_2020.txt'
+    save_dir: str = '~/data/gvs/products/relative_prediction_intervals/{year}/{version}/mosaic/'
+    _target_: str = "visualization.core.create_global_view.GlobalMosaicker"
+    target_method: str = 'create_global_relative_diff_mosaic'
+    
+cs.store(group='run', name='create_global_relative_diff_mosaic', node=CreateGlobalRelativeDiffMosaicConfig)
+
 @dataclass
 class CreateGlobalMosaicPdfConfig(FunctionConfig):
     year: int = 2020
     version: str = 'masked'
-    mosaic_dir: str = '~/data/gvs/predictions/{year}/{version}/mosaic/'
+    mosaic_dir: str = '~/data/gvs/products/vsm/{year}/{version}/mosaic/'
     tif_filename_pattern: str = '*.cog.tif'
     pdf_file: str = '~/data/gvs/results/diversity_indices/global_mosaic_{year}_{version}.pdf'
     multi_pages: bool = False
     _target_: str = "visualization.core.create_pdf_thumb.make_global_mosaic_pdf"
 cs.store(group='run', name='create_global_mosaic_pdf', node=CreateGlobalMosaicPdfConfig)
 
-@dataclass
-class CreateGlobalDiffMosaicConfig(ClassConfig):
-    tiles_dir: str = '~/data/gvs/predictions/2020/blended/tiles/geotiff/'
-    save_dir: str = '~/data/gvs/predictions/2020/blended/mosaic/'
-    tile_id_list_file: str = '~/data/gvs/assets/worklists/total_tiles_2020.txt'
-    rh_idx: int = 98
-    left_q_idx: int = 0
-    right_q_idx: int = 2
-    _target_: str = "visualization.core.create_global_view.GlobalMosaicker"
-    target_method: str = 'create_global_diff_mosaic'
 
 @dataclass
 class CreateCloudCoverBoxplotConfig(FunctionConfig):
@@ -74,7 +94,7 @@ class CreateCloudCoverBoxplotConfig(FunctionConfig):
     
 @dataclass
 class CreateRhPairPdfConfig(FunctionConfig):
-    tif_dir: str = '~/data/gvs/predictions/2020/blended/tiles/cog/'
+    tif_dir: str = '~/data/gvs/products/vsm/2020/blended/tiles/cog/'
     tile_id_file: str = '~/data/gvs/assets/worklists/tiles_intile_abnormal.txt'
     pdf_file: str = '~/data/gvs/diagnostics/pred_thumbs/issue_tiles.pdf'
     overview_level: int = 2
@@ -83,7 +103,7 @@ class CreateRhPairPdfConfig(FunctionConfig):
     _target_: str = "visualization.core.create_pdf_thumb.make_rh_pair_pdf"
 @dataclass
 class CreatePredNeighborPdfConfig(FunctionConfig):
-    tif_dir: str = '~/data/gvs/predictions/2020/blended/tiles/cog/'
+    tif_dir: str = '~/data/gvs/products/vsm/2020/blended/tiles/cog/'
     tile_id_file: str = '~/data/gvs/assets/worklists/tiles_system_biased.txt'
     pdf_file: str = '~/data/gvs/diagnostics/pred_thumbs/system_biased_tiles.pdf'
     s2_grid_file: str = '~/data/gvs/state/s2_tiles_with_growing_months.parquet'
@@ -96,16 +116,16 @@ class ResampleAndMosaicConfig(FunctionConfig):
     year: int = 2020
     rh_idx: int = 98
     q_idx: int = 1
-    pred_dir: str = '~/data/gvs/predictions/2020/blended/tiles/geotiff/'
+    pred_dir: str = '~/data/gvs/products/vsm/2020/blended/tiles/geotiff/'
     s2_grid_file: str = '~/data/gvs/state/s2_tiles_with_growing_months.parquet'
-    save_dir: str = '~/data/gvs/predictions/2020/blended/mosaic/'
+    save_dir: str = '~/data/gvs/products/vsm/2020/blended/mosaic/'
     _target_: str = "visualization.core.create_global_view.resample_and_mosaic"
 
 @dataclass
 class CheckfterBiasCorrectionConfig:
     year: int = 2020
     bias_dir: str = '~/data/gvs/assets/bias_correction_stats/slope_lt20_minpoints2000/2020/stats_by_tile'
-    save_dir: str = '~/data/gvs/predictions/2020/bias_corrected_slope_lt20_minpoints2000/mosaic'
+    save_dir: str = '~/data/gvs/products/vsm/2020/bias_corrected_slope_lt20_minpoints2000/mosaic'
     bias_cutoff: Optional[float] = None
     average_across_rhs: bool = False
     _target_: str = "visualization.core.create_global_view.check_mosaic_after_bias_correction"
@@ -116,7 +136,6 @@ cs.store(group='run', name='check_after_bias_correction', node=CheckfterBiasCorr
 cs.store(group='run', name='create_pdf_thumb', node=CreateRhPairPdfConfig)
 cs.store(group='run', name='create_pred_neighbor_pdf', node=CreatePredNeighborPdfConfig)
 cs.store(group='run', name='create_cloud_cover_boxplot', node=CreateCloudCoverBoxplotConfig)
-cs.store(group='run', name='create_global_diff_mosaic', node=CreateGlobalDiffMosaicConfig)
 
 # ================================ Main Config ================================
 

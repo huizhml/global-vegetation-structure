@@ -32,10 +32,14 @@ python -m visualization.run run=resample_and_mosaic run.rh_idx=$SLURM_ARRAY_TASK
 # ----------------------------------------
 #    Create a global mosaic of the prediction intervals
 # ----------------------------------------
-python -m visualization.run run=create_global_diff_mosaic \
-          run.rh_idx=${2:-98} \
-          run.left_q_idx=${3:-0} \
-          run.right_q_idx=${4:-2}
+n_per_job=10
+rh_idx_start=$((SLURM_ARRAY_TASK_ID * n_per_job))
+rh_idx_end=$((rh_idx_start + n_per_job - 1))
+for rh_idx in $(seq $rh_idx_start $rh_idx_end); do
+    python -m visualization.run run=create_global_diff_mosaic \
+            run.rh_idx=$rh_idx
+done
+
 ;;
 1.2)
 # ----------------------------------------

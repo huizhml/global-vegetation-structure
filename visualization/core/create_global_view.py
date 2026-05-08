@@ -110,8 +110,6 @@ class GlobalMosaicker:
                  save_dir: Union[str, Path]=None,
                  rh_idx: int = 98,
                  q_idx: int = 1,
-                 left_q_idx: int = 0,
-                 right_q_idx: int = 2,
                  total_tiles_file: Union[str, Path] = None,
                  bias_dir: Union[str, Path] = None,
                  stac_collection_dir: Union[str, Path] = None,
@@ -136,8 +134,6 @@ class GlobalMosaicker:
         self.dst_nodata = dst_nodata
         self.compression = compression
         self.dst_srs = f'EPSG:{target_crs}'
-        self.left_q_idx = left_q_idx
-        self.right_q_idx = right_q_idx
         self.bias_dir = bias_dir
         self.stac_collection_dir = Path(stac_collection_dir).expanduser()
         self.bias_cutoff = bias_cutoff
@@ -231,7 +227,7 @@ class GlobalMosaicker:
         item_file = self.stac_collection_dir / f'{tile_id}_{self.year}/{tile_id}_{self.year}.json'
         item = pystac.Item.from_file(str(item_file))
         src_path = item.assets[f'RH{self.rh_idx}_Q{self.q_idx}'].href.replace('file://', '')
-        return str(src_path)
+        return Path(src_path).expanduser()
 
     @staticmethod
     def get_reprojected_bbox(tiff_path: str, target_epsg: int = 4326):
@@ -309,17 +305,14 @@ class GlobalMosaicker:
         gdal.Warp(str(dst_path), str(src_path), options=warp_opts)
         return str(dst_path)
     
-    def _warp_tile_diff(self, tile_id: str, dst_dir: Path, warp_options: dict):
+    def _warp_tile_diff(self, dst_path: Path, src_path: Path,warp_options: dict):
         '''
         Get downsampled difference between two tiles
         '''
         warp_opts = gdal.WarpOptions(**warp_options)
-        path_left = self.tiles_dir / f'{tile_id}/RH{self.rh_idx}_Q{self.left_q_idx}.tif'
-        path_right = self.tiles_dir / f'{tile_id}/RH{self.rh_idx}_Q{self.right_q_idx}.tif'
+        path_left = src_path.with_name(f'RH{self.rh_idx}_Q0.tif')
+        path_right = src_path.with_name(f'RH{self.rh_idx}_Q2.tif')
 
-        dst_path = dst_dir / f'{tile_id}.tif'
-        if dst_path.exists():
-            return str(dst_path)
         ds1 = gdal.Warp('', str(path_left), options=warp_opts)
         ds2 = gdal.Warp('', str(path_right), options=warp_opts)
         # 2. Read as Arrays (At 1km, these are tiny, e.g., 100x100 pixels)
@@ -338,18 +331,47 @@ class GlobalMosaicker:
         ds1 = None
         ds2 = None
         return str(dst_path)
+    
+    def _warp_tile_relative_diff(self, dst_path: Path, src_path: Path, warp_options: dict):
+        """
+        Compute (RH*_Q0 - RH*_Q2) / RH*_Q1 at downsampled resolution.
+        Output is scaled by 1000 and stored as Int16 to preserve precision.
+        """
+        warp_opts = gdal.WarpOptions(**warp_options)
+        path_left = src_path.with_name(f'RH{self.rh_idx}_Q0.tif')
+        path_right = src_path.with_name(f'RH{self.rh_idx}_Q2.tif')
+        path_mid = src_path.with_name(f'RH{self.rh_idx}_Q1.tif')
 
-    def _warp_tile_bias_correction(self, tile_id: str, dst_dir: Path, vrt_dir: Path, warp_options: dict):
+        ds_left = gdal.Warp('', str(path_left), options=warp_opts)
+        ds_right = gdal.Warp('', str(path_right), options=warp_opts)
+        ds_mid = gdal.Warp('', str(path_mid), options=warp_opts)
+
+        arr_left = ds_left.GetRasterBand(1).ReadAsArray().astype(np.float32)
+        arr_right = ds_right.GetRasterBand(1).ReadAsArray().astype(np.float32)
+        arr_mid = ds_mid.GetRasterBand(1).ReadAsArray().astype(np.float32)
+
+        # Mask: any input is nodata, or denominator is zero
+        mask = (
+            (arr_left == NO_DATA) |
+            (arr_right == NO_DATA) |
+            (arr_mid == NO_DATA) |
+            (arr_mid <= 0)
+        )
+
+        rel_diff = np.where(mask, NO_DATA,
+                            ((arr_left - arr_right) / arr_mid) * 1000)
+        rel_diff = rel_diff.astype(np.int16)
+
+        self._write_tiff(rel_diff, dst_path, ds_left)
+        ds_left = ds_right = ds_mid = None
+        return str(dst_path)
+
+    def _warp_tile_bias_correction(self, dst_path: Path, src_path: Path, vrt_dir: Path, warp_options: dict):
         '''
         Warp a tile to the target projection and resolution with bias correction
         '''
         warp_opts = gdal.WarpOptions(**warp_options)
-        dst_path = dst_dir / f'{tile_id}.tif'
-        if dst_path.exists():
-            return str(dst_path)
-
-        src_path = self._get_path_from_stac_item(tile_id)
-        offset = get_bias_correction_offset(self.bias_dir, tile_id, self.rh_idx,
+        offset = get_bias_correction_offset(self.bias_dir, src_path.stem, self.rh_idx,
                                             self.bias_col, self.average_across_rhs, self.bias_cutoff)
         if offset is not None:
             vrt_path = _make_offset_vrt(src_path, vrt_dir, offset=offset, nodata=self.dst_nodata)
@@ -413,27 +435,64 @@ class GlobalMosaicker:
         cog_path = self._to_cog(mosaic_path)
         print(f"✅ Global mosaic written to {cog_path}")
     
-    def create_global_diff_mosaic(self, tiles_dir: str, left_q_idx: int, right_q_idx: int):
+    def create_global_diff_mosaic(self, left_q_idx: int=0, right_q_idx: int=2):
         '''
         Create a global mosaic of the difference between two tiles
         '''
         # Step 1: Warp the tiles to 1km resolution
-        self.tiles_dir = Path(tiles_dir).expanduser()
         temp_dir_name = f"tmp_tiles_resampled_1km_RH{self.rh_idx}_Q{left_q_idx}-Q{right_q_idx}"
         temp_dir = self.init_tmp_dir(self.save_dir / temp_dir_name)
-        tasks = [
-            dask.delayed(self._warp_tile_diff)(tile_id, temp_dir, self.downsample_warp_options_mem)
-            # self._warp_tile_diff(tile_id, temp_dir, self.downsample_warp_options_mem)
-            for tile_id in self.tile_ids]
-        diff_paths = dask.compute(*tasks, scheduler="processes", num_workers=8)
+        warp_options = dict(self.downsample_warp_options_mem)
+        tasks = []
+        downsampled_paths = []
+        for tile_id in self.tile_ids:
+            dst_path = temp_dir / f'{tile_id}.tif'
+            downsampled_paths.append(str(dst_path))
+            if dst_path.exists():
+                continue
+            src_path = dask.delayed(self._get_path_from_stac_item)(tile_id)
+            tasks.append(dask.delayed(self._warp_tile_diff)(dst_path, src_path, warp_options))
+        with ProgressBar():
+            dask.compute(tasks, scheduler="processes", num_workers=8)
 
         # Step 2: Mosaic the tiles
-        mosaic_path = self.save_dir / f"global_mosaic_{self.year}_RH{self.rh_idx}_Q{self.left_q_idx}-Q{self.right_q_idx}.tif"
-        self._mosaic_tiles(diff_paths, mosaic_path)
+        mosaic_path = self.save_dir / f"global_mosaic_{self.year}_RH{self.rh_idx}_Q{left_q_idx}-Q{right_q_idx}.tif"
+        self._mosaic_tiles(downsampled_paths, mosaic_path)
 
         # Step 3: Translate the mosaic to cog
         cog_path = self._to_cog(mosaic_path)
         print(f"✅ Global mosaic written to {cog_path}")
+
+    def create_global_relative_diff_mosaic(self):
+        """
+        Create a global mosaic of (Q0 - Q2) / Q1, scaled by 1000.
+        """
+        temp_dir_name = (
+            f"tmp_tiles_resampled_1km_RH{self.rh_idx}_Q0-Q2_over_Q1"
+        )
+        temp_dir = self.init_tmp_dir(self.save_dir / temp_dir_name)
+        warp_options = dict(self.downsample_warp_options_mem)
+        tasks = []
+        downsampled_paths = []
+        for tile_id in self.tile_ids:
+            dst_path = temp_dir / f'{tile_id}.tif'
+            downsampled_paths.append(str(dst_path))
+            if dst_path.exists():
+                continue
+            src_path = dask.delayed(self._get_path_from_stac_item)(tile_id)
+            tasks.append(dask.delayed(self._warp_tile_relative_diff)(dst_path, src_path, warp_options))
+        with ProgressBar():
+            dask.compute(tasks, scheduler="processes", num_workers=8)
+
+
+        mosaic_path = (
+            self.save_dir /
+            f"global_mosaic_{self.year}_RH{self.rh_idx}"
+            f"_Q0-Q2_over_Q1.tif"
+        )
+        self._mosaic_tiles(downsampled_paths, mosaic_path)
+        cog_path = self._to_cog(mosaic_path)
+        print(f"✅ Global relative diff mosaic written to {cog_path}")
 
     def create_global_bias_correction_mosaic(self):
         '''
