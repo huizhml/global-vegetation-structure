@@ -556,14 +556,14 @@ if __name__ == '__main__':
     year = 2020
     stac_item = pystac.Item.from_file(str(f'/projects/dereeco/data/gvs/products/gvsm_stac_catalog/vsm_local/{tile_id}_{year}/{tile_id}_{year}.json'))
     out_file = Path(f'~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_test/original_with_sota_chms_ours_test/{year}/{tile_id}').expanduser()
-    # loc_dir = '~/data/gvs/downstream_tasks/naturalness/loc_by_tile/'
+    # loc_dir = '~/data/gvs/evaluation/downstream_tasks/naturalness/loc_by_tile/'
     # 
     loc_dir = '/projects/dereeco/data/gvs/gedi/veg_sensitivity_gt0p95/subset_test/original_with_sota_chms/2020'
     rh_idxs = np.arange(101)
     q_idxs = [1]    
     
     stac_col_dir = '/projects/dereeco/data/gvs/products/gvsm_stac_catalog/vsm_local'
-    save_dir = '~/data/gvs/downstream_tasks/naturalness/vsm_patches_ps11'
+    save_dir = '~/data/gvs/evaluation/downstream_tasks/naturalness/vsm_patches_ps11'
     loc_file = Path(f'{loc_dir}/{tile_id}.parquet').expanduser()
     pred_dir = Path(stac_item.assets[f'RH98_Q1'].href.replace('file://', '')).parent
     # df = sample_patches(loc_dir, stac_col_dir, save_dir, year=year, rh_idxs=rh_idxs, q_idxs=q_idxs, patch_size=11, chunk_size=2)

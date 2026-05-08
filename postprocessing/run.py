@@ -88,7 +88,7 @@ cs.store(group='run', name='create_updated_stac_collection', node=CreateUpdatedS
 
 @dataclass
 class SampleForestTempConfig(FunctionConfig):
-    tif_dir: str = '~/data/gvs/downstream_tasks/forest_temp/'
+    tif_dir: str = '~/data/gvs/evaluation/downstream_tasks/forest_temp/'
     p: float = 1e-4
     seed: int = 42
     _target_: str = "postprocessing.core.sample_raster.sample_forest_temp"
@@ -231,9 +231,9 @@ class ExtractPredConfig(FunctionConfig):
 
 @dataclass
 class SampleVSMPatchesConfig(FunctionConfig):
-    loc_dir: str = '~/data/gvs/downstream_tasks/naturalness/loc_by_tile/'
+    loc_dir: str = '~/data/gvs/evaluation/downstream_tasks/naturalness/loc_by_tile/'
     stac_col_dir: str = '~/data/gvs/products/gvsm_stac_catalog/vsm_local/'
-    save_dir: str = '~/data/gvs/downstream_tasks/naturalness/vsm_patches_ps11/'
+    save_dir: str = '~/data/gvs/evaluation/downstream_tasks/naturalness/vsm_patches_ps11/'
     year: int = 2020
     rh_idxs: list[int] = field(default_factory=lambda: list(range(101)))
     q_idxs: list[int] = field(default_factory=lambda: [1])

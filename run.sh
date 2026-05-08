@@ -228,8 +228,8 @@ echo $run_id
 echo predict for downstream task;
 python run.py predict -c config/predict.yaml --model.backbone config/model/xception_mix_order.yaml \
         --data.class_path datasets.h5_dataset.SparsePredDataModule \
-        --data.init_args.pred_fp ~/data/gvs/downstream_tasks/naturalness/results_from_vsm_2017/s2_gedi_patches_ps31/s2_2017_ps31.h5 \
-        --data.init_args.prediction_dir ~/data/gvs/downstream_tasks/naturalness/results_from_vsm_2017/vsm_patches_ps15_single_h5/ \
+        --data.init_args.pred_fp ~/data/gvs/evaluation/downstream_tasks/naturalness/results_from_vsm_2017/s2_gedi_patches_ps31/s2_2017_ps31.h5 \
+        --data.init_args.prediction_dir ~/data/gvs/evaluation/downstream_tasks/naturalness/results_from_vsm_2017/vsm_patches_ps15_single_h5/ \
         --data.init_args.batch_size 2048 \
         --trainer.logger.init_args.id $run_id
 ;;

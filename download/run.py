@@ -11,7 +11,7 @@ from config.base_config_class import ClassConfig, FunctionConfig
 @dataclass
 class DownloadForestTempConfig(FunctionConfig):
     url: str = 'https://figshare.com/ndownloader/files/39528400'
-    out_dir: str = '~/data/gvs/downstream_tasks/forest_temp'
+    out_dir: str = '~/data/gvs/evaluation/downstream_tasks/forest_temp'
     _target_: str = "download.products.forest_temp.download_forest_temp"
 
 # ================================ Download MGRS Configs ================================

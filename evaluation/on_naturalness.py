@@ -659,6 +659,8 @@ def run_classification(classifier: str, patch_stats_dir: str,  save_dir: str, **
             clf, x_val = xgboost_classification(x, x_val, y, y_val)
         y_pred = clf.predict(x_val).argmax(axis=1)
         y_pred_classes = classes[y_pred]
+        # save predictions
+        ddf_val[name] = y_pred.astype(np.uint8)
 
         # Confusion matrix
         cm = confusion_matrix(y_val, y_pred_classes)
@@ -683,6 +685,10 @@ def run_classification(classifier: str, patch_stats_dir: str,  save_dir: str, **
         df_per_class.index = [LAND_USE_NAMES.get(int(idx), idx)['short_name'] for idx in df_per_class.index]
         
         all_per_class_reports[name] = df_per_class
+
+    # save predictions
+    ddf_val.to_parquet(save_dir / 'logistic_regression_predictions.parquet')
+    ddf_val.to_file(save_dir / 'logistic_regression_predictions.fgb', driver='FlatGeobuf')
 
     all_summary_df = pd.concat(all_summary_reports, names=['Model', 'Metric'])
     all_per_class_df = pd.concat(all_per_class_reports, names=['Model', 'Class'])
@@ -751,11 +757,11 @@ if __name__ == '__main__':
     # from evaluation.utils import verify_batch_binning
     # verify_batch_binning()
     # split = 'train'
-    # vsm_patches_dir = f'~/data/gvs/downstream_tasks/naturalness/vsm_patches_ps11_{split}/'
+    # vsm_patches_dir = f'~/data/gvs/evaluation/downstream_tasks/naturalness/vsm_patches_ps11_{split}/'
     # vsm_patch_stats_dir = f'/projects/dereeco/data/gvs/downstream_tasks/naturalness/results_from_vsm_2020/vsm_s2_alpha_patch_stats_ps11_{split}/'
     # vsm_patch_stats_dir_val = f'/projects/dereeco/data/gvs/downstream_tasks/naturalness/results_from_vsm_2020/vsm_s2_alpha_patch_stats_ps11_val/'
     save_dir = f'/projects/dereeco/data/gvs/downstream_tasks/naturalness/results_from_vsm_2020/logistic_regression_ps11/'
-    # s2_patch_file = '~/data/gvs/downstream_tasks/naturalness/s2_2017_ps31.h5'
+    # s2_patch_file = '~/data/gvs/evaluation/downstream_tasks/naturalness/s2_2017_ps31.h5'
     # # cal_vsm_patch_stats(vsm_patches_dir, vsm_patch_stats_dir, s2_patch_file=s2_patch_file)
     # # all_summary_df, all_per_class_df, all_cms = run_classification(vsm_patch_stats_dir, vsm_patch_stats_dir_val, save_dir, debug=True)
     save_dir = Path(save_dir).expanduser()
