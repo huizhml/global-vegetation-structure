@@ -101,16 +101,19 @@ class ComputeEntropyConfig(FunctionConfig):
 cs.store(group='run', name='compute_entropy', node=ComputeEntropyConfig)
 @dataclass
 class ComputeDiversityIndicesConfig(FunctionConfig):
-    save_dir: str = '~/data/gvs/evaluation/with_gedi_on_diversity_indices/indices_by_tile/'
-    gedi_ours_dir: str = '~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_test/original_with_sota_chms_biome_and_ours_full/2020'
     bin_width: int = 5
+    max_height: int = 150
+    save_dir: str = '~/data/gvs/evaluation/with_gedi_on_diversity_indices/indices_by_tile/max_height_{max_height}m_bin_{bin_width}m'
+    gedi_ours_dir: str = '~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_test/original_with_sota_chms_biome_and_ours_full/2020'
     year: int = 2020
     _target_: str = "evaluation.on_diversity_indices.cal_diversity_indices"
     
 cs.store(group='run', name='compute_diversity_indices', node=ComputeDiversityIndicesConfig)
 @dataclass
 class EvaluateDiversityIndicesConfig(FunctionConfig):
-    indices_dir: str = '~/data/gvs/evaluation/with_gedi_on_diversity_indices/indices_by_tile/bin_width_5m/2020'
+    max_height: int = 150
+    bin_width: int = 5
+    indices_dir: str = '~/data/gvs/evaluation/with_gedi_on_diversity_indices/indices_by_tile/max_height_{max_height}m_bin_{bin_width}m'
     group_by: Optional[str] = 'BIOME'
     filter_steep_slope: bool = True
     year: int = 2020
@@ -123,31 +126,33 @@ cs.store(group='run', name='evaluate_diversity_indices', node=EvaluateDiversityI
 
 @dataclass
 class PlotBiomeCombinedBoxplotConfig(FunctionConfig):
-    indices_dir: str = '~/data/gvs/evaluation/with_gedi_on_diversity_indices/indices_by_tile/bin_width_5m/2020'
+    max_height: int = 150
+    bin_width: int = 5
+    indices_dir: str = '~/data/gvs/evaluation/with_gedi_on_diversity_indices/indices_by_tile/max_height_{max_height}m_bin_{bin_width}m'
     group_by: Optional[str] = None
     filter_steep_slope: bool = True
     year: int = 2020
     plot_biome_combined_boxplot: bool = True
-    max_height: int = 50
     save_dir: str = '~/data/gvs/evaluation/with_gedi_on_diversity_indices/results/'
     _target_: str = "evaluation.on_diversity_indices.eval_diversity_indices"
    
 cs.store(group='run', name='plot_biome_combined_boxplot', node=PlotBiomeCombinedBoxplotConfig) 
 
 
-# =======================================
-#   VSM on naturalness
-# =======================================
 @dataclass
-class PrepareNaturalnessLocParquetsConfig(FunctionConfig):
-    naturalness_csv: str = '~/data/gvs/evaluation/downstream_tasks/naturalness/reference_data_set_updated_train.csv'
-    s2_grid_file: str = '~/data/gvs/state/s2_tiles_with_growing_months.parquet'
-    save_dir: str = '~/data/gvs/evaluation/downstream_tasks/naturalness/loc_by_tile_train'
-    _target_: str = "evaluation.on_naturalness.prepare_loc_parqs"
-    
-# cs.store(group='run', name='extract_pixels_and_save', node=ExtractPixelsAndSaveConfig)
-cs.store(group='run', name='prepare_naturalness_loc_parquets', node=PrepareNaturalnessLocParquetsConfig) 
-
+class PlotResidualsRh98BinedConfig(FunctionConfig):
+    bin_width: int = 5
+    max_height: int = 150
+    group_by: Optional[str] = None
+    filter_steep_slope: bool = True
+    year: int = 2020
+    plot_biome_combined_boxplot: bool = False
+    root_dir: str = '~/data/gvs/evaluation/with_gedi_on_diversity_indices'
+    indices_dir: str = '{root_dir}/indices_by_tile/max_height_{max_height}m_bin_{bin_width}m'
+    save_dir: str = '{root_dir}/results/steep_slope_filtered_bin_{bin_width}m_max_height_{max_height}m'
+    _target_: str = "evaluation.on_diversity_indices.eval_diversity_indices"
+   
+cs.store(group='run', name='plot_residuals_rh98_bined', node=PlotResidualsRh98BinedConfig) 
 @dataclass
 class CalS2PatchStatsConfig(FunctionConfig):
     year: int = 2017

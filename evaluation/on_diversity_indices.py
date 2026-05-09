@@ -38,9 +38,7 @@ import matplotlib.gridspec as gridspec
 import matplotlib.patches as mpatches
 from scipy.stats import gaussian_kde, pearsonr
 
-MAX_HEIGHT = 100.0
-N_BINS = 20
-BIN_WIDTH = MAX_HEIGHT / N_BINS
+MAX_HEIGHT = 150.0 # NOTE: GEDI L2B FHD was derived from [0, 150] m height range, with 5 m step size
 NODATA_IN = 32767
 NODATA_OUT = -9999.0
 GEDI_META_COLS =['digital_elevation_model', 'digital_elevation_model_srtm', 'pft_class', 'sensitivity', 'beam',
@@ -54,7 +52,9 @@ key_rhs = [25, 50, 75, 95, 98]
 RH_COLS = [f'rh{rh}' for rh in key_rhs] + [f'RH{rh}_Q1_raw' for rh in key_rhs]
 stac_collection_dir = '~/data/gvs/products/gvsm_stac_catalog/vsm_local'
 
-
+# ------------------------------------------------------------------------------------------------
+# Plotting functions
+# ------------------------------------------------------------------------------------------------
 def scatter_plot(df: pd.DataFrame, var: str, metrics: dict, biome_value: int = None, save_dir: Path = None, max_value: int = 3) -> None:
     if biome_value == 98:
         biome_value = 15
@@ -340,31 +340,79 @@ def boxplot_with_marginal_histograms_combined(
         print(f'Saved to {save_dir / file_name}')
     plt.close(fig)
 
-def pixel_diversity_indices(rhs, bin_width=5, max_height=None):
+def plot_residuals_rh98_bined(df: pd.DataFrame, save_dir: Path = None, max_height: int = 50, rh98_interval: int = 5, **kwargs):
+    df['rh98_bins'] = pd.cut(df['rh98'], bins=np.arange(0, max_height + rh98_interval, rh98_interval), right=False)
+
+    for var, name in [('fhd', 'FHD'), ('enl1d', 'ENL 1D'), ('enl2d', 'ENL 2D'), ('cr', 'CR')]:
+        grouped = df.groupby('rh98_bins', observed=True)[f'{var}_diff']
+        labels = [str(k) for k in grouped.groups.keys()]
+        data = [g.dropna().values for _, g in grouped]
+        counts = [len(d) for d in data]
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+
+        # --- background count bars on secondary axis ---
+        ax_bar = ax.twinx()
+        ax_bar.bar(range(1, len(counts) + 1), counts, color='lightgrey', alpha=0.3, width=0.6, zorder=1)
+        ax_bar.set_ylabel('Count', color='grey')
+        ax_bar.tick_params(axis='y', labelcolor='grey')
+        ax_bar.set_ylim(0, max(counts) * 3)  # push bars down to ~1/3 of plot height
+
+        # count labels: format large numbers with comma separator
+        for i, n in enumerate(counts, start=1):
+            ax_bar.text(i, n + max(counts) * 0.02, f'{n:,}', ha='center', va='bottom',
+                        fontsize=7, color='grey', fontweight='light')
+
+        # --- dashed zero line (behind boxes, in front of bars) ---
+        ax.axhline(y=0, color='dimgrey', linestyle='--', linewidth=0.8, zorder=2)
+
+        # --- boxplot on top ---
+        ax.boxplot(data, labels=labels, showfliers=False, zorder=3)
+        ax.set_xticklabels(labels, rotation=45, ha='right')
+        ax.set_xlabel('Canopy Top Height (m)')
+        ax.set_ylabel(f'{name} Residual')
+        ax.set_title(f'{name} Residuals by Canopy Top Height')
+
+        # keep boxplot axis in front
+        ax.set_zorder(ax_bar.get_zorder() + 1)
+        ax.patch.set_visible(False)
+
+        fig.tight_layout()
+        for ext in ('pdf', 'png'):
+            fig.savefig(save_dir / f'residuals_{var}_rh98_binned.{ext}', dpi=300, bbox_inches='tight')
+        print(f"Saved to {save_dir / f'residuals_{var}_rh98_binned.[pdf|png]'}")
+        plt.close(fig)
+
+# ------------------------------------------------------------------------------------------------
+# Diversity indices
+# ------------------------------------------------------------------------------------------------
+def pixel_diversity_indices(rhs, bin_width=5, max_height=MAX_HEIGHT):
     """
-    Compute per-pixel FHD using a simple histogram approach.
+    Compute per-pixel FHD using a simple histogram approach. NOTE!!!: rhs should be in meters!!!
     """
     if isinstance(rhs, pd.Series):
         rhs = rhs.values
-    if max_height is None:
-        max_height = MAX_HEIGHT
     rhs_arr = np.asarray(rhs, dtype=np.float32)
-    rhs_arr = rhs_arr[np.isfinite(rhs_arr)]
-    n_bins = int(MAX_HEIGHT / bin_width)
-    hist, bins = np.histogram(rhs_arr, bins=n_bins, range=(0, MAX_HEIGHT)) # negative values are ignored
-    p = hist / hist.sum()
+    valid = np.isfinite(rhs_arr) & (rhs_arr > 0)
+    rhs_valid = rhs_arr[valid]
+    if rhs_valid.size == 0:
+        return np.nan, np.nan, np.nan, np.nan
+    rhs_valid = np.clip(rhs_valid, None, max_height)
+    n_bins = int(max_height / bin_width)
+    hist, bins = np.histogram(rhs_valid, bins=n_bins, range=(0, max_height)) # negative values are ignored
+    p = hist / hist.sum() # NOTE: normalize the histogram to get the probability
     mask = p > 0
     fhd = -np.sum(p[mask] * np.log(p[mask])).astype(np.float32)
     enl1d = np.exp(fhd)
     enl2d = np.float32(1.0 / np.sum(p[mask] ** 2))
     if np.isinf(enl2d):
-        print(f'ENL2D is inf, setting to 0, rhs: {rhs}, p: {p}')
-        enl2d = 0.0
-    rh25 = max(rhs[25], 0)
-    if rhs[98] <= 0:
-        cr = 0
+        print(f'ENL2D is inf, setting to NaN, rhs: {rhs}, p: {p}')
+        enl2d = np.nan
+    rh25 = max(rhs_arr[25], 0)
+    if rhs_arr[98] <= 0:
+        cr = np.nan
     else:
-        cr = (rhs[98] - rh25)/rhs[98]
+        cr = (rhs_arr[98] - rh25)/rhs_arr[98]
     
     return fhd, enl1d, enl2d, cr
 
@@ -396,10 +444,9 @@ def pixel_vertical_profile(rhs, min_rh=-20, max_rh=50, step=0.1, window=3):
         smoothed_grad = savgol_filter(grad_resampled, safe_window, 1)
     return x, smoothed_grad.astype(np.float32)
 
-
-def _chunk_diversity(tile, bin_width=5, nodata_out=NODATA_OUT):
+def _chunk_diversity(data, bin_width=5, max_height=MAX_HEIGHT):
     """
-    Vectorized Shannon entropy for a single spatial chunk.
+    Vectorized Shannon entropy for a single spatial chunk. data is in decimeters.
 
     Parameters
     ----------
@@ -409,59 +456,67 @@ def _chunk_diversity(tile, bin_width=5, nodata_out=NODATA_OUT):
     -------
     out : ndarray, shape (rows, cols), float32
     """
-    
-    n_bands, n_rows, n_cols = tile.shape
+    n_bands, n_rows, n_cols = data.shape
     n_pixels = n_rows * n_cols
-    n_bins = int(MAX_HEIGHT / bin_width)
-    valid = np.isfinite(tile) & (tile != NODATA_IN) & (tile > 0)
+    valid = np.isfinite(data) & (data != NODATA_IN) & (data > 0)
     nodata_mask = valid.sum(axis=0) == 0
 
-    tile = tile/10
-    tile_clean = np.where(valid, tile, 0.0)
-    bin_idx = np.clip((tile_clean / bin_width).astype(np.int32), 0, n_bins - 1)
-    bin_idx = np.where(valid, bin_idx, -1)
+    data = data / 10
 
-    bin_flat = bin_idx.reshape(n_bands, n_pixels)
-    pixel_indices = np.broadcast_to(
-        np.arange(n_pixels)[np.newaxis, :], (n_bands, n_pixels)
-    ) # (101, n_pixels), each row is the pixel index for the corresponding band, e.g, 0,1,2,3,..., 512*512-1
+    data = data.reshape(n_bands, n_pixels)
+    valid = valid.reshape(n_bands, n_pixels)
+    data_clean = np.where(valid, np.minimum(data, max_height), -1.0)
 
-    hist = np.zeros((n_pixels, n_bins), dtype=np.float32)
-    flat_valid = bin_flat != -1 #(101, 512*512)
-    np.add.at(hist, (pixel_indices[flat_valid], bin_flat[flat_valid]), 1.0) #
+    # Sort along axis=0 (bands), not axis=1 (pixels)
+    profiles = np.sort(data_clean, axis=0)
+    profiles = np.ascontiguousarray(profiles)
 
-    total = hist.sum(axis=-1, keepdims=True)
-    p = hist / total # (n_pixels, n_bins)
+    lower_edges = np.arange(0, max_height, bin_width)
+    upper_edges = np.arange(bin_width, max_height + bin_width, bin_width)
+
+    idx_low = np.stack(
+        [np.searchsorted(profiles[:, i], lower_edges, side='left') for i in range(n_pixels)]
+    )
+    idx_high = np.stack(
+        [np.searchsorted(profiles[:, i], upper_edges, side='left') for i in range(n_pixels)]
+    )
+    idx_high[:, -1] = np.array(
+        [np.searchsorted(profiles[:, i], upper_edges[-1:], side='right')[0] for i in range(n_pixels)]
+    )
+    hist = (idx_high - idx_low).astype(np.float32)
+
+    # Normalize
+    total = hist.sum(axis=1, keepdims=True)
+    total = np.where(total > 0, total, 1.0)
+    p = hist / total
+
+    # FHD
     log_p = np.where(p > 0, np.log(p), 0.0)
-    # # pixel-wise entropy, VERIFIED
-    # tile_flat = tile_clean.reshape(n_bands, n_pixels)
-    # hist_pixel_wise = np.zeros((n_pixels, n_bins), dtype=np.float32)
-    # for i in range(n_pixels):
-    #     count, bin_edges = np.histogram(tile_flat[flat_valid[:, i], i], bins=n_bins, range=(0, MAX_HEIGHT))
-    #     hist_pixel_wise[i, :] = count
-    # p = hist_pixel_wise / hist_pixel_wise.sum(axis=-1, keepdims=True)
-    # log_p = np.where(p > 0, np.log(p), 0.0)
-    # entropy_ = -np.sum(p * log_p, axis=-1)
-    # enl1d_ = np.exp(entropy_)
-    # enl2d_ = (1/ (p**2).sum(axis=-1))
-    # cr_ = (tile_flat[98, i] - tile_flat[25, i])/(tile_flat[98, i] + 1e-6)
+    fhd = -np.sum(p * log_p, axis=1).astype(np.float32)
 
-    entropy = -np.sum(p * log_p, axis=-1).astype(np.float32)
-    enl1d = np.exp(entropy)
-    enl2d = (1/ (p**2).sum(axis=-1)).astype(np.float32) # 2D ENL
+    # ENL1D
+    enl1d = np.exp(fhd).astype(np.float32)
 
-    entropy = entropy.reshape(n_rows, n_cols)
+    # ENL2D
+    sum_p2 = np.sum(np.where(p > 0, p ** 2, 0.0), axis=1)
+    enl2d = np.where(sum_p2 > 0, 1.0 / sum_p2, np.nan).astype(np.float32)
+
+    # CR
+    rh25 = np.maximum(data[25, :], 0)
+    rh98 = data[98, :]
+    cr = np.where(rh98 > 0, (rh98 - rh25) / rh98, np.nan).astype(np.float32)
+
+    fhd = fhd.reshape(n_rows, n_cols)
     enl1d = enl1d.reshape(n_rows, n_cols)
     enl2d = enl2d.reshape(n_rows, n_cols)
+    cr = cr.reshape(n_rows, n_cols)
+    # Apply nodata
+    fhd[nodata_mask] = np.nan
+    enl1d[nodata_mask] = np.nan
+    enl2d[nodata_mask] = np.nan
+    cr[nodata_mask] = np.nan
 
-    entropy[nodata_mask] = nodata_out
-    enl1d[nodata_mask] = nodata_out
-    enl2d[nodata_mask] = nodata_out
-    rh25 = np.maximum(tile[25], 0)
-    cr = (tile[98] - rh25)/(tile[98] + 1e-6)
-    cr[nodata_mask] = nodata_out
-    return entropy, enl1d, enl2d, cr
-
+    return fhd, enl1d, enl2d, cr
 
 def _process_tile(args):
     """
@@ -469,16 +524,16 @@ def _process_tile(args):
     Each worker opens its own file handle (required for multiprocessing).
     Reads all 101 bands for one window in a single call, computes entropy.
     """
-    vrt_path, col_off, row_off, w, h, bin_width = args
+    vrt_path, col_off, row_off, w, h, bin_width, max_height = args
     with rasterio.open(vrt_path, "r") as src:
         window = Window(col_off, row_off, w, h)
         tile = src.read(window=window).astype(np.float32)  # (101, h, w)
-    ent, enl1d, enl2d, cr = _chunk_diversity(tile, bin_width=bin_width)
+    ent, enl1d, enl2d, cr = _chunk_diversity(tile, bin_width=bin_width, max_height=max_height)
     return ent, enl1d, enl2d, cr, col_off, row_off, w, h
 
 
 def compute_entropy(output_dir, tile_id, year, vrt_path=None,
-                         chunk_size=512, max_workers=8, bin_width=5, **kwargs):
+                         chunk_size=512, max_workers=8, bin_width=5, max_height=MAX_HEIGHT, **kwargs):
     """
     Compute per-pixel FHD entropy — fast version.
 
@@ -550,8 +605,8 @@ def compute_entropy(output_dir, tile_id, year, vrt_path=None,
         for col_off in range(0, nx, chunk_size):
             h = min(chunk_size, ny - row_off)
             w = min(chunk_size, nx - col_off)
-            ent, enl1d, enl2d, cr = _process_tile((vrt_path, col_off, row_off, w, h, bin_width))
-            work_items.append((vrt_path, col_off, row_off, w, h, bin_width))
+            ent, enl1d, enl2d, cr = _process_tile((vrt_path, col_off, row_off, w, h, bin_width, max_height))
+            work_items.append((vrt_path, col_off, row_off, w, h, bin_width, max_height))
 
     print(f"Processing {len(work_items)} tiles with {max_workers} processes")
     print(f"Estimated peak RAM: ~{max_workers * 100 * chunk_size**2 * 4 / 1e9:.1f} GB")
@@ -581,7 +636,9 @@ def compute_entropy(output_dir, tile_id, year, vrt_path=None,
     print(f"Done: {output_path}")
     return output_path
 
-
+# ------------------------------------------------------------------------------------------------
+# Helper functions
+# ------------------------------------------------------------------------------------------------
 def create_vrt(tile_dir, vrt_path, q_idx="1"):
     tile_dir = Path(tile_dir).expanduser()
     vrt_path = Path(vrt_path).expanduser()
@@ -607,6 +664,9 @@ def create_vrt(tile_dir, vrt_path, q_idx="1"):
     vrt = None
     return vrt_path
 
+# ------------------------------------------------------------------------------------------------
+# Orchestrator
+# ------------------------------------------------------------------------------------------------
 
 def vertical_profile_biome_analysis(points_file, save_dir, s2_grid_file=None, gedi_ref_dir=None, max_distance=1000):
     points_file = Path(points_file).expanduser()
@@ -702,9 +762,9 @@ def vertical_profile_biome_analysis_ours(points_file, save_dir, s2_grid_file=Non
         vrt_path = str(Path(vrt_path).expanduser())
         #TODO: ...
 
-def cal_diversity_indices(save_dir, gedi_ours_dir, bin_width=5, year=2020, **kwargs):
+def cal_diversity_indices(save_dir, gedi_ours_dir, bin_width=5, max_height=MAX_HEIGHT, year=2020, **kwargs):
     '''Evaluate the diversity indices against the GEDI reference points on the test set'''
-    save_dir = Path(f'{save_dir}/bin_width_{bin_width}m/{year}').expanduser()
+    save_dir = Path(save_dir).expanduser()
     save_dir.mkdir(parents=True, exist_ok=True)
     gedi_ours_dir = Path(gedi_ours_dir).expanduser()
     gedi_ours_dir.mkdir(parents=True, exist_ok=True)
@@ -723,9 +783,9 @@ def cal_diversity_indices(save_dir, gedi_ours_dir, bin_width=5, year=2020, **kwa
         if gedi_ours.empty:
             return None
         
-        indices_gedi = gedi_ours[gedi_ref_cols].apply(lambda x: pixel_diversity_indices(x, bin_width=bin_width), axis=1)
+        indices_gedi = gedi_ours[gedi_ref_cols].apply(lambda x: pixel_diversity_indices(x, bin_width=bin_width, max_height=max_height), axis=1)
         indices_gedi = pd.DataFrame(indices_gedi.tolist(), index=indices_gedi.index, columns=['fhd_gedi', 'enl1d_gedi', 'enl2d_gedi', 'cr_gedi'])
-        indices_ours = gedi_ours[ours_cols].apply(lambda x: pixel_diversity_indices(x, bin_width=5), axis=1)
+        indices_ours = gedi_ours[ours_cols].apply(lambda x: pixel_diversity_indices(x, bin_width=bin_width, max_height=max_height), axis=1)
         indices_ours = pd.DataFrame(indices_ours.tolist(), index=indices_ours.index, columns=['fhd_ours', 'enl1d_ours', 'enl2d_ours', 'cr_ours'])
         df = pd.concat([indices_gedi, indices_ours, gedi_ours[GEDI_META_COLS + RH_COLS]], axis=1)
         df = gpd.GeoDataFrame(df, geometry='geometry', crs="EPSG:4326")
@@ -740,11 +800,9 @@ def cal_diversity_indices(save_dir, gedi_ours_dir, bin_width=5, year=2020, **kwa
         dask.compute(*tasks)
 
 
-def eval_diversity_indices(indices_dir, group_by=None, year=2020, save_dir=None, filter_steep_slope=False, plot_scatter=False, plot_boxplot=False, max_height=50, **kwargs):
+def eval_diversity_indices(indices_dir:str=None, bin_width:int=5, group_by=None, year=2020, save_dir=None, filter_steep_slope=False, plot_scatter=False, plot_boxplot=False, max_height=50, **kwargs):
     # Extract bin_width from indices_dir string (looks for "bin_width_" followed by digits)
-    m = re.search(r'bin_width_(\d+)', str(indices_dir))
-    bin_width = int(m.group(1)) if m else None
-    assert bin_width is not None, f"Could not extract bin_width from {indices_dir}"
+
     indices_dir = Path(indices_dir).expanduser()
     save_dir = Path(save_dir).expanduser()
     save_dir.mkdir(parents=True, exist_ok=True)
@@ -753,8 +811,8 @@ def eval_diversity_indices(indices_dir, group_by=None, year=2020, save_dir=None,
     ddf = dd.read_parquet(indices_files)
     if filter_steep_slope:
         ddf = ddf[ddf['slope'] <= 20]
-        save_dir = save_dir.parent / f'steep_slope_filtered_bin_{bin_width}m'
-        save_dir.mkdir(parents=True, exist_ok=True)
+        # save_dir = save_dir.parent / f'steep_slope_filtered_bin_{bin_width}m'
+        # save_dir.mkdir(parents=True, exist_ok=True)
     ddf['fhd_diff'] = ddf['fhd_gedi'] - ddf['fhd_ours']
     ddf['enl1d_diff'] = ddf['enl1d_gedi'] - ddf['enl1d_ours']
     ddf['enl2d_diff'] = ddf['enl2d_gedi'] - ddf['enl2d_ours']
@@ -786,7 +844,6 @@ def eval_diversity_indices(indices_dir, group_by=None, year=2020, save_dir=None,
                 boxplot_with_marginal_histograms(group, f'{var}_gedi', rh_col=f'rh98', save_dir=save_dir, max_height=max_height)
                 boxplot_with_marginal_histograms(group, f'{var}_ours', rh_col=f'RH98_Q1_raw', save_dir=save_dir, max_height=max_height)
         return pd.Series(metrics)
-
     if group_by is not None:
         meta = pd.DataFrame({
             "fhd_corr": pd.Series(dtype="float32"),
@@ -826,6 +883,7 @@ def eval_diversity_indices(indices_dir, group_by=None, year=2020, save_dir=None,
             boxplot_with_marginal_histograms_combined(
                 ddf, var='fhd_gedi', rh_col='rh98', save_dir=save_dir
             )
+        plot_residuals_rh98_bined(ddf, save_dir=save_dir, max_height=50)
         result = compute_metrics(ddf)
         records = {}
         for var, label in [('fhd', 'FHD'), ('enl1d', 'ENL 1D'), ('enl2d', 'ENL 2D'), ('cr', 'CR')]:
