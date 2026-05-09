@@ -52,6 +52,11 @@ VIS_PARAMS = {
         'cmin': 0,
         'cmax': 500,
         'cmap': 'viridis_r'
+    },
+    'rh98_q1':{
+        'cmin': 0,
+        'cmax': 500,
+        'cmap': 'inferno'
     }
 }
 
@@ -215,18 +220,32 @@ def plot_pdf_cover(params: dict, timestamp: str):
     return fig_cover
 
 
-def plot_tiff_image(image: xr.DataArray):
+def plot_tiff_image(image: xr.DataArray, cmin: int=None, cmax: int=None, cmap: str = None):
     '''
     Plot as single-band image with a colorbar.
-    
+    Args:
+        image: xarray.DataArray
+        cmin: minimum value of the colorbar
+        cmax: maximum value of the colorbar
+        cmap: colormap
+    Returns:
+        figs: dictionary of matplotlib figures
     '''
     if image.ndim == 2:
         image = image.expand_dims('band')
     figs = {}
-    for band in image.band:
-        cmap = VIS_PARAMS[band.item()]['cmap']
-        cmin = VIS_PARAMS[band.item()]['cmin']
-        cmax = VIS_PARAMS[band.item()]['cmax']
+    for band in image.band: # NOTE: single band tiff has no band name
+        
+        band_name = band.item()
+        if band_name in VIS_PARAMS:
+            vis = VIS_PARAMS[band_name] # TODO: Define vis params for other RH metrics, currently only RH98_Q1 (default), and diversity indices
+        else:
+            vis = VIS_PARAMS['rh98_q1']
+            band_name = 'RH98_Q1'
+            
+        cmap = cmap or vis['cmap']
+        cmin = cmin or vis['cmin']
+        cmax = cmax or vis['cmax']
 
         fig = plt.figure(figsize=(6, 5))
         ax = plt.gca()
@@ -246,13 +265,13 @@ def plot_tiff_image(image: xr.DataArray):
         cax = fig.add_axes([0.06, 0.3, 0.02, 0.15])
         cbar = fig.colorbar(im, cax=cax, orientation='vertical')
         cbar.set_ticks([cmin, cmax])
-        if 'rh' in band.item().lower():
+        if 'rh' in band_name.lower():
             cbar.set_ticklabels([f'{cmin / 10:.0f}', f'{cmax / 10:.0f}'])
         else:
             cbar.set_ticklabels([f'{cmin:.0f}', f'{cmax:.0f}'])
         cbar.ax.tick_params(size=0, pad=2)
         cbar.outline.set_visible(False)
-        figs[band.item()] = fig
+        figs[band_name] = fig
     return figs
 
 
@@ -383,7 +402,7 @@ def make_rh_pair_pdf(
             plt.close(fig)
     print(f'saved to {pdf_file}')
     
-def make_global_mosaic_pdf(mosaic_dir: str, tif_filename_pattern: str = 'global_mosaic_*RH*_Q0-Q2.cog.tif', pdf_file: Path=None, multi_pages: bool = False, cmin: float = None, cmax: float = None, cmap: str = 'viridis_r', **kwargs):
+def make_global_mosaic_pdf(mosaic_dir: str, tif_filename_pattern: str = 'global_mosaic_*RH*_Q0-Q2.cog.tif', pdf_file: Path=None, multi_pages: bool = False, cmin: float = None, cmax: float = None, cmap: str = None, **kwargs):
     '''
     Make a PDF file where each page renders a global mosaic of a TIFF image
     '''
@@ -401,7 +420,7 @@ def make_global_mosaic_pdf(mosaic_dir: str, tif_filename_pattern: str = 'global_
             plt.close(fig_cover)
             for tif_file in tif_files:
                 image = rio_read(tif_file)
-                figs = plot_tiff_image(image)
+                figs = plot_tiff_image(image, cmin=cmin, cmax=cmax, cmap=cmap)
                 for band, fig in figs.items():
                     pdf.savefig(fig, bbox_inches='tight', dpi=300)
                     plt.close(fig)
@@ -409,10 +428,11 @@ def make_global_mosaic_pdf(mosaic_dir: str, tif_filename_pattern: str = 'global_
     else:
         for tif_file in tif_files:
             image = rio_read(tif_file)
-            figs = plot_tiff_image(image)
+            figs = plot_tiff_image(image, cmin=cmin, cmax=cmax, cmap=cmap)
             for band, fig in figs.items():
                 _pdf_file = pdf_file.parent / f'{pdf_file.stem}_{tif_file.stem}_{band}.pdf'
                 fig.savefig(_pdf_file, bbox_inches='tight', dpi=300)
+                fig.savefig(_pdf_file.with_suffix('.png'), bbox_inches='tight', dpi=300)
                 plt.close(fig)
                 print(f'saved to {_pdf_file}')
     

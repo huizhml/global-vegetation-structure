@@ -7,6 +7,7 @@ import scipy
 import statsmodels.api as sm
 import zarr
 from patsy import dmatrices
+from shapely import wkb
 from sklearn.metrics import confusion_matrix, classification_report, f1_score, accuracy_score, recall_score, precision_score
 import numpy as np
 import h5py
@@ -628,6 +629,7 @@ def run_classification(classifier: str, patch_stats_dir: str,  save_dir: str, **
     save_dir.mkdir(parents=True, exist_ok=True)
     ddf, y = _load_patch_stats(patch_stats_dir, 'train', **kwargs)
     ddf_val, y_val = _load_patch_stats(patch_stats_dir, 'val', **kwargs)
+    ddf_ref_val = ddf_val[['Land_use_ID', 'slope', 'geometry', 'flag']]
     classes = np.unique(y)
     
     groups = {
@@ -660,8 +662,7 @@ def run_classification(classifier: str, patch_stats_dir: str,  save_dir: str, **
         y_pred = clf.predict(x_val).argmax(axis=1)
         y_pred_classes = classes[y_pred]
         # save predictions
-        ddf_val[name] = y_pred.astype(np.uint8)
-
+        ddf_ref_val[name] = y_pred_classes.astype(np.uint8)
         # Confusion matrix
         cm = confusion_matrix(y_val, y_pred_classes)
         all_cms[name] = cm
@@ -687,8 +688,11 @@ def run_classification(classifier: str, patch_stats_dir: str,  save_dir: str, **
         all_per_class_reports[name] = df_per_class
 
     # save predictions
-    ddf_val.to_parquet(save_dir / 'logistic_regression_predictions.parquet')
-    ddf_val.to_file(save_dir / 'logistic_regression_predictions.fgb', driver='FlatGeobuf')
+    ddf_ref_val['geometry'] = ddf_ref_val['geometry'].apply(wkb.loads)
+    ddf_ref_val = gpd.GeoDataFrame(ddf_ref_val, geometry='geometry', crs="EPSG:4326")
+    ddf_ref_val = gpd.GeoDataFrame(ddf_ref_val, geometry=ddf_ref_val['geometry'])
+    ddf_ref_val.to_parquet(save_dir / 'logistic_regression_predictions.parquet')
+    ddf_ref_val.to_file(save_dir / 'logistic_regression_predictions.fgb', driver='FlatGeobuf')
 
     all_summary_df = pd.concat(all_summary_reports, names=['Model', 'Metric'])
     all_per_class_df = pd.concat(all_per_class_reports, names=['Model', 'Class'])

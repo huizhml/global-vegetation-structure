@@ -279,7 +279,7 @@ class GlobalMosaicker:
             # We return None so the worker knows to skip this file
             return None
 
-    def _write_tiff(self, arr: np.ndarray, dst_path: Path, gdal_ds: gdal.Dataset):
+    def _write_tiff(self, arr: np.ndarray, dst_path: Path, gdal_ds: gdal.Dataset, band_name: str = None):
         '''
         Write a numpy array to a tif file
         '''
@@ -291,18 +291,24 @@ class GlobalMosaicker:
         out_ds.SetGeoTransform(gdal_ds.GetGeoTransform())
         out_ds.SetProjection(gdal_ds.GetProjection())
         out_band = out_ds.GetRasterBand(1)
+        if band_name:
+            out_band.SetDescription(band_name)
         out_band.WriteArray(arr)
         out_band.SetNoDataValue(self.dst_nodata)
         out_band.FlushCache()
         out_ds = None
 
     @staticmethod
-    def _warp_tile(dst_path: Path, src_path: Path, warp_options: dict):
+    def _warp_tile(dst_path: Path, src_path: Path, warp_options: dict, band_name: str = None):
         '''
         Warp a tile to the target projection and resolution
         '''
         warp_opts = gdal.WarpOptions(**warp_options)
         gdal.Warp(str(dst_path), str(src_path), options=warp_opts)
+        if band_name:
+            ds = gdal.Open(str(dst_path), gdal.GA_Update)
+            ds.GetRasterBand(1).SetDescription(band_name)
+            ds = None
         return str(dst_path)
     
     def _warp_tile_diff(self, dst_path: Path, src_path: Path,warp_options: dict):
@@ -327,7 +333,7 @@ class GlobalMosaicker:
         diff_arr = diff_arr.astype(np.int16)
 
         # 4. Create the output TIF
-        self._write_tiff(diff_arr, dst_path, ds1)
+        self._write_tiff(diff_arr, dst_path, ds1, band_name=f'RH{self.rh_idx}_Q0-Q2')
         ds1 = None
         ds2 = None
         return str(dst_path)
@@ -362,7 +368,7 @@ class GlobalMosaicker:
                             ((arr_left - arr_right) / arr_mid) * 1000)
         rel_diff = rel_diff.astype(np.int16)
 
-        self._write_tiff(rel_diff, dst_path, ds_left)
+        self._write_tiff(rel_diff, dst_path, ds_left, band_name=f'RH{self.rh_idx}_Q0-Q2_over_Q1')
         ds_left = ds_right = ds_mid = None
         return str(dst_path)
 
@@ -425,13 +431,17 @@ class GlobalMosaicker:
                 continue
             src_path = dask.delayed(self._get_path_from_stac_item)(tile_id)
             # self._warp_tile(src_path, dst_path, warp_options)
-            tasks.append(dask.delayed(self._warp_tile)(dst_path, src_path, warp_options))
+            tasks.append(dask.delayed(self._warp_tile)(dst_path, src_path, warp_options, band_name=f'RH{self.rh_idx}_Q{self.q_idx}'))
         with ProgressBar():
             dask.compute(tasks, scheduler="processes", num_workers=8)
 
-        
-        mosaic_path = self.save_dir / f"global_mosaic_{self.year}_RH{self.rh_idx}_Q{self.q_idx}.tif"
+        geotiff_dir = self.save_dir / 'geotiff'
+        geotiff_dir.mkdir(parents=True, exist_ok=True)
+        mosaic_path = self.save_dir / f"RH{self.rh_idx}_Q{self.q_idx}.tif"
         self._mosaic_tiles(downsampled_paths, mosaic_path)
+        cog_dir = self.save_dir / 'cog'
+        cog_dir.mkdir(parents=True, exist_ok=True)
+        cog_path = cog_dir / f"RH{self.rh_idx}_Q{self.q_idx}.tif"
         cog_path = self._to_cog(mosaic_path)
         print(f"✅ Global mosaic written to {cog_path}")
     
@@ -456,11 +466,16 @@ class GlobalMosaicker:
             dask.compute(tasks, scheduler="processes", num_workers=8)
 
         # Step 2: Mosaic the tiles
-        mosaic_path = self.save_dir / f"global_mosaic_{self.year}_RH{self.rh_idx}_Q{left_q_idx}-Q{right_q_idx}.tif"
+        geotiff_dir = self.save_dir / 'geotiff'
+        geotiff_dir.mkdir(parents=True, exist_ok=True)
+        mosaic_path = geotiff_dir / f"RH{self.rh_idx}_Q{left_q_idx}-Q{right_q_idx}.tif"
         self._mosaic_tiles(downsampled_paths, mosaic_path)
 
         # Step 3: Translate the mosaic to cog
-        cog_path = self._to_cog(mosaic_path)
+        cog_dir = self.save_dir / 'cog'
+        cog_dir.mkdir(parents=True, exist_ok=True)
+        cog_path = cog_dir / f"RH{self.rh_idx}_Q{left_q_idx}-Q{right_q_idx}.tif"
+        self._to_cog(mosaic_path, cog_path)
         print(f"✅ Global mosaic written to {cog_path}")
 
     def create_global_relative_diff_mosaic(self):
@@ -485,18 +500,21 @@ class GlobalMosaicker:
             dask.compute(tasks, scheduler="processes", num_workers=8)
 
 
-        mosaic_path = (
-            self.save_dir /
-            f"global_mosaic_{self.year}_RH{self.rh_idx}"
-            f"_Q0-Q2_over_Q1.tif"
-        )
+        geotiff_dir = self.save_dir / 'geotiff'
+        geotiff_dir.mkdir(parents=True, exist_ok=True)
+        mosaic_path = geotiff_dir / f"RH{self.rh_idx}_Q0-Q2_over_Q1.tif"
         self._mosaic_tiles(downsampled_paths, mosaic_path)
-        cog_path = self._to_cog(mosaic_path)
+
+        cog_dir = self.save_dir / 'cog'
+        cog_dir.mkdir(parents=True, exist_ok=True)
+        cog_path = cog_dir / f"RH{self.rh_idx}_Q0-Q2_over_Q1.tif"
+        self._to_cog(mosaic_path, cog_path)
         print(f"✅ Global relative diff mosaic written to {cog_path}")
 
     def create_global_bias_correction_mosaic(self):
         '''
         Create a global mosaic with bias correction applied
+        NOTE: experimental, may not work
         '''
         downsampled_tmp_dir = self.init_tmp_dir(
             self.save_dir / f"tmp_tiles_resampled_1km_RH{self.rh_idx}_Q{self.q_idx}")
@@ -568,211 +586,3 @@ def _make_offset_vrt(src_path: Union[str, Path], vrt_dir: Path, offset: float, n
     vrt_path.write_text(vrt_xml)
     return vrt_path
 
-
-# def _warp_tile_diff(tile_pred_dir: Path, save_dir: Path, left_q_idx: int = 0, right_q_idx: int = 2, rh_idx: int = 98,
-#                     dst_srs="EPSG:4326", xRes=0.01, yRes=0.01, dst_nodata=NO_DATA, resampleAlg="average", **kwargs):
-#     '''
-#     Get downsampled difference between two tiles
-#     '''
-
-#     left_path = tile_pred_dir / f'RH{rh_idx}_Q{left_q_idx}.tif'
-#     right_path = tile_pred_dir / f'RH{rh_idx}_Q{right_q_idx}.tif'
-#     tile_id = tile_pred_dir.stem
-#     dst_path = save_dir / f'{tile_id}.tif'
-#     if dst_path.exists():
-#         return str(dst_path)
-
-#     # 4. Warp with correct LOCAL Degree bounds
-#     # bbox_degrees = _get_bbox_in_degrees(str(left_path))
-#     warp_opts = gdal.WarpOptions(
-#         format='MEM',
-#         dstSRS="EPSG:4326",
-#         xRes=xRes,
-#         yRes=yRes,
-#         # outputBounds=bbox_degrees,
-#         resampleAlg="average",
-#         dstNodata=NO_DATA
-#     )
-#     ds1 = gdal.Warp('', str(left_path), options=warp_opts)
-#     ds2 = gdal.Warp('', str(right_path), options=warp_opts)
-#     # 2. Read as Arrays (At 1km, these are tiny, e.g., 100x100 pixels)
-#     arr1 = ds1.GetRasterBand(1).ReadAsArray()
-#     arr2 = ds2.GetRasterBand(1).ReadAsArray()
-
-#     # 3. Calculate Difference with NoData handling
-#     mask = (arr1 == NO_DATA) | (arr2 == NO_DATA)
-#     # Use float32 to prevent overflow/underflow
-#     diff_arr = arr1.astype(np.float32) - arr2.astype(np.float32)
-#     diff_arr[mask] = NO_DATA
-#     diff_arr = diff_arr.astype(np.int16)
-
-#     # 4. Create the output TIF
-#     _write_tif(diff_arr, dst_path, ds1)
-#     ds1 = None
-#     ds2 = None
-#     return str(dst_path)
-
-
-# def mosaic_tiles(paths: List[str], mosaic_path: Path, **kwargs):
-#     '''
-#     Mosaic a list of tiles
-#     '''
-#     warp_options = dict(
-#         dstSRS="EPSG:4326",
-#         resampleAlg="average",
-#         dstNodata=NO_DATA,
-#         creationOptions=["COMPRESS=ZSTD", "TILED=YES"],
-#         warpOptions=["WRAP_DATELINE=YES", "INIT_DEST=NO_DATA"],
-#     )
-#     # if countries is not None:
-#     #     countries_boundary = countries.with_name('countries.gpkg')
-#     #     warp_options['cutlineDSName'] = str(countries_boundary)
-#     #     warp_options['cropToCutline'] = True
-#     #     # thumb_path = thumb_path.with_name(thumb_path.stem + "_clipped.tif")
-
-#     warp_opts_mosaic = gdal.WarpOptions(**warp_options)
-
-#     gdal.Warp(
-#         destNameOrDestDS=str(mosaic_path),
-#         srcDSOrSrcDSTab=list(paths),
-#         options=warp_opts_mosaic
-#     )
-
-
-
-# def create_global_diff_mosaic(
-#         pred_dir: str, save_dir: Path, rh_idx: int = 98, left_q_idx: int = 0, right_q_idx: int = 2, **kwargs):
-#     '''
-#     Create a global mosaic of the difference between two tiles
-#     '''
-#     save_dir = Path(save_dir).expanduser()
-#     save_dir.mkdir(parents=True, exist_ok=True)
-
-#     # Step 1: Warp the tiles to 1km resolution
-#     pred_dir = Path(pred_dir).expanduser()
-#     temp_dir = save_dir / f"tmp_tiles_resampled_1km_RH{rh_idx}_Q{left_q_idx}-Q{right_q_idx}"
-#     temp_dir.mkdir(parents=True, exist_ok=True)
-#     tiles = os.listdir(pred_dir)
-#     print(f"Found {len(tiles)} tiles for {pred_dir}")
-#     if len(tiles) == 0:
-#         raise FileNotFoundError(f"No tiles found for {pred_dir}")
-#     diff_paths = [
-#         dask.delayed(_warp_tile_diff)(pred_dir / tile, temp_dir, left_q_idx, right_q_idx, rh_idx, **kwargs)
-#         for tile in tiles]
-#     diff_paths = dask.compute(*diff_paths, scheduler="processes", num_workers=8)
-
-#     # Step 2: Mosaic the tiles
-#     mosaic_path = save_dir / f"global_mosaic_RH{rh_idx}_Q{left_q_idx}-Q{right_q_idx}.tif"
-#     mosaic_tiles(diff_paths, mosaic_path)
-
-#     # Step 3: Translate the mosaic to cog
-#     cog_path = mosaic_path.with_suffix('.cog.tif')
-#     output_profile, config = get_cog_profile_and_config(compressor="ZSTD")
-#     cog_translate(mosaic_path, cog_path, output_profile, config=config,
-#                   in_memory=False, quiet=True, use_cog_driver=True)
-#     print(f"✅ Global mosaic written to {cog_path}")
-
-
-def resample_and_mosaic(year=2020, rh_idx=98, q_idx=1, countries: str = None, s2_grid_file: str = None,
-                        pred_dir: str = None, save_dir: str = None, **kwargs):
-    pred_dir = Path(pred_dir).expanduser()
-    save_dir = Path(save_dir).expanduser()
-    save_dir.mkdir(parents=True, exist_ok=True)
-    tiles = os.listdir(pred_dir)
-    tiles = [tile for tile in tiles if (pred_dir / f'{tile}/RH{rh_idx}_Q{q_idx}.tif').exists()]
-    if countries is not None:
-        countries = Path(countries).expanduser()
-        tiles, regions = get_tiles_in_countries(countries, s2_grid_file)
-        regions_gpkg = countries.parent / f"countries.gpkg"
-        if not regions_gpkg.exists():
-            regions.to_file(regions_gpkg, driver='GPKG')
-        # inputs = [f'{pred_dir}/{t}_cog/RH{rh_idx}_Q{q_idx}.tif' for t in tiles]
-        save_dir = countries.parent
-
-    print(f"Found {len(tiles)} tiles for year {year}")
-    if len(tiles) == 0:
-        raise FileNotFoundError(
-            f"No tiles found for year {year}"
-        )
-
-    temp_dir = save_dir / f"tmp_tiles_resampled_1km_RH{rh_idx}_Q{q_idx}"
-    thumb_path = save_dir / f"global_mosaic_{year}_RH{rh_idx}_Q{q_idx}.tif"
-    temp_dir.mkdir(parents=True, exist_ok=True)
-
-    def warp_tile(tile_id: str, dst_srs="EPSG:4326", xRes=0.01, yRes=0.01, dst_nodata=NO_DATA, resampleAlg="average"):
-        # item = pystac.Item.from_file(str(stac_collection_dir / f'{tile_id}_{year}/{tile_id}_{year}.json'))
-        # src_path = Path(item.assets[f'RH{rh_idx}_Q{q_idx}'].href.replace('file://', '')).expanduser()
-        src_path = pred_dir / f'{tile_id}/RH{rh_idx}_Q{q_idx}.tif'
-        if year == 2024 and (not src_path.exists()):
-            # sync data from lumi-o
-            tile_id = src_path.parent.stem.split('_')[0]
-            zone = tile_id[:3].lower()
-            bucket_name = f"{zone}-{year}"
-            remote = f"lumi-465001846-private:{bucket_name}/{tile_id}/RH{rh_idx}_Q{q_idx}.tif"
-            task = subprocess.run(
-                f"rclone copy {remote}  {src_path.parent}  --transfers=16 --checkers=16 --multi-thread-streams=4",
-                shell=True)
-            if task.returncode != 0:
-                raise RuntimeError(f"Failed to sync data from lumi-o for tile {tile_id}")
-            # rename the file
-            (src_path.parent / f'RH{rh_idx}_Q{q_idx}_uncompressed.tif').rename(src_path)
-
-        dst_path = temp_dir / f'{src_path.parent.stem}.tif'
-        if dst_path.exists():
-            return str(dst_path)
-        warp_opts = gdal.WarpOptions(
-            dstSRS=dst_srs,
-            xRes=xRes,
-            yRes=yRes,
-            resampleAlg=resampleAlg,
-            dstNodata=dst_nodata,
-            creationOptions=["COMPRESS=ZSTD", "TILED=YES"],
-            warpOptions=["WRAP_DATELINE=YES"]
-        )
-        gdal.Warp(destNameOrDestDS=str(dst_path), srcDSOrSrcDSTab=str(src_path), options=warp_opts)
-        return str(dst_path)
-
-    # for input in inputs:
-    #     warp_tile(input, temp_dir)
-    tasks = [dask.delayed(warp_tile)(tile_id) for tile_id in tiles]
-    warped_paths = dask.compute(*tasks, scheduler="processes", num_workers=8)
-
-    warp_options = dict(
-        dstSRS="EPSG:4326",
-        resampleAlg="average",
-        dstNodata=NO_DATA,
-        creationOptions=["COMPRESS=ZSTD", "TILED=YES"],
-        warpOptions=["WRAP_DATELINE=YES", "INIT_DEST=NO_DATA"],
-    )
-    if countries is not None:
-        countries_boundary = countries.with_name('countries.gpkg')
-        warp_options['cutlineDSName'] = str(countries_boundary)
-        warp_options['cropToCutline'] = True
-        # thumb_path = thumb_path.with_name(thumb_path.stem + "_clipped.tif")
-
-    warp_opts_mosaic = gdal.WarpOptions(**warp_options)
-
-    gdal.Warp(
-        destNameOrDestDS=str(thumb_path),
-        srcDSOrSrcDSTab=list(warped_paths),
-        options=warp_opts_mosaic
-    )
-
-    # translate to cog
-    cog_path = thumb_path.with_suffix('.cog.tif')
-    output_profile = cog_profiles.get("ZSTD")
-    output_profile.update(dict(
-        BIGTIFF="IF_SAFER",
-        ZSTD_LEVEL=1,
-        PREDICTOR=2,
-        BLOCKYSIZE=1024,
-        BLOCKXSIZE=1024,
-        MAX_Z_ERROR=0
-    ))
-    config = dict(
-        GDAL_NUM_THREADS="ALL_CPUS",
-        GDAL_TIFF_INTERNAL_MASK=True,
-        GDAL_TIFF_OVR_BLOCKSIZE="128",
-    )
-    cog_translate(thumb_path, cog_path, output_profile, config=config, in_memory=False, quiet=True, use_cog_driver=True)
-    print(f"✅ Global mosaic written to {cog_path}")

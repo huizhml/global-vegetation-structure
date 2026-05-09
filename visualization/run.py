@@ -73,14 +73,33 @@ cs.store(group='run', name='create_global_relative_diff_mosaic', node=CreateGlob
 class CreateGlobalMosaicPdfConfig(FunctionConfig):
     year: int = 2020
     version: str = 'masked'
-    mosaic_dir: str = '~/data/gvs/products/vsm/{year}/{version}/mosaic/'
-    tif_filename_pattern: str = '*.cog.tif'
-    pdf_file: str = '~/data/gvs/results/diversity_indices/global_mosaic_{year}_{version}.pdf'
+    data_format: str = 'cog'
+    data_type: str = 'vsm'
+    mosaic_dir: str = '~/data/gvs/products/{data_type}/{year}/{version}/mosaic/{data_format}'
+    tif_filename_pattern: str = '*.tif'
+    pdf_file: str = '~/data/gvs/results/{data_type}/global_mosaic_{year}_{version}.pdf'
     multi_pages: bool = False
+    cmin: Optional[int] = None
+    cmax: Optional[int] = None
+    cmap: Optional[str] = None
     _target_: str = "visualization.core.create_pdf_thumb.make_global_mosaic_pdf"
 cs.store(group='run', name='create_global_mosaic_pdf', node=CreateGlobalMosaicPdfConfig)
 
 
+# -----------------------------------------------------------------
+#  Visualize datacube
+# -----------------------------------------------------------------
+@dataclass
+class VisualizeDatacubeConfig(FunctionConfig):
+    data_dir: str = '~/data/gvs/products/prediction_intervals/2020/masked/mosaic/'
+    save_path: str = '~/data/gvs/results/vsm_datacube/pi_every2rhs_black_bg_v2.png'
+    cmap: str = 'cividis'
+    _target_: str = "visualization.core.datacube.visualize_datacube"
+cs.store(group='run', name='visualize_datacube', node=VisualizeDatacubeConfig)
+
+# -----------------------------------------------------------------
+#  Create cloud cover boxplot
+# -----------------------------------------------------------------
 @dataclass
 class CreateCloudCoverBoxplotConfig(FunctionConfig):
     h5_dir: str = '~/data/gvs/inputs/inference_2020/'

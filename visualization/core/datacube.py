@@ -23,7 +23,7 @@ from download.core.utils import get_epsg_from_tile
 
 pv.OFF_SCREEN = True
 
-def plot_datacube(data: np.array, lons: np.array, lats: np.array, save_path: str):
+def plot_datacube(data: np.array, lons: np.array, lats: np.array, save_path: str, cmap: str='inferno'):
     # latitude ascending
     if lats[0] > lats[-1]:
         lats = lats[::-1]
@@ -81,7 +81,7 @@ def plot_datacube(data: np.array, lons: np.array, lats: np.array, save_path: str
     p.add_volume(
         grid,
         scalars="values",
-        cmap="inferno",
+        cmap=cmap,
         clim=(sentinel, vmax),
         opacity=opacity,
         shade=False,
@@ -94,7 +94,7 @@ def plot_datacube(data: np.array, lons: np.array, lats: np.array, save_path: str
     p.add_mesh(
         dummy,
         scalars="values",
-        cmap="inferno",
+        cmap=cmap,
         clim=(0, vmax),
         show_scalar_bar=True,
         opacity=0.0,
@@ -197,9 +197,12 @@ def get_patch_by_latlon(lat, lon, s2_grid: gpd.GeoDataFrame = None, year: int = 
         bounds=points_buffer.total_bounds.tolist(),  # crop
     )
     return image.squeeze()
+
+def visualize_datacube(data_dir: str, save_path: str, cmap: str='viridis', **kwargs):
+    data, lons, lats = read_datacube(data_dir, filename_pattern='*cog.tif')
+    plot_datacube(data, lons, lats, save_path, cmap=cmap)
     
 if __name__ == '__main__':
-    data_dir = '~/data/gvs/products/vsm/2020/masked/mosaic/'
+    data_dir = '~/data/gvs/products/prediction_intervals/2020/masked/mosaic/'
     save_path = '/projects/dereeco/data/gvs/results/vsm_datacube/every2rhs_black_bg_v2.png'
-    data, lons, lats = read_datacube(data_dir, filename_pattern='*cog.tif')
-    plot_datacube(data, lons, lats, save_path)
+    visualize_datacube(data_dir, save_path, cmap='viridis')
