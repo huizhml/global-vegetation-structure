@@ -18,10 +18,22 @@ import os
 import pystac
 import stackstac
 import geopandas as gpd
+import cartopy.crs as ccrs
+from cartopy.mpl.ticker import LongitudeFormatter, LatitudeFormatter
+
 from postprocessing.core.s2_tiling import find_intersecting_s2_tiles
 from const import rh_vis_params
 
 os.environ['HYDRA_FULL_ERROR'] = '1'
+BAND_NAMES = {
+    'fhd': 'FHD',
+    'enl1d': 'ENL1D',
+    'enl2d': 'ENL2D',
+    'cr': 'CR',
+    'qskewness': 'Qskewness',
+    'q2': 'Q2',
+    'rh98_q1': 'RH98 [m]',
+}
 VIS_PARAMS = {
     'fhd': {
         'cmin': None,
@@ -44,18 +56,18 @@ VIS_PARAMS = {
         'cmap': 'viridis_r'
     },
     'qskewness':{
-        'cmin': -120,
-        'cmax': 120,
+        'cmin': -12,
+        'cmax': 12,
         'cmap': 'RdBu_r'
     },
     'q2':{
         'cmin': 0,
-        'cmax': 500,
+        'cmax': 50,
         'cmap': 'viridis_r'
     },
     'rh98_q1':{
         'cmin': 0,
-        'cmax': 500,
+        'cmax': 50,
         'cmap': 'inferno'
     }
 }
@@ -70,6 +82,8 @@ def rio_read(tif_file: Path, overview_level: int = 0):
         band_names = list(src.descriptions)
 
     data = data.assign_coords(band=band_names)
+    if 'RH' in tif_file.stem:
+        data = data / 10
     return data
 
 def read_rh_8neighbors(tile_id: str, s2_grid: gpd.GeoDataFrame, stac_collection_dir: Path, year: int = 2020, resolution: int = 100):
@@ -275,6 +289,114 @@ def plot_tiff_image(image: xr.DataArray, cmin: int=None, cmax: int=None, cmap: s
     return figs
 
 
+
+def plot_tiff_image_with_profile(image: xr.DataArray, cmin: int=None, cmax: int=None, cmap: str = None):
+    """
+    Plot single-band image on Equal Earth projection with a latitudinal mean±sd profile on the left.
+    """
+    if image.ndim == 2:
+        image = image.expand_dims('band')
+    figs = {}
+    for band in image.band:
+        band_name = band.item()
+        if band_name in VIS_PARAMS:
+            vis = VIS_PARAMS[band_name]
+        else:
+            vis = VIS_PARAMS['rh98_q1']
+            band_name = 'RH98_Q1'
+
+        cmap = cmap or vis['cmap']
+        cmin = cmin or vis['cmin']
+        cmax = cmax or vis['cmax']
+
+        data = image.sel(band=band)
+        if cmin is None or cmax is None:
+            cmin = float(np.nanpercentile(data, 2))
+            cmax = float(np.nanpercentile(data, 98))
+
+        proj = ccrs.EqualEarth()
+        data_crs = ccrs.PlateCarree()
+
+        # --- No constrained_layout, manual positioning ---
+        fig = plt.figure(figsize=(9 , 4))
+
+        # Place map first
+        ax_img = fig.add_axes([0.25, 0.05, 0.72, 0.9], projection=proj)
+
+        # --- Map ---
+        x = data.x.values
+        y = data.y.values
+        extent = [x.min(), x.max(), y.min(), y.max()]
+
+        ax_img.imshow(
+            data.values, cmap=cmap, vmin=cmin, vmax=cmax,
+            origin='upper', extent=extent,
+            transform=data_crs
+        )
+        ax_img.set_global()
+        ax_img.coastlines(linewidth=0.3, color='gray')
+
+        # Force render to get correct positions
+        fig.canvas.draw()
+        map_pos = ax_img.get_position()
+        y_map_bot, y_map_top = ax_img.get_ylim()
+
+        # --- Profile: same y0 and height as map, plotted in projected y-space ---
+        ax_prof = fig.add_axes([
+            map_pos.x0 - 0.16,
+            map_pos.y0,
+            0.1,
+            map_pos.height
+        ])
+
+        data_np = data.values
+        row_mean = np.nanmean(data_np, axis=1)
+        row_std = np.nanstd(data_np, axis=1)
+
+        # Transform each latitude to Equal Earth projected y
+        y_projected = np.array([proj.transform_point(0, lat, data_crs)[1] for lat in y])
+
+        ax_prof.fill_betweenx(y_projected, row_mean - row_std, row_mean + row_std,
+                              alpha=0.3, color='gray', label='sd')
+        ax_prof.plot(row_mean, y_projected, 'k-', linewidth=0.6, label='mean')
+
+        # Match the map's projected y-range exactly
+        ax_prof.set_ylim(y_map_bot, y_map_top)
+
+        # X-axis
+        ax_prof.set_xlabel(BAND_NAMES[band_name.lower()], fontsize=10)
+        n_ticks = 2
+        xtick_vals = np.linspace(cmin, cmax, n_ticks)
+        ax_prof.set_xticks(xtick_vals)
+        ax_prof.set_xticklabels([f'{v:.0f}' for v in xtick_vals])
+
+        # Y-axis: label projected positions as latitude degrees
+        tick_lats = np.arange(-60, 90, 20)
+        tick_y_proj = [proj.transform_point(0, lat, data_crs)[1] for lat in tick_lats]
+        ax_prof.set_yticks(tick_y_proj)
+        ax_prof.set_yticklabels([f'{v:.0f}°' for v in tick_lats])
+        ax_prof.set_ylabel('Latitude [°]', fontsize=10)
+
+        ax_prof.legend(loc='lower right', fontsize=7, framealpha=0.7)
+
+        # --- Colorbar inside map ---
+        cax = fig.add_axes([
+            map_pos.x0 - 0.02,
+            map_pos.y0 + 0.001,
+            map_pos.width * 0.015,
+            map_pos.height * 0.25
+        ])
+        im = ax_img.get_images()[0]
+        cbar = fig.colorbar(im, cax=cax, orientation='vertical')
+        cbar.set_ticks([cmin, cmax])
+        cbar.set_ticklabels([f'{cmin:.0f}', f'{cmax:.0f}'])
+        # cbar.set_label(BAND_NAMES[band_name.lower()], fontsize=10, orientation='horizontal')
+        cbar.ax.tick_params(size=0, pad=3, labelsize=9)
+        cbar.outline.set_visible(False)
+
+        figs[band_name] = fig
+    return figs
+
 # --------- Main Functions ---------
 
 def make_s2_image_rh_pair_pdf(zarr_dir: str, tile_id: str, pdf_file: Path, year: int = 2020, resolution: int = 100,
@@ -420,7 +542,7 @@ def make_global_mosaic_pdf(mosaic_dir: str, tif_filename_pattern: str = 'global_
             plt.close(fig_cover)
             for tif_file in tif_files:
                 image = rio_read(tif_file)
-                figs = plot_tiff_image(image, cmin=cmin, cmax=cmax, cmap=cmap)
+                figs = plot_tiff_image_with_profile(image, cmin=cmin, cmax=cmax, cmap=cmap)
                 for band, fig in figs.items():
                     pdf.savefig(fig, bbox_inches='tight', dpi=300)
                     plt.close(fig)
@@ -428,7 +550,7 @@ def make_global_mosaic_pdf(mosaic_dir: str, tif_filename_pattern: str = 'global_
     else:
         for tif_file in tif_files:
             image = rio_read(tif_file)
-            figs = plot_tiff_image(image, cmin=cmin, cmax=cmax, cmap=cmap)
+            figs = plot_tiff_image_with_profile(image, cmin=cmin, cmax=cmax, cmap=cmap)
             for band, fig in figs.items():
                 _pdf_file = pdf_file.parent / f'{pdf_file.stem}_{tif_file.stem}_{band}.pdf'
                 fig.savefig(_pdf_file, bbox_inches='tight', dpi=300)
