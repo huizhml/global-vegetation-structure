@@ -1,0 +1,18 @@
+BIOME_MAPPING = {
+    1: "Tropical and Subtropical Moist Broadleaf Forests",
+    2: "Tropical and Subtropical Dry Broadleaf Forests",
+    3: "Tropical and Subtropical Coniferous Forests",
+    4: "Temperate Broadleaf and Mixed Forests",
+    5: "Temperate Coniferous Forests",
+    6: "Boreal Forests/Taiga",
+    7: "Tropical and Subtropical Grasslands, Savannas, and Shrublands",
+    8: "Temperate Grasslands, Savannas, and Shrublands",
+    9: "Flooded Grasslands and Savannas",
+    10: "Montane Grasslands and Shrublands",
+    11: "Tundra, Rock and Ice",
+    12: "Mediterranean Forests, Woodlands, and Scrub",
+    13: "Deserts and Xeric Shrublands",
+    14: "Mangroves",
+    # 98: "Lake",
+    # 99: "Rock and Ice",
+}
