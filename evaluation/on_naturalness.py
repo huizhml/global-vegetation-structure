@@ -445,7 +445,7 @@ def _read_vsm(patch_file: Path, ps: int=15):
         vsm = vsm[:, :, border:-border, border:-border]
     return vsm, rowids
     
-def cal_patch_stats(patch_file: str, ref_csv_train: str, out_file: str, data_type: str='s2', **kwargs):
+def cal_patch_stats(patch_file: str, ref_csv_train: str, out_file: str, product: str='s2', **kwargs):
     '''
     Calculate the statistics (mean and std) of the patches (S2 patches, VSM patches or AlphaEarth embeddings)
     Args:
@@ -470,12 +470,12 @@ def cal_patch_stats(patch_file: str, ref_csv_train: str, out_file: str, data_typ
     ref_df = ref_df.astype({'rowid': 'int32', 'ID': 'int32', 'Land_use_ID': 'int8', 'flag': 'int8'})
     ref_df = ref_df.set_index('rowid')
 
-    if data_type == 's2':
+    if product == 's2':
         data_patch, slope, rowids = _read_s2(patch_file)
         ref_df.loc[rowids, 'slope'] = slope    
-    elif data_type == 'alpha_em':
+    elif product == 'alpha_em':
         data_patch, rowids = _read_alpha_em(patch_file)
-    elif data_type == 'vsm':
+    elif product == 'vsm':
         data_patch, rowids = _read_vsm(patch_file)
         fhd, enl1d, enl2d, cr = _chunk_diversity(data_patch, bin_width=5)
         diversity_indices = np.stack([fhd, enl1d, enl2d, cr], axis=1)
@@ -487,16 +487,16 @@ def cal_patch_stats(patch_file: str, ref_csv_train: str, out_file: str, data_typ
             ref_df.loc[rowids, f'std_{col}'] = std_indices[:, indices_cols.index(col)]
         
     else:
-        raise ValueError(f'Invalid data type: {data_type}')
+        raise ValueError(f'Invalid data type: {product}')
     
     avg = np.nanmean(data_patch, axis=(2,3), dtype=np.float32) # return nan if all values are nan
     std = np.nanstd(data_patch, axis=(2,3), dtype=np.float32)
     for b in range(avg.shape[1]):
-        ref_df.loc[rowids, f'avg_{data_type}_band{b}'] = avg[:, b]
-        ref_df.loc[rowids, f'std_{data_type}_band{b}'] = std[:, b]
+        ref_df.loc[rowids, f'avg_{product}_band{b}'] = avg[:, b]
+        ref_df.loc[rowids, f'std_{product}_band{b}'] = std[:, b]
     center = data_patch[:, :, data_patch.shape[2]//2, data_patch.shape[3]//2]
     for b in range(center.shape[1]):
-        ref_df.loc[rowids, f'center_{data_type}_band{b}'] = center[:, b]
+        ref_df.loc[rowids, f'center_{product}_band{b}'] = center[:, b]
     
     for split, rowids_split in zip(['train', 'val'], [rowids_train, rowids_val]):
         ref_df_split = ref_df.loc[rowids_split]

@@ -74,10 +74,10 @@ class CreateGlobalMosaicPdfConfig(FunctionConfig):
     year: int = 2020
     version: str = 'masked'
     data_format: str = 'cog'
-    data_type: str = 'vsm'
-    mosaic_dir: str = '~/data/gvs/products/{data_type}/{year}/{version}/mosaic/{data_format}'
+    product: str = 'vsm'
+    mosaic_dir: str = '~/data/gvs/products/{product}/{year}/{version}/mosaic/{data_format}'
     tif_filename_pattern: str = '*.tif'
-    pdf_file: str = '~/data/gvs/results/{data_type}/global_mosaic_{year}_{version}.pdf'
+    pdf_file: str = '~/data/gvs/results/{product}/global_mosaic_{year}_{version}.pdf'
     multi_pages: bool = False
     cmin: Optional[int] = None
     cmax: Optional[int] = None
@@ -91,7 +91,12 @@ cs.store(group='run', name='create_global_mosaic_pdf', node=CreateGlobalMosaicPd
 # -----------------------------------------------------------------
 @dataclass
 class VisualizeDatacubeConfig(FunctionConfig):
-    data_dir: str = '~/data/gvs/products/prediction_intervals/2020/masked/mosaic/'
+    product: str = 'prediction_intervals'
+    data_format: str = 'cog'
+    year: int = 2020
+    version: str = 'masked'
+    rh_step: int = 2
+    data_dir: str = '~/data/gvs/products/{product}/{year}/{version}/mosaic/{}'
     save_path: str = '~/data/gvs/results/vsm_datacube/pi_every2rhs_black_bg_v2.png'
     cmap: str = 'cividis'
     _target_: str = "visualization.core.datacube.visualize_datacube"

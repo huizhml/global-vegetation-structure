@@ -157,7 +157,7 @@ cs.store(group='run', name='plot_residuals_rh98_bined', node=PlotResidualsRh98Bi
 class CalS2PatchStatsConfig(FunctionConfig):
     year: int = 2017
     ps: int = 15
-    data_type: str = 's2'
+    product: str = 's2'
     root_dir: str = '~/data/gvs/evaluation/downstream_tasks/naturalness'
     ref_csv_train: str = '{root_dir}/reference_data_set_updated_train.csv'
     patch_file: str = '{root_dir}/results_from_vsm_{year}/s2_gedi_patches_ps31/s2_{year}_ps31.h5'
@@ -170,7 +170,7 @@ cs.store(group='run', name='cal_s2_patch_stats', node=CalS2PatchStatsConfig)
 class CalAlphaEMPatchStatsConfig(FunctionConfig):
     year: int = 2017
     ps: int = 15
-    data_type: str = 'alpha_em'
+    product: str = 'alpha_em'
     root_dir: str = '~/data/gvs/evaluation/downstream_tasks/naturalness'
     ref_csv_train: str = '{root_dir}/reference_data_set_updated_train.csv'
     patch_file: str = '{root_dir}/alphaearth_embeddings/alphaearth_embeddings.h5'
@@ -183,7 +183,7 @@ cs.store(group='run', name='cal_alpha_em_patch_stats', node=CalAlphaEMPatchStats
 class CalVSM17PatchStatsConfig(FunctionConfig): # extract both train and val patches at once
     year: int = 2017
     ps: int = 15
-    data_type: str = 'vsm'
+    product: str = 'vsm'
     root_dir: str = '~/data/gvs/evaluation/downstream_tasks/naturalness'
     ref_csv_train: str = '{root_dir}/reference_data_set_updated_train.csv'
     patch_file: str = '{root_dir}/results_from_vsm_{year}/vsm_patches_ps15_single_h5_72xl3wma_ps31.zarr'

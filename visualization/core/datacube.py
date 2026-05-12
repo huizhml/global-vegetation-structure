@@ -128,12 +128,28 @@ def plot_datacube(data: np.array, lons: np.array, lats: np.array, save_path: str
     ]
 
     p.enable_parallel_projection()
-    p.camera.zoom(0.6)
+    p.camera.zoom(1.2)
 
     p.set_background("black")
     p.show(auto_close=False)
-    p.screenshot(save_path, transparent_background=False)
+    img = p.screenshot(transparent_background=False, return_img=True)
     p.close()
+
+    # Auto-crop background borders. Anything brighter than `bg_tol` counts as content,
+    # so the scalar bar / text / volume are all preserved.
+    bg_tol = 6
+    mask = img.max(axis=2) > bg_tol
+    if mask.any():
+        rows = np.where(mask.any(axis=1))[0]
+        cols = np.where(mask.any(axis=0))[0]
+        pad = 8
+        r0 = max(int(rows[0]) - pad, 0)
+        r1 = min(int(rows[-1]) + 1 + pad, img.shape[0])
+        c0 = max(int(cols[0]) - pad, 0)
+        c1 = min(int(cols[-1]) + 1 + pad, img.shape[1])
+        img = img[r0:r1, c0:c1]
+
+    plt.imsave(save_path, img)
 
 def read_overview(file: str, overview_level: int=4):
     with rasterio.open(file, overview_level=overview_level) as src:
@@ -150,13 +166,13 @@ def read_coords(file: str, overview_level: int=4):
         nodata = src.nodata
     return lons, lats, nodata
 
-def read_datacube(data_dir: str, filename_pattern: str='.cog.tif', overview_level: int=4):
+def read_datacube(data_dir: str, filename_pattern: str='.cog.tif', overview_level: int=4, rh_step: int=2):
     data_dir = Path(data_dir).expanduser()
     files = list(data_dir.glob(filename_pattern))
     files = [str(file) for file in files]
     files = sorted(files, key=natural_sort_key)
     data = []
-    for file in files[::2]:
+    for file in files[::rh_step]:
         data_i = read_overview(file, overview_level=overview_level)
         data.append(data_i[:, :, None])
     data = np.concatenate(data, axis=2)
@@ -198,8 +214,8 @@ def get_patch_by_latlon(lat, lon, s2_grid: gpd.GeoDataFrame = None, year: int = 
     )
     return image.squeeze()
 
-def visualize_datacube(data_dir: str, save_path: str, cmap: str='viridis', **kwargs):
-    data, lons, lats = read_datacube(data_dir, filename_pattern='*cog.tif')
+def visualize_datacube(data_dir: str, save_path: str, cmap: str='viridis', rh_step: int=2, **kwargs):
+    data, lons, lats = read_datacube(data_dir, filename_pattern='*cog.tif', rh_step=rh_step, **kwargs)
     plot_datacube(data, lons, lats, save_path, cmap=cmap)
     
 if __name__ == '__main__':
