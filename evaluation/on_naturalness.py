@@ -17,7 +17,8 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import xgboost as xgb
 import warnings
-from evaluation.utils import load_vsm_naturalness, batch_binning
+from evaluation.utils import load_vsm_naturalness
+from evaluation.on_diversity_indices import _chunk_diversity
 from const import NO_DATA
 warnings.filterwarnings('ignore')
 warnings.filterwarnings(action='ignore', category=DeprecationWarning)
@@ -54,45 +55,6 @@ MODEL_NAMES = {
 # ---------------------------------------
 #   Helper functions
 # ---------------------------------------
-
- 
-
-def _chunk_diversity(tile, bin_width=5, max_height=None):
-    """
-    Vectorized Shannon entropy for a batch of spatial chunks. NOTE: this is for 4d input
-
-    Parameters
-    ----------
-    tile : ndarray, shape (n, 101, rows, cols)
-
-    Returns
-    -------
-    entropy, enl1d, enl2d, cr : each ndarray, shape (n, rows, cols), float32
-    """
-    n_batch, n_bands, n_rows, n_cols = tile.shape
-    hist, nodata_mask = batch_binning(tile, bin_width=bin_width, max_height=max_height)
-    total = hist.sum(axis=-1, keepdims=True)
-    total = np.where(total == 0, 1, total)  # avoid division by zero
-    p = hist / total
-    log_p = np.where(p > 0, np.log(p), 0.0)
-
-    entropy = -np.sum(p * log_p, axis=-1).astype(np.float32)
-    enl1d = np.exp(entropy).astype(np.float32)
-    enl2d = (1 / (p**2).sum(axis=-1)).astype(np.float32)
-
-    entropy = entropy.reshape(n_batch, n_rows, n_cols)
-    enl1d = enl1d.reshape(n_batch, n_rows, n_cols)
-    enl2d = enl2d.reshape(n_batch, n_rows, n_cols)
-
-    entropy[nodata_mask] = np.nan
-    enl1d[nodata_mask] = np.nan
-    enl2d[nodata_mask] = np.nan
-
-    cr = (tile[:, 98] - tile[:, 25]) / (tile[:, 98] + 1e-6)
-    cr = cr.astype(np.float32)
-    cr[nodata_mask] = np.nan
-
-    return entropy, enl1d, enl2d, cr
 
 
 

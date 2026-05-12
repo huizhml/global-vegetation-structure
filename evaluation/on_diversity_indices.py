@@ -456,9 +456,12 @@ def _chunk_diversity(data, bin_width=5, max_height=MAX_HEIGHT):
     -------
     out : ndarray, shape (rows, cols), float32
     """
-    n_bands, n_rows, n_cols = data.shape
+    if data.size == 3:
+        data = data[None, ...]  # add band dimension for consistency
+
+    n_batch, n_bands, n_rows, n_cols = data.shape
     hist, nodata_mask = batch_binning(data[None, ...], bin_width=bin_width, max_height=max_height)
-    hist = hist.squeeze(axis=0) # shape (n_rows, n_cols, n_bins)
+
     # Normalize
     total = hist.sum(axis=-1, keepdims=True)
     total = np.where(total > 0, total, 1.0)
@@ -476,14 +479,15 @@ def _chunk_diversity(data, bin_width=5, max_height=MAX_HEIGHT):
     enl2d = np.where(sum_p2 > 0, 1.0 / sum_p2, np.nan).astype(np.float32)
 
     # CR
+    # TODO: check order of RHs? at least rh25 and rh98
     rh25 = np.maximum(data[24, :], 0)
     rh98 = data[97, :]
     cr = np.where(rh98 > 0, (rh98 - rh25) / rh98, np.nan).astype(np.float32)
 
-    fhd = fhd.reshape(n_rows, n_cols)
-    enl1d = enl1d.reshape(n_rows, n_cols)
-    enl2d = enl2d.reshape(n_rows, n_cols)
-    cr = cr.reshape(n_rows, n_cols)
+    fhd = fhd.reshape(n_batch, n_rows, n_cols)
+    enl1d = enl1d.reshape(n_batch, n_rows, n_cols)
+    enl2d = enl2d.reshape(n_batch, n_rows, n_cols)
+    cr = cr.reshape(n_batch, n_rows, n_cols)
     # Apply nodata
     fhd[nodata_mask] = np.nan
     enl1d[nodata_mask] = np.nan
