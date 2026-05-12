@@ -515,6 +515,9 @@ def _chunk_diversity(data, bin_width=5, max_height=MAX_HEIGHT):
     enl1d[nodata_mask] = np.nan
     enl2d[nodata_mask] = np.nan
     cr[nodata_mask] = np.nan
+    nan_min = np.nanmin(cr)
+    if nan_min < 0:
+        raise ValueError(f"CR has negative values: min={nan_min}, check input data and CR calculation.")
 
     return fhd, enl1d, enl2d, cr
 

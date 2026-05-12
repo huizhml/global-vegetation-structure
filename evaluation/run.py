@@ -69,6 +69,22 @@ class EvaluateCHMWithALSAndLVISConfig(FunctionConfig):
 cs.store(group='run', name='evaluate_chm_with_als_and_lvis', node=EvaluateCHMWithALSAndLVISConfig)
 
 # =======================================
+#   Diversity indices
+# =======================================
+
+@dataclass
+class DiversityIndicesMapConfig(FunctionConfig):
+    year: int = 2020
+    bin_width: int = 5
+    max_height: int = 150
+    product: str = 'diversity_indices'
+    product_version: str = 'masked'
+    tif_dir: str = '~/data/gvs/products/vsm/2020/{product_version}/mosaic/cog'
+    output_path: str = '~/data/gvs/products/{product}/{year}/{product_version}/mosaic/diversity_maps_bin{bin_width}_max{max_height}_test.tif'
+    _target_: str = "evaluation.diversity_maps.create_global_diversity_maps"
+cs.store(group='run', name='generate_diversity_indices_map', node=DiversityIndicesMapConfig)
+
+# =======================================
 #   Biome analysis - diversity indices
 # =======================================
 @dataclass

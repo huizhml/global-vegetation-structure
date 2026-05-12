@@ -12,7 +12,7 @@ import xarray as xr
 import dask
 from rio_cogeo.cogeo import cog_translate
 from rio_cogeo.profiles import cog_profiles
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, FIRST_COMPLETED, wait
 from evaluation.on_diversity_indices import _chunk_diversity
 
 NODATA_OUT = -9999.0
@@ -78,7 +78,7 @@ def create_vrt(tile_dir, vrt_path, q_idx="1"):
         glob.glob(f"{tile_dir}/RH*_Q{q_idx}.tif"), 
         key=lambda x: int(x.split("RH")[-1].split("_")[0]),
     )
-    files = files[:100]
+    files = files[1:]
     print(f"Creating VRT for {len(files)} files")
     assert len(files) == 100, f"Expected 100 files, found {len(files)}"
 
@@ -100,16 +100,21 @@ def _process_tile(args):
     Each worker opens its own file handle (required for multiprocessing).
     Reads all 101 bands for one window in a single call, computes entropy.
     """
-    vrt_path, col_off, row_off, w, h, bin_width = args
+    vrt_path, col_off, row_off, w, h, bin_width, max_height = args
+    # Cap per-worker GDAL block cache so 8 workers don't each grab ~5% of RAM.
+    gdal.SetCacheMax(256 * 1024 * 1024)  # 256 MB per worker
     with rasterio.open(vrt_path, "r") as src:
         window = Window(col_off, row_off, w, h)
         tile = src.read(window=window).astype(np.float32)  # (101, h, w)
-    ent, enl1d, enl2d, cr = _chunk_diversity(tile, bin_width=bin_width)
+        if not ((tile[1] - tile[0]) >=0).all():
+            import ipdb; ipdb.set_trace()
+            raise ValueError("Data bands are not in ascending order. Please check the input data.")
+    ent, enl1d, enl2d, cr = _chunk_diversity(tile, bin_width=bin_width, max_height=max_height)
     return ent, enl1d, enl2d, cr, col_off, row_off, w, h
 
 
 def create_global_diversity_maps(output_path: Path=None, tif_dir: str=None,
-                         chunk_size=512, max_workers=8, bin_width=5, **kwargs):
+                         chunk_size=512, max_workers=8, bin_width=5, max_height:int=150, **kwargs):
     """
     Compute per-pixel FHD entropy — fast version.
 
@@ -136,8 +141,12 @@ def create_global_diversity_maps(output_path: Path=None, tif_dir: str=None,
     """
     output_path = Path(output_path).expanduser()
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    cog_path = output_path.with_suffix('.cog.tif')
+    if cog_path.exists():
+        print(f"Output COG already exists: {cog_path}")
+        return cog_path
     if output_path.exists():
-        return
+        return to_cog(output_path)
     
     tif_dir = Path(tif_dir).expanduser()
     
@@ -181,27 +190,44 @@ def create_global_diversity_maps(output_path: Path=None, tif_dir: str=None,
         for col_off in range(0, nx, chunk_size):
             h = min(chunk_size, ny - row_off)
             w = min(chunk_size, nx - col_off)
-            # ent, enl1d, enl2d = _process_tile((vrt_path, col_off, row_off, w, h, bin_width))
-            work_items.append((vrt_file, col_off, row_off, w, h, bin_width))
+            ent, enl1d, enl2d, cr, col_off, row_off, w, h = _process_tile((vrt_file, col_off, row_off, w, h, bin_width, max_height))
+            work_items.append((vrt_file, col_off, row_off, w, h, bin_width, max_height))
 
     print(f"Processing {len(work_items)} tiles with {max_workers} processes")
     print(f"Estimated peak RAM: ~{max_workers * 100 * chunk_size**2 * 4 / 1e9:.1f} GB")
 
     monitor = ProgressMonitor(total_tiles=len(work_items), interval=5.0)
 
+    # Bound in-flight futures so worker results don't accumulate in the result
+    # queue (and so completed Futures don't pin their numpy arrays in memory
+    # until the whole pool exits).
+    max_inflight = max_workers * 2
+
     with (rasterio.open(output_path, "w", **out_profile) as dst):
         monitor.start()
         try:
             with ProcessPoolExecutor(max_workers=max_workers) as pool:
-                futures = {
-                    pool.submit(_process_tile, item): i
-                    for i, item in enumerate(work_items)
-                }
-                for fut in as_completed(futures):
-                    ent, enl1d, enl2d, cr, col_off, row_off, w, h = fut.result()
-                    win = Window(col_off, row_off, w, h)
-                    dst.write(np.stack([ent, enl1d, enl2d, cr], axis=0), window=win)
-                    monitor.tick()
+                work_iter = iter(work_items)
+                inflight = set()
+                # Prime the pool.
+                for _ in range(max_inflight):
+                    try:
+                        inflight.add(pool.submit(_process_tile, next(work_iter)))
+                    except StopIteration:
+                        break
+
+                while inflight:
+                    done, inflight = wait(inflight, return_when=FIRST_COMPLETED)
+                    for fut in done:
+                        ent, enl1d, enl2d, cr, col_off, row_off, w, h = fut.result()
+                        win = Window(col_off, row_off, w, h)
+                        dst.write(np.stack([ent, enl1d, enl2d, cr], axis=0), window=win)
+                        monitor.tick()
+                        # Refill so the pool stays saturated.
+                        try:
+                            inflight.add(pool.submit(_process_tile, next(work_iter)))
+                        except StopIteration:
+                            pass
         finally:
             dst.set_band_description(1, "fhd")
             dst.set_band_description(2, "enl1d")
@@ -210,6 +236,7 @@ def create_global_diversity_maps(output_path: Path=None, tif_dir: str=None,
             monitor.stop()
 
     print(f"Done: {output_path}")
+    to_cog(output_path)
     return output_path
 
 def to_cog(gtif_path: Path):
@@ -235,13 +262,13 @@ def to_cog(gtif_path: Path):
     print(f"✅ {gtif_path} written to {cog_path}")
     return cog_path
     
-    
+
+
 if __name__ == '__main__':
     output_path = '~/data/gvs/products/vsm/2020/masked/mosaic/diversity_maps.tif'
     tif_dir = '~/data/gvs/products/vsm/2020/masked/mosaic/cog'
     bin_width = 1
-    # create_global_diversity_maps(output_path=output_path, tif_dir=tif_dir, bin_width=bin_width)
-    to_cog(output_path)
+    create_global_diversity_maps(output_path=output_path, tif_dir=tif_dir, bin_width=bin_width)
 
     
     

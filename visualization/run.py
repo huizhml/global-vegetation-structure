@@ -69,6 +69,10 @@ class CreateGlobalRelativeDiffMosaicConfig(ClassConfig):
     
 cs.store(group='run', name='create_global_relative_diff_mosaic', node=CreateGlobalRelativeDiffMosaicConfig)
 
+# -----------------------------------------------------------------
+#  Create global mosaic PDF
+# -----------------------------------------------------------------
+
 @dataclass
 class CreateGlobalMosaicPdfConfig(FunctionConfig):
     year: int = 2020

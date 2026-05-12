@@ -153,9 +153,9 @@ class GlobalMosaicker:
             xRes=self.target_res,
             yRes=self.target_res,
             resampleAlg=self.resample_alg,
-            dstNodata=self.dst_nodata,
+            dstNodata=self.dst_nodatfa,
             creationOptions=[f"COMPRESS={self.compression}", "TILED=YES"],
-            warpOptions=["WRAP_DATELINE=YES"],
+            warpOptions=["WRAP_DATELINE=YES", "OVR=NONE"],
         )
     
     @property
@@ -403,13 +403,14 @@ class GlobalMosaicker:
             options=warp_opts_mosaic
         )
         
-    def _to_cog(self, mosaic_path: Path):
+    def _to_cog(self, gtiff_path: Path, cog_path: Path = None):
         '''
         Translate the mosaic to cog
         '''
-        cog_path = mosaic_path.with_suffix('.cog.tif')
+        if cog_path is None:
+            cog_path = gtiff_path.with_suffix('.cog.tif')
         output_profile, config = self.get_cog_profile_and_config()
-        cog_translate(mosaic_path, cog_path, output_profile, config=config,
+        cog_translate(gtiff_path, cog_path, output_profile, config=config,
                       in_memory=False, quiet=True, use_cog_driver=True)
         return cog_path
         
@@ -419,6 +420,22 @@ class GlobalMosaicker:
         '''
         Create a global mosaic
         '''
+        cog_dir = self.save_dir / 'cog'
+        cog_dir.mkdir(parents=True, exist_ok=True)
+        cog_path = cog_dir / f"RH{self.rh_idx}_Q{self.q_idx}.tif"
+        if cog_path.exists():
+            print(f"Global mosaic COG already exists: {cog_path}")
+            return cog_path
+        
+        gtif_dir = self.save_dir / 'geotiff'
+        gtif_dir.mkdir(parents=True, exist_ok=True)
+        mosaic_path = gtif_dir/ f"RH{self.rh_idx}_Q{self.q_idx}.tif"
+        if mosaic_path.exists():
+            print(f"Global mosaic already exists: {mosaic_path}")
+            self._to_cog(mosaic_path, cog_path)
+            print(f"✅ Global mosaic written to {cog_path}")
+            return 
+
         temp_dir_name = f"tmp_tiles_resampled_1km_RH{self.rh_idx}_Q{self.q_idx}"
         temp_dir = self.init_tmp_dir(self.save_dir / temp_dir_name)
         warp_options = dict(self.downsample_warp_options)
@@ -437,12 +454,8 @@ class GlobalMosaicker:
 
         geotiff_dir = self.save_dir / 'geotiff'
         geotiff_dir.mkdir(parents=True, exist_ok=True)
-        mosaic_path = self.save_dir / f"RH{self.rh_idx}_Q{self.q_idx}.tif"
         self._mosaic_tiles(downsampled_paths, mosaic_path)
-        cog_dir = self.save_dir / 'cog'
-        cog_dir.mkdir(parents=True, exist_ok=True)
-        cog_path = cog_dir / f"RH{self.rh_idx}_Q{self.q_idx}.tif"
-        cog_path = self._to_cog(mosaic_path)
+        self._to_cog(mosaic_path, cog_path)
         print(f"✅ Global mosaic written to {cog_path}")
     
     def create_global_diff_mosaic(self, left_q_idx: int=0, right_q_idx: int=2):
