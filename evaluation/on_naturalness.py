@@ -57,9 +57,9 @@ MODEL_NAMES = {
 
  
 
-def _chunk_diversity(tile, bin_width=5):
+def _chunk_diversity(tile, bin_width=5, max_height=None):
     """
-    Vectorized Shannon entropy for a batch of spatial chunks.
+    Vectorized Shannon entropy for a batch of spatial chunks. NOTE: this is for 4d input
 
     Parameters
     ----------
@@ -70,7 +70,7 @@ def _chunk_diversity(tile, bin_width=5):
     entropy, enl1d, enl2d, cr : each ndarray, shape (n, rows, cols), float32
     """
     n_batch, n_bands, n_rows, n_cols = tile.shape
-    hist, nodata_mask = batch_binning(tile, bin_width=bin_width)
+    hist, nodata_mask = batch_binning(tile, bin_width=bin_width, max_height=max_height)
     total = hist.sum(axis=-1, keepdims=True)
     total = np.where(total == 0, 1, total)  # avoid division by zero
     p = hist / total

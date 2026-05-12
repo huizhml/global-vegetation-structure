@@ -23,7 +23,7 @@ import time
 import geopandas as gpd
 import matplotlib.pyplot as plt
 import pandas as pd
-from evaluation.utils import ProgressMonitor
+from evaluation.utils import ProgressMonitor, batch_binning
 import dask
 from dask.diagnostics import ProgressBar
 import dask.dataframe as dd
@@ -457,53 +457,27 @@ def _chunk_diversity(data, bin_width=5, max_height=MAX_HEIGHT):
     out : ndarray, shape (rows, cols), float32
     """
     n_bands, n_rows, n_cols = data.shape
-    n_pixels = n_rows * n_cols
-    valid = np.isfinite(data) & (data != NODATA_IN) & (data > 0)
-    nodata_mask = valid.sum(axis=0) == 0
-
-    data = data / 10
-
-    data = data.reshape(n_bands, n_pixels)
-    valid = valid.reshape(n_bands, n_pixels)
-    data_clean = np.where(valid, np.minimum(data, max_height), -1.0)
-
-    # Sort along axis=0 (bands), not axis=1 (pixels)
-    profiles = np.sort(data_clean, axis=0)
-    profiles = np.ascontiguousarray(profiles)
-
-    lower_edges = np.arange(0, max_height, bin_width)
-    upper_edges = np.arange(bin_width, max_height + bin_width, bin_width)
-
-    idx_low = np.stack(
-        [np.searchsorted(profiles[:, i], lower_edges, side='left') for i in range(n_pixels)]
-    )
-    idx_high = np.stack(
-        [np.searchsorted(profiles[:, i], upper_edges, side='left') for i in range(n_pixels)]
-    )
-    idx_high[:, -1] = np.array(
-        [np.searchsorted(profiles[:, i], upper_edges[-1:], side='right')[0] for i in range(n_pixels)]
-    )
-    hist = (idx_high - idx_low).astype(np.float32)
-
+    hist, nodata_mask = batch_binning(data[None, ...], bin_width=bin_width, max_height=max_height)
+    hist = hist.squeeze(axis=0) # shape (n_rows, n_cols, n_bins)
     # Normalize
-    total = hist.sum(axis=1, keepdims=True)
+    total = hist.sum(axis=-1, keepdims=True)
     total = np.where(total > 0, total, 1.0)
     p = hist / total
 
     # FHD
     log_p = np.where(p > 0, np.log(p), 0.0)
-    fhd = -np.sum(p * log_p, axis=1).astype(np.float32)
+    fhd = -np.sum(p * log_p, axis=-1).astype(np.float32)
 
     # ENL1D
     enl1d = np.exp(fhd).astype(np.float32)
 
     # ENL2D
-    sum_p2 = np.sum(np.where(p > 0, p ** 2, 0.0), axis=1)
+    sum_p2 = np.sum(np.where(p > 0, p ** 2, 0.0), axis=-1)
     enl2d = np.where(sum_p2 > 0, 1.0 / sum_p2, np.nan).astype(np.float32)
 
     # CR
-    rh25 = np.maximum(data[25, :], 0)
-    rh98 = data[98, :]
+    rh25 = np.maximum(data[24, :], 0)
+    rh98 = data[97, :]
     cr = np.where(rh98 > 0, (rh98 - rh25) / rh98, np.nan).astype(np.float32)
 
     fhd = fhd.reshape(n_rows, n_cols)
@@ -515,10 +489,6 @@ def _chunk_diversity(data, bin_width=5, max_height=MAX_HEIGHT):
     enl1d[nodata_mask] = np.nan
     enl2d[nodata_mask] = np.nan
     cr[nodata_mask] = np.nan
-    nan_min = np.nanmin(cr)
-    if nan_min < 0:
-        raise ValueError(f"CR has negative values: min={nan_min}, check input data and CR calculation.")
-
     return fhd, enl1d, enl2d, cr
 
 def _process_tile(args):

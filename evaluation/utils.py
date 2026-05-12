@@ -23,7 +23,9 @@ from concurrent.futures import ThreadPoolExecutor
 STAC_URL = "https://planetarycomputer.microsoft.com/api/stac/v1"
 
 NON_VEGETATION_CLASSES = {50, 60, 70, 80}
-MAX_HEIGHT = 100.0
+REALISTIC_MAX=150 #m
+REALISTIC_MIN=-150
+MAX_HEIGHT = 150.0
 NODATA_IN = 32767
 
 class ProgressMonitor:
@@ -91,106 +93,169 @@ def load_vsm_naturalness(h5_file: Path, **kwargs):
         rowids = f['rowid'][:]
     return vsm_patches, naturalness, rowids
 
-
-
-
-def batch_binning(tile, bin_width=5):
+def prepare_rh_profile(rh_datacube):
     """
-    Vectorized binning for a batch of spatial chunks.
+    Prepare the RH datacube for binning. This includes:
+    - Converting nodata values to NaN
+    - Converting from decimeters to meters
+    - Masking out invalid profiles (all nodata, infinite, negative, or unrealistic values)
+    NOTE: rh_datacube should have 4 dimensions (n, rows, cols, bands)
     """
-    n_batch, n_bands, n_rows, n_cols = tile.shape
-    n_pixels = n_batch * n_rows * n_cols
-    n_bins = int(MAX_HEIGHT / bin_width)
-    valid = np.isfinite(tile) & (~np.isnan(tile) & (tile > 0) & (tile <= MAX_HEIGHT))  # ← add upper bound
-    nodata_mask = valid.sum(axis=1) == 0  # (n, rows, cols)
-    tile_clean = np.where(valid, tile, 0.0)
-    bin_idx = np.clip((tile_clean / bin_width).astype(np.int32), 0, n_bins - 1)
-    bin_idx = np.where(valid, bin_idx, -1)
+    n_batch, n_bands, n_rows, n_cols = rh_datacube.shape
+    dtype = rh_datacube.dtype
+    # reshape
+    rh_datacube = rh_datacube.transpose(0, 2, 3, 1).astype(np.float32)
+    rh_datacube[rh_datacube == NODATA_IN] = np.nan
+    if dtype == np.int16: # rh_datacube is in decimeters, convert to meters
+        rh_datacube = rh_datacube/10
+    return rh_datacube, n_batch, n_bands, n_rows, n_cols
 
-    # Reshape: merge batch, rows, cols into one pixel dimension
-    bin_flat = bin_idx.reshape(n_batch, n_bands, n_rows * n_cols)       # (n, 101, rows*cols)
-    bin_flat = bin_flat.transpose(1, 0, 2).reshape(n_bands, n_pixels)   # (101, n_pixels)
+def mask_rh_profile(rh_datacube):
+    """
+    This masking is for calculating diversity indices, which only counts enegy returned above ground, and in range (0, max_height). 
+    RH metrics that are all nodata, infinite and zeros, will be masked out as nodata
+    There shouldn't be nodata or infinite appear in one of the 101 RH metrics, but I didn't check
+    Negative values won't be counted later. 
+    Values above max_height will be clipped to max_height, which is 150m by default.
+    NOTE: rh_datacube should be in meters, nodata should be nan!!! rh_datacube should have 4 dimensions (n, rows, cols, bands)
+    """
+    valid = np.isfinite(rh_datacube) & (rh_datacube >= 0) # all 101 RH metrics <0 should be invalid
+    invalid_mask = valid.sum(axis=-1, keepdims=True) == 0
+    realistic = (rh_datacube < REALISTIC_MIN) | (rh_datacube > REALISTIC_MAX)
+    realistic_mask = realistic.any(axis=-1, keepdims=True) # any value smaller than -150 or larger than 150, the whole RH profile will be masked out, 
+    nodata_mask = invalid_mask | realistic_mask # (n, rows, cols, 1) True for nodata pixels, False for valid pixels
+    n, rows, cols, bands = rh_datacube.shape
+    n_pixels = n * rows * cols
+    pixel_valid = nodata_mask.reshape(n_pixels, 1) == False
+    tile_flat = rh_datacube.reshape(n_pixels, bands) # (n_pixels, n_bands)
+    tile_clean = np.where(pixel_valid, tile_flat, -1.0)
+    band_valid_flat = valid.reshape(n_pixels, bands) & pixel_valid     # per-band AND per-pixel
+    return tile_clean, nodata_mask, band_valid_flat, n_pixels
 
-    pixel_indices = np.broadcast_to(
-        np.arange(n_pixels)[np.newaxis, :], (n_bands, n_pixels)
+def batch_binning(tile, bin_width=5, max_height=MAX_HEIGHT):
+    """
+    Vectorized binning for a batch of spatial chunks using searchsorted.
+    """
+    tile, n_batch, n_bands, n_rows, n_cols = prepare_rh_profile(tile) # (n, rows, cols, bands) in meters, with nodata as nan
+    tile_flat, nodata_mask, _, n_pixels = mask_rh_profile(tile) # (n, rows, cols, 1) nodata mask should work for all bands, and apply to the original data, therefore in original shape, not flattened shape.
+    tile_clean = np.minimum(tile_flat, max_height) # clip to max height, (n_pixels, n_bands) in meters, with nodata as -1.0, which is smaller than 0 and won't be counted in the histogram later.
+    
+    # Sort along axis=1 (bands)
+    profiles = np.sort(tile_clean, axis=1)
+    profiles = np.ascontiguousarray(profiles)
+
+    lower_edges = np.arange(0, max_height, bin_width)
+    upper_edges = np.arange(bin_width, max_height + bin_width, bin_width)
+
+    idx_low = np.stack(
+        [np.searchsorted(profiles[i, :], lower_edges, side='left') for i in range(n_pixels)]
+    ) # (n_pixels, n_bins)
+    idx_high = np.stack(
+        [np.searchsorted(profiles[i, :], upper_edges, side='left') for i in range(n_pixels)]
     )
-
-    hist = np.zeros((n_pixels, n_bins), dtype=np.float32)
-    flat_valid = bin_flat != -1
-    np.add.at(hist, (pixel_indices[flat_valid], bin_flat[flat_valid]), 1.0)
+    idx_high[:, -1] = np.array(
+        [np.searchsorted(profiles[i, :], upper_edges[-1:], side='right')[0] for i in range(n_pixels)]
+    )
+    hist = (idx_high - idx_low).astype(np.float32) # (n_pixels, n_bins)
+    n_bins = int(max_height / bin_width)
+    hist = hist.reshape(n_batch, n_rows, n_cols, n_bins)
 
     return hist, nodata_mask
 
-def loop_binning(tile, bin_width=5):
+
+def batch_binning_add_at(tile, bin_width=5, max_height=MAX_HEIGHT):
     """
-    Per-pixel np.histogram as reference.
- 
+    Vectorized binning for a batch of spatial chunks.
+    """
+    tile, n_batch, n_bands, n_rows, n_cols = prepare_rh_profile(tile) # (n, rows, cols, bands) in meters, with nodata as nan
+    tile_flat, nodata_mask, band_valid_flat, n_pixels = mask_rh_profile(tile) # nodata_mask: (n, rows, cols, 1) nodata mask should work for all bands, and apply to the original data, therefore in original shape, not flattened shape.
+    tile_clean = np.minimum(tile_flat, max_height) # clip to max height, (n_pixels, n_bands) in meters, with nodata as -1.0, which is smaller than 0 and won't be counted in the histogram later.
+    n_bins = int(max_height / bin_width)
+    bin_idx = np.clip((tile_clean / bin_width).astype(np.int32), 0, n_bins - 1)
+    hist = np.zeros((n_pixels, n_bins), dtype=np.float32)
+
+    pixel_indices = np.broadcast_to(
+        np.arange(n_pixels)[:, np.newaxis], (n_pixels, n_bands)
+    )
+    np.add.at(hist, (pixel_indices[band_valid_flat], bin_idx[band_valid_flat]), 1.0)
+    hist = hist.reshape(n_batch, n_rows, n_cols, n_bins)
+    return hist, nodata_mask
+
+def loop_binning(tile, bin_width=5, max_height=MAX_HEIGHT):
+    """
+    Per-pixel np.histogram as reference. Same preprocessing/masking pipeline
+    as batch_binning and batch_binning_add_at — just unvectorized histogramming.
+
     Parameters
     ----------
-    tile : ndarray, shape (101, rows, cols)
- 
+    tile : ndarray, shape (n_batch, n_bands, n_rows, n_cols)
+
     Returns
     -------
-    hist : ndarray, shape (rows, cols, n_bins)
+    hist : ndarray, shape (n_batch, n_rows, n_cols, n_bins)
+    nodata_mask : ndarray, shape (n_batch, n_rows, n_cols, 1)
     """
-    n_batch, n_bands, n_rows, n_cols = tile.shape
-    n_bins = int(MAX_HEIGHT / bin_width)
-    bin_edges = np.arange(0, MAX_HEIGHT + bin_width, bin_width, dtype=np.float64)
- 
-    hist = np.zeros((n_batch, n_rows, n_cols, n_bins), dtype=np.float32)
-    for b in range(n_batch):
-        for r in range(n_rows):
-            for c in range(n_cols):
-                col = tile[b, :, r, c]
-                valid = np.isfinite(col) & (col != NODATA_IN) & (col > 0)
-                if not valid.any():
-                    continue 
-                h, _ = np.histogram(col[valid], bins=bin_edges)
-                hist[b, r, c, :] = h
- 
-    return hist
+    tile, n_batch, n_bands, n_rows, n_cols = prepare_rh_profile(tile)
+    tile_flat, nodata_mask, band_valid_flat, n_pixels = mask_rh_profile(tile)
+    tile_clean = np.minimum(tile_flat, max_height)   # (n_pixels, n_bands)
+
+    n_bins = int(max_height / bin_width)
+    bin_edges = np.arange(0, max_height + bin_width, bin_width, dtype=np.float64)
+
+    hist = np.zeros((n_pixels, n_bins), dtype=np.float32)
+    for i in range(n_pixels):
+        valid = band_valid_flat[i]
+        if not valid.any():
+            continue
+        h, _ = np.histogram(tile_clean[i, valid], bins=bin_edges)
+        hist[i, :] = h
+
+    hist = hist.reshape(n_batch, n_rows, n_cols, n_bins)
+    return hist, nodata_mask
 
 def verify_batch_binning():
     """
-    Verify the batch binning function.
+    Verify batch_binning (searchsorted) and batch_binning_add_at against
+    loop_binning (per-pixel np.histogram reference). All three share the
+    same prepare_rh_profile + mask_rh_profile pipeline, so results should
+    be bit-identical.
     """
     np.random.seed(42)
- 
-    # Simulate realistic data: 101 bands, 11x11 patch
-    # Values are height * 10 (so 0-1000 range), with some nodata and zeros
+
+    # Small tile for correctness verification: 1,210 pixels. loop_binning
+    # runs one np.histogram per pixel, so keep this fast.
+    # int16 decimeters mimics raw stored data; prepare_rh_profile divides by 10.
     n_batch, n_bands, n_rows, n_cols = 10, 101, 11, 11
-    tile = np.random.uniform(0, 500, size=(n_batch, n_bands, n_rows, n_cols)).astype(np.float32)
- 
-    # Add some nodata and invalid values
+    tile = np.random.randint(0, 1500, size=(n_batch, n_bands, n_rows, n_cols), dtype=np.int16)
+
+    # Inject zeros and NODATA_IN sentinels (no np.nan — int16 can't hold it)
     mask = np.random.random(tile.shape) < 0.3
-    tile[mask] = 0.0
+    tile[mask] = 0
     mask2 = np.random.random(tile.shape[:-1]) < 0.05
     tile[mask2] = NODATA_IN
-    mask3 = np.random.random(tile.shape[:-1]) < 0.05
-    tile[mask3] = np.nan
- 
-    # Run both
-    hist_custom, nodata_mask = batch_binning(tile.copy(), bin_width=5)
-    hist_custom = hist_custom.reshape(n_batch, n_rows, n_cols, -1)
-    hist_loop = loop_binning(tile.copy(), bin_width=5)
- 
-    # Compare
+
+    # Run all three
+    hist_search, _ = batch_binning(tile.copy(), bin_width=5)
+    hist_addat,  _ = batch_binning_add_at(tile.copy(), bin_width=5)
+    hist_loop,   _ = loop_binning(tile.copy(), bin_width=5)
+
     print("=" * 60)
     print("SHAPE CHECK")
     print("=" * 60)
-    print(f"Custom: {hist_custom.shape}")
-    print(f"Loop:   {hist_loop.shape}")
- 
+    print(f"searchsorted: {hist_search.shape}")
+    print(f"add.at:       {hist_addat.shape}")
+    print(f"loop:         {hist_loop.shape}")
+
     print()
     print("=" * 60)
-    print("VALUE COMPARISON")
+    print("VALUE COMPARISON (vs loop reference)")
     print("=" * 60)
-    max_diff = np.max(np.abs(hist_custom - hist_loop))
-    mean_diff = np.mean(np.abs(hist_custom - hist_loop))
-    print(f"Max absolute diff:  {max_diff:.8f}")
-    print(f"Mean absolute diff: {mean_diff:.8f}")
-    print(f"Match: {'YES' if max_diff < 1e-4 else 'NO'}")
- 
+    for name, hist in [("searchsorted", hist_search), ("add.at", hist_addat)]:
+        diff = np.abs(hist - hist_loop)
+        max_diff, mean_diff = float(diff.max()), float(diff.mean())
+        match = "YES" if max_diff < 1e-4 else "NO"
+        print(f"{name:13s} | max {max_diff:.8f} | mean {mean_diff:.8f} | match {match}")
+
     # Show a few sample pixels
     print()
     print("=" * 60)
@@ -201,32 +266,35 @@ def verify_batch_binning():
         for r in range(n_rows):
             for c in range(n_cols):
                 if hist_loop[b, r, c].sum() > 0 and count < 3:
-                    print(f"\nPixel ({r}, {c}):")
-                    print(f"  Loop:   {hist_loop[b, r, c]}")
-                    print(f"  Custom: {hist_custom[b, r, c]}")
-                    print(f"  Diff:   {hist_custom[b, r, c] - hist_loop[b, r, c]}")
+                    print(f"\nPixel (b={b}, r={r}, c={c}):")
+                    print(f"  loop:         {hist_loop[b, r, c]}")
+                    print(f"  searchsorted: {hist_search[b, r, c]}")
+                    print(f"  add.at:       {hist_addat[b, r, c]}")
                     count += 1
- 
+
     # Benchmark on larger tile
     print()
     print("=" * 60)
-    print("BENCHMARK (101 x 64 x 64 tile)")
+    print("BENCHMARK (10 x 101 x 64 x 64 tile)")
     print("=" * 60)
-    big_tile = np.random.uniform(0, 500, size=(10, 101, 64, 64)).astype(np.float32)
-    mask = np.random.random(big_tile.shape) < 0.3
-    big_tile[mask] = 0.0
- 
-    t0 = time.time()
-    _, _ = batch_binning(big_tile.copy(), bin_width=5)
-    t_custom = time.time() - t0
- 
-    t0 = time.time()
-    _ = loop_binning(big_tile.copy(), bin_width=5)
-    t_loop = time.time() - t0
- 
-    print(f"Custom:  {t_custom:.3f}s")
-    print(f"Loop:    {t_loop:.3f}s")
-    print(f"Speedup: {t_loop / t_custom:.1f}x")
+    big_tile = np.random.randint(0, 1500, size=(10, 101, 64, 64), dtype=np.int16)
+    big_mask = np.random.random(big_tile.shape) < 0.3
+    big_tile[big_mask] = 0
+
+    timings = {}
+    for name, fn in [
+        ("searchsorted", batch_binning),
+        ("add.at",       batch_binning_add_at),
+        ("loop",         loop_binning),
+    ]:
+        t0 = time.time()
+        fn(big_tile.copy(), bin_width=5)
+        timings[name] = time.time() - t0
+        print(f"{name:13s}: {timings[name]:.3f}s")
+
+    print(f"\nspeedup vs loop:")
+    print(f"  searchsorted: {timings['loop'] / timings['searchsorted']:.1f}x")
+    print(f"  add.at:       {timings['loop'] / timings['add.at']:.1f}x")
     
     
 

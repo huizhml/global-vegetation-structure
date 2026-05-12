@@ -106,9 +106,6 @@ def _process_tile(args):
     with rasterio.open(vrt_path, "r") as src:
         window = Window(col_off, row_off, w, h)
         tile = src.read(window=window).astype(np.float32)  # (101, h, w)
-        if not ((tile[1] - tile[0]) >=0).all():
-            import ipdb; ipdb.set_trace()
-            raise ValueError("Data bands are not in ascending order. Please check the input data.")
     ent, enl1d, enl2d, cr = _chunk_diversity(tile, bin_width=bin_width, max_height=max_height)
     return ent, enl1d, enl2d, cr, col_off, row_off, w, h
 
