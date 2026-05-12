@@ -4,8 +4,9 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 import yaml
-from constants import BIOME_MAPPING
 from tqdm import tqdm
+
+from .constants import BIOME_MAPPING
 
 
 class RHDataCPConfig:
@@ -18,24 +19,25 @@ class RHDataCPConfig:
             self.q_hi_col = rh_cols["q_hi"]
 
         def q_cols(self):
-            return self.q_lo_col, self.q_med_col, self.q_hi_col
+            return [self.q_lo_col, self.q_med_col, self.q_hi_col]
 
         def all_cols(self):
             return list(self.q_cols()) + [self.ground_truth_col]
 
     rh_cols: list[RHColumns]
 
-    def __init__(self, config_path):
+    def __init__(self, config_path: str):
         with open(config_path, "r") as f:
             config = yaml.safe_load(f)
         if "RH" not in config:
             raise ValueError("Config file must contain 'RH' key")
         self.rh_cols = [
-            self.RHColumns(rh_val, rh_cols) for rh_val, rh_cols in config["RH"]
+            self.RHColumns(rh_val, rh_cols)
+            for rh_val, rh_cols in config["RH"].items()
         ]
         self.rh_cols.sort(key=lambda x: x.rh_val)
         self.cqr_methods = config.get("cqr_methods")
-        self.other_cols = config.get("other_cols", default=[])
+        self.other_cols = config.get("other_cols", [])
         self.alpha = float(config["alpha"])
 
     def __iter__(self):
@@ -54,7 +56,6 @@ class RHDataCPConfig:
 def collect_data(data_root, config: RHDataCPConfig):
     geo_dfs = []
     all_files = glob(f"{data_root}/*.parquet")
-    print(all_files)
     columns = config.all_cols()
     with tqdm(all_files, total=len(all_files)) as pbar:
         for path in pbar:
@@ -72,7 +73,6 @@ def correct_quantile_crossing(
     data: gpd.GeoDataFrame, config: RHDataCPConfig, min_err: float = 0.0
 ):
     for rh_cols in config:
-        print("Processing RH", rh_cols.rh_val)
         # 1. Sort row-wise to fix crossing
         sorted_vals = np.sort(data[rh_cols.q_cols()].values, axis=1)
 

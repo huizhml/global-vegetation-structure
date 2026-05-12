@@ -1,4 +1,5 @@
 import inspect
+import logging
 
 import numpy as np
 
@@ -84,30 +85,43 @@ class ConformalPredictor:
         "SE-CQR-m": se_cqr_m,
     }
 
-    def __init__(self, method_name, alpha):
+    def __init__(self, method_name, alpha, q_lo_cal, q_hi_cal, q_med_cal, y):
         self.alpha = alpha
         self.method_name = method_name
         try:
             self.cp_function = self.methods_mapping[method_name]
         except KeyError:
             raise ValueError(f"Unsupported CP method: {method_name}")
-        self.q_lo, self.q_hi = None, None
 
-    def fit(self, q_lo, q_hi, q_med, y):
+        coverage_init = np.mean((q_lo_cal <= y) & (y <= q_hi_cal))
+        logging.debug(
+            "Initial coverage: %.2f",
+            coverage_init,
+        )
+
         sig = inspect.signature(self.cp_function)
         arg_names = list(sig.parameters.keys())
         params_all = {
-            "q_lo": q_lo,
-            "q_hi": q_hi,
-            "q_med": q_med,
+            "q_lo": q_lo_cal,
+            "q_hi": q_hi_cal,
+            "q_med": q_med_cal,
             "y": y,
-            "alpha": self.alpha,
+            "alpha": alpha,
         }
-        method_params = {
-            param_name: params_all[param_name] for param_name in arg_names
-        }
-        self.q_lo, self.q_hi = self.cp_function(**method_params)
-        return self
+        method_params = {param_name: params_all[param_name] for param_name in arg_names}
+        q_lo, q_hi = self.cp_function(**method_params)
+        self.q_lo, self.q_hi = float(q_lo), float(q_hi)
+
+        coverage = (q_lo - q_lo <= y) & (y <= q_hi + q_hi)
+        empirical_coverage = np.mean(coverage)
+        width_increase = q_lo + q_hi
+        avg_base_width = (q_hi - q_lo).mean()
+        logging.debug(
+            "Calibration coverage: %.2f, width increase from avg. %.2f by %.2f",
+            empirical_coverage,
+            avg_base_width,
+            width_increase,
+        )
 
     def _apply_cp_correction(self, q_lo, q_hi, q_med):
         if self.method_name in ["CQR", "SE-CQR"]:
@@ -125,7 +139,5 @@ class ConformalPredictor:
 
     def predict(self, q_lo, q_hi, q_med):
         if self.q_lo is None or self.q_hi is None:
-            raise ValueError(
-                "Conformal predictor must be fitted before prediction."
-            )
+            raise ValueError("Conformal predictor must be fitted before prediction.")
         return self._apply_cp_correction(q_lo, q_hi, q_med)
