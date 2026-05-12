@@ -1,0 +1,10 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cp"
+version = "0.1.0"
+
+[tool.setuptools.packages.find]
+include = ["cp", "cp.*"]  # cp and all submodules inside it

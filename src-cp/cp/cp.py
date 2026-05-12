@@ -108,7 +108,9 @@ class ConformalPredictor:
             "y": y,
             "alpha": alpha,
         }
-        method_params = {param_name: params_all[param_name] for param_name in arg_names}
+        method_params = {
+            param_name: params_all[param_name] for param_name in arg_names
+        }
         q_lo, q_hi = self.cp_function(**method_params)
         self.q_lo, self.q_hi = float(q_lo), float(q_hi)
 
@@ -123,7 +125,19 @@ class ConformalPredictor:
             width_increase,
         )
 
-    def _apply_cp_correction(self, q_lo, q_hi, q_med):
+    @classmethod
+    def from_precomputed(cls, method_name, alpha, q_lo, q_hi):
+        instance = cls.__new__(cls)
+        try:
+            instance.cp_function = instance.methods_mapping[method_name]
+        except KeyError:
+            raise ValueError(f"Unsupported CP method: {method_name}")
+        instance.alpha = alpha
+        instance.method_name = method_name
+        instance.q_lo, instance.q_hi = q_lo, q_hi
+        return instance
+
+    def calibrate(self, q_lo, q_hi, q_med):
         if self.method_name in ["CQR", "SE-CQR"]:
             q_lo_corrected = q_lo - self.q_lo
             q_hi_corrected = q_hi + self.q_hi
@@ -136,8 +150,3 @@ class ConformalPredictor:
         else:
             raise ValueError(f"Unknown CP method name: {self.method_name}")
         return q_lo_corrected, q_hi_corrected
-
-    def predict(self, q_lo, q_hi, q_med):
-        if self.q_lo is None or self.q_hi is None:
-            raise ValueError("Conformal predictor must be fitted before prediction.")
-        return self._apply_cp_correction(q_lo, q_hi, q_med)
