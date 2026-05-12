@@ -23,7 +23,7 @@ from download.core.utils import get_epsg_from_tile
 
 pv.OFF_SCREEN = True
 
-def plot_datacube(data: np.array, lons: np.array, lats: np.array, save_path: str, cmap: str='inferno'):
+def plot_datacube(data: np.array, lons: np.array, lats: np.array, save_path: Path, cmap: str='inferno'):
     # latitude ascending
     if lats[0] > lats[-1]:
         lats = lats[::-1]
@@ -102,12 +102,20 @@ def plot_datacube(data: np.array, lons: np.array, lats: np.array, save_path: str
             "title": "Height [m]",
             "color": "white",
             "vertical": True,
-            "position_x": 0.2,
-            "position_y": 0.26,
-            "height": 0.52,
+            "position_x": 0.04,
+            "position_y": 0.04,
+            "height": 0.42,
             "width": 0.03,
+            "title_font_size": 30,    # px; title above the bar
+            "label_font_size": 24,    # px; numeric tick labels
+            "n_labels": 5,            # number of tick labels
+            "fmt": "%.0f",            # drop the decimals on 0.0 / 12.5 / ...
         },
     )
+
+    # Push the title away from the bar (vertical orientation only).
+    # `scalar_bar_args` doesn't expose this, so set it on the VTK actor directly.
+    p.scalar_bars["Height [m]"].SetVerticalTitleSeparation(20)  # px gap
 
     # p.add_mesh(grid.outline(), color="black", opacity=0.7, line_width=1)
 
@@ -122,7 +130,7 @@ def plot_datacube(data: np.array, lons: np.array, lats: np.array, save_path: str
     cz = 0.5 * (zmin + zmax)
 
     p.camera_position = [
-        (cx, ymin - 80, zmax + 300),  # 更高、更少侧向偏移
+        (cx, ymin, zmax + 300),  # 更高、更少侧向偏移
         (cx, cy, cz),
         (0, 0, 1),
     ]
@@ -142,12 +150,19 @@ def plot_datacube(data: np.array, lons: np.array, lats: np.array, save_path: str
     if mask.any():
         rows = np.where(mask.any(axis=1))[0]
         cols = np.where(mask.any(axis=0))[0]
-        pad = 8
-        r0 = max(int(rows[0]) - pad, 0)
-        r1 = min(int(rows[-1]) + 1 + pad, img.shape[0])
-        c0 = max(int(cols[0]) - pad, 0)
-        c1 = min(int(cols[-1]) + 1 + pad, img.shape[1])
+        r0, r1 = int(rows[0]), int(rows[-1]) + 1
+        c0, c1 = int(cols[0]), int(cols[-1]) + 1
         img = img[r0:r1, c0:c1]
+
+    # Add a uniform border of background pixels around the cropped image.
+    # This actually appends pixels, so increasing `pad` always widens the border.
+    pad = 30  # px on each side; raise for more breathing room
+    img = np.pad(
+        img,
+        pad_width=((pad, pad), (pad, pad), (0, 0)),
+        mode="constant",
+        constant_values=0,  # matches the black background
+    )
 
     plt.imsave(save_path, img)
 
@@ -166,7 +181,7 @@ def read_coords(file: str, overview_level: int=4):
         nodata = src.nodata
     return lons, lats, nodata
 
-def read_datacube(data_dir: str, filename_pattern: str='.cog.tif', overview_level: int=4, rh_step: int=2):
+def read_datacube(data_dir: str, filename_pattern: str='*.tif', overview_level: int=4, rh_step: int=2):
     data_dir = Path(data_dir).expanduser()
     files = list(data_dir.glob(filename_pattern))
     files = [str(file) for file in files]
@@ -214,8 +229,9 @@ def get_patch_by_latlon(lat, lon, s2_grid: gpd.GeoDataFrame = None, year: int = 
     )
     return image.squeeze()
 
-def visualize_datacube(data_dir: str, save_path: str, cmap: str='viridis', rh_step: int=2, **kwargs):
-    data, lons, lats = read_datacube(data_dir, filename_pattern='*cog.tif', rh_step=rh_step, **kwargs)
+def visualize_datacube(save_path: str=None, data_dir: str=None, filename_pattern: str='*.tif', cmap: str='viridis', rh_step: int=2, **kwargs):
+    data, lons, lats = read_datacube(data_dir, filename_pattern=filename_pattern, rh_step=rh_step)
+    save_path = Path(save_path).expanduser()
     plot_datacube(data, lons, lats, save_path, cmap=cmap)
     
 if __name__ == '__main__':

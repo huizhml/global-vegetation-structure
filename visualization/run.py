@@ -92,12 +92,14 @@ cs.store(group='run', name='create_global_mosaic_pdf', node=CreateGlobalMosaicPd
 @dataclass
 class VisualizeDatacubeConfig(FunctionConfig):
     product: str = 'prediction_intervals'
-    data_format: str = 'cog'
+    product_format: str = 'cog'
+    product_version: str = 'masked'
+    filename_pattern: str = '*.tif'
     year: int = 2020
-    version: str = 'masked'
     rh_step: int = 2
-    data_dir: str = '~/data/gvs/products/{product}/{year}/{version}/mosaic/{}'
-    save_path: str = '~/data/gvs/results/vsm_datacube/pi_every2rhs_black_bg_v2.png'
+    version: str = '2'
+    data_dir: str = '~/data/gvs/products/{product}/{year}/{product_version}/mosaic/{product_format}/'
+    save_path: str = '~/data/gvs/results/vsm_datacube/{product}_every{rh_step}rhs_black_bg_v{version}.png'
     cmap: str = 'cividis'
     _target_: str = "visualization.core.datacube.visualize_datacube"
 cs.store(group='run', name='visualize_datacube', node=VisualizeDatacubeConfig)
