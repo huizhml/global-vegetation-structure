@@ -790,10 +790,10 @@ def eval_diversity_indices(indices_dir:str=None, bin_width:int=5, group_by=None,
         ddf = ddf[ddf['slope'] <= 20]
         # save_dir = save_dir.parent / f'steep_slope_filtered_bin_{bin_width}m'
         # save_dir.mkdir(parents=True, exist_ok=True)
-    ddf['fhd_diff'] = ddf['fhd_gedi'] - ddf['fhd_ours']
-    ddf['enl1d_diff'] = ddf['enl1d_gedi'] - ddf['enl1d_ours']
-    ddf['enl2d_diff'] = ddf['enl2d_gedi'] - ddf['enl2d_ours']
-    ddf['cr_diff'] = ddf['cr_gedi'] - ddf['cr_ours']
+    ddf['fhd_diff'] = ddf['fhd_ours'] - ddf['fhd_gedi']
+    ddf['enl1d_diff'] = ddf['enl1d_ours'] - ddf['enl1d_gedi']
+    ddf['enl2d_diff'] = ddf['enl2d_ours'] - ddf['enl2d_gedi']
+    ddf['cr_diff'] = ddf['cr_ours'] - ddf['cr_gedi']
 
     n_bins = int(100/bin_width)
     max_metrics = {
