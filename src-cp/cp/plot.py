@@ -1,13 +1,10 @@
-import argparse
-import json
-import logging
-import sys
-from cp.dl import RHDataCPConfig
-import matplotlib.pyplot as plt
-from cp.constants import OKABE_ITO_PALETTE
-from matplotlib import colors as mcolors
 import matplotlib.lines as mlines
+import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
+from matplotlib import colors as mcolors
+
+from cp.constants import OKABE_ITO_PALETTE
 
 
 def get_tint(color, factor=0.5):
@@ -20,10 +17,12 @@ def get_tint(color, factor=0.5):
 
 
 def plot_rh_coverage_per_biome(
-    coverage_data: dict[str, dict[str, dict[str, float]]],
+    calibrated_coverage: pd.DataFrame,
+    initial_coverage: pd.DataFrame,
     save_path: str,
     subplot_order: list[str],
     y_axis_order: list[str],
+    alpha,
     n_rows=2,
     n_cols=7,
     width=7.1,
@@ -52,9 +51,9 @@ def plot_rh_coverage_per_biome(
     for i, ax in enumerate(axes):
         if i < len(subplot_order):
             group_name = subplot_order[i]
-            group_data = coverage_data[group_name]
-
-            for y_tick, data in group_data.items():
+            for y_tick in y_axis_order:
+                calibrated_val = calibrated_coverage.loc[y_tick, group_name]
+                initial_val = initial_coverage.loc[y_tick, group_name]
                 y_pos = ys_mapping[y_tick]
 
                 # Using your tint_factor for the initial points and line
@@ -62,7 +61,7 @@ def plot_rh_coverage_per_biome(
 
                 # Connecting line: thinner (1.0 pt)
                 ax.plot(
-                    [data["initial"], data["calibrated"]],
+                    [initial_val, calibrated_val],
                     [y_pos, y_pos],
                     color=shaded_color,
                     alpha=1,
@@ -72,7 +71,7 @@ def plot_rh_coverage_per_biome(
 
                 # Initial coverage: smaller marker
                 ax.scatter(
-                    data["initial"],
+                    initial_val,
                     y_pos,
                     color=shaded_color,
                     alpha=1,
@@ -84,7 +83,7 @@ def plot_rh_coverage_per_biome(
 
                 # Calibrated coverage: smaller diamond, very thin border
                 ax.scatter(
-                    data["calibrated"],
+                    calibrated_val,
                     y_pos,
                     color=color,
                     alpha=1.0,
@@ -112,9 +111,7 @@ def plot_rh_coverage_per_biome(
             ax.set_title(group_name, fontsize=6, pad=4)
             ax.spines["top"].set_visible(False)
             ax.spines["right"].set_visible(False)
-            ax.yaxis.grid(
-                True, color="#E0E0E0", linestyle="-", linewidth=0.5, zorder=0
-            )
+            ax.yaxis.grid(True, color="#E0E0E0", linestyle="-", linewidth=0.5, zorder=0)
             ax.xaxis.grid(False)
             ax.tick_params(axis="both", labelsize=6)
         else:
@@ -158,12 +155,12 @@ def plot_rh_coverage_per_biome(
         mlines.Line2D(
             [0],
             [0],
-            color=color,
+            color=target_line_color,
             linestyle="--",
             linewidth=0.5,
             alpha=1,
             # label=textwrap.fill("Min. target coverage", width=15),
-            label="Min. target coverage",
+            label=f"Min. target coverage ({100 * (1 - alpha):.0f}%)",
         ),
     ]
 
@@ -196,45 +193,3 @@ def plot_rh_coverage_per_biome(
 
     # plt.show()
     plt.close()
-
-
-def main(args: argparse.Namespace):
-    config = RHDataCPConfig(args.config_path)
-    with open(args.eval_res_path) as f:
-        eval_res = json.load(f)
-
-
-def parse_args():
-    parser = argparse.ArgumentParser(
-        description=__doc__,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    parser.add_argument(
-        "--config_path",
-        type=str,
-        help="Path to the CP and data columns config file (YAML)",
-        required=True,
-    )
-    parser.add_argument(
-        "--save_root",
-        type=str,
-        help="Path for saving CP evaluation figures",
-        required=True,
-    )
-    parser.add_argument(
-        "--eval_res_path",
-        type=str,
-        help="Path to the file containing CP evaluation results (JSON)",
-        default=None,
-        required=True,
-    )
-    return parser.parse_args()
-
-
-if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s  %(levelname)-8s  %(message)s",
-        handlers=[logging.StreamHandler(sys.stdout)],
-    )
-    main(parse_args())

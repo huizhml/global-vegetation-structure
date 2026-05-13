@@ -27,3 +27,20 @@ OKABE_ITO_PALETTE = {
     "reddish_purple": "#CC79A7",
     "black": "#000000",
 }
+
+BIOME_SHORT_MAPPING = {
+    "Tropical and Subtropical Moist Broadleaf Forests": "Trop. moist\nbroadleaf",
+    "Tropical and Subtropical Dry Broadleaf Forests": "Trop. dry\nbroadleaf",
+    "Tropical and Subtropical Coniferous Forests": "Trop.\nconiferous",
+    "Temperate Broadleaf and Mixed Forests": "Temp.\nbroadleaf",
+    "Temperate Coniferous Forests": "Temp.\nconiferous",
+    "Boreal Forests/Taiga": "Boreal",
+    "Tropical and Subtropical Grasslands, Savannas, and Shrublands": "Trop.\ngrassland",
+    "Temperate Grasslands, Savannas, and Shrublands": "Temp.\ngrassland",
+    "Flooded Grasslands and Savannas": "Flooded\ngrassland",
+    "Montane Grasslands and Shrublands": "Montane\ngrassland",
+    "Tundra, Rock and Ice": "Tundra,\nRock and Ice",
+    "Mediterranean Forests, Woodlands, and Scrub": "Mediterranean\nforest",
+    "Deserts and Xeric Shrublands": "Deserts",
+    "Mangroves": "Mangroves",
+}

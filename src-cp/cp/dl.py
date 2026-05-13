@@ -1,70 +1,15 @@
+import logging
 from glob import glob
 
 import geopandas as gpd
 import numpy as np
 import pandas as pd
-import yaml
 from tqdm import tqdm
-import logging
 
+from .config import RHDataCPConfig
 from .constants import BIOME_MAPPING
 
 # TODO: improve logging (changing verbosity)
-
-
-class RHDataCPConfig:
-    # TODO: add biome col
-    class RHColumns:
-        def __init__(self, rh_val, rh_cols: dict[str, str]):
-            self.rh_val: int = rh_val
-            self.ground_truth_col = rh_cols["ground_truth"]
-            self.q_lo_col = rh_cols["q_lo"]
-            self.q_med_col = rh_cols["q_med"]
-            self.q_hi_col = rh_cols["q_hi"]
-
-        def q_cols(self):
-            return [self.q_lo_col, self.q_med_col, self.q_hi_col]
-
-        def all_cols(self):
-            return list(self.q_cols()) + [self.ground_truth_col]
-
-    all_rh_cols: list[RHColumns]
-
-    def __init__(self, config_path: str):
-        with open(config_path, "r") as f:
-            config = yaml.safe_load(f)
-        if "RH" not in config:
-            raise ValueError("Config file must contain 'RH' key")
-        self.all_rh_cols = [
-            self.RHColumns(rh_val, rh_cols)
-            for rh_val, rh_cols in config["RH"].items()
-        ]
-        self.all_rh_cols.sort(key=lambda x: x.rh_val)
-        self.cqr_methods = config.get("cqr_methods")
-        self.other_cols = config.get("other_cols", [])
-        self.alpha = float(config["alpha"])
-
-    def __iter__(self):
-        return iter(self.all_rh_cols)
-
-    def get_all_rh_cols(self):
-        all_rh_cols = [
-            self.all_rh_cols[i].all_cols() for i in range(len(self.all_rh_cols))
-        ]
-        return [cols for rh_cols in all_rh_cols for cols in rh_cols]
-
-    def get_all_cols(self):
-        return self.other_cols + self.get_all_rh_cols()
-
-    def get_rh_cols(self, rh_val: int):
-        return next(
-            (
-                rh_cols.all_cols()
-                for rh_cols in self.all_rh_cols
-                if rh_cols.rh_val == rh_val
-            ),
-            None,
-        )
 
 
 def collect_data(data_root, config: RHDataCPConfig):
@@ -75,9 +20,7 @@ def collect_data(data_root, config: RHDataCPConfig):
         for path in pbar:
             gdf = gpd.read_parquet(path).to_crs("epsg:4326")
             geo_dfs.append(gdf[columns])
-    full_gdf = gpd.GeoDataFrame(
-        pd.concat(geo_dfs, ignore_index=True), crs="epsg:4326"
-    )
+    full_gdf = gpd.GeoDataFrame(pd.concat(geo_dfs, ignore_index=True), crs="epsg:4326")
     if "BIO_REALM" in full_gdf.columns:
         full_gdf["BIO_REALM"] = full_gdf["ECO_ID"] // 100
     return full_gdf
@@ -111,9 +54,7 @@ def convert_to_decimeter(data: gpd.GeoDataFrame, config: RHDataCPConfig):
     return data
 
 
-def preprocess_rh_data(
-    data: gpd.GeoDataFrame, config: RHDataCPConfig, min_err=0.0
-):
+def preprocess_rh_data(data: gpd.GeoDataFrame, config: RHDataCPConfig, min_err=0.0):
     # 1. Drop nan predictions and BIOME values
     required_cols = config.get_all_rh_cols() + ["BIOME"]
     data.dropna(subset=required_cols, inplace=True)
@@ -133,12 +74,11 @@ def preprocess_rh_data(
     return data_corrected
 
 
-def load_config_and_data(
-    config_path: str, data_root: str | None = None, data_path: str | None = None
+def load_data(
+    config: RHDataCPConfig,
+    data_root: str | None = None,
+    data_path: str | None = None,
 ):
-    if data_root is not None and data_path is not None:
-        raise ValueError("Must provide only one of --data_root or --data_path")
-    config = RHDataCPConfig(config_path)
     if data_root is not None:
         logging.info(
             "Reading parquet files from %s",
@@ -158,4 +98,4 @@ def load_config_and_data(
     else:
         raise ValueError("Must provide only one of --data_root or --data_path")
 
-    return config, data
+    return data
