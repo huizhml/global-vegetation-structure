@@ -105,12 +105,12 @@ def _process_tile(args):
     gdal.SetCacheMax(256 * 1024 * 1024)  # 256 MB per worker
     with rasterio.open(vrt_path, "r") as src:
         window = Window(col_off, row_off, w, h)
-        tile = src.read(window=window).astype(np.float32)  # (101, h, w)
+        tile = src.read(window=window)#.astype(np.float32)  # (101, h, w)
     ent, enl1d, enl2d, cr = _chunk_diversity(tile, bin_width=bin_width, max_height=max_height)
     return ent, enl1d, enl2d, cr, col_off, row_off, w, h
 
 
-def create_global_diversity_maps(output_path: Path=None, tif_dir: str=None,
+def create_global_diversity_maps(save_dir: Path=None, tif_dir: str=None,
                          chunk_size=512, max_workers=8, bin_width=5, max_height:int=150, **kwargs):
     """
     Compute per-pixel FHD entropy — fast version.
@@ -123,7 +123,7 @@ def create_global_diversity_maps(output_path: Path=None, tif_dir: str=None,
 
     Parameters
     ----------
-    output_path : str
+    save_dir : str
         Output single-band GeoTIFF path.
     tile_id : str
         Tile identifier (e.g. '36NTF').
@@ -136,21 +136,22 @@ def create_global_diversity_maps(output_path: Path=None, tif_dir: str=None,
     max_workers : int
         Number of parallel processes.
     """
-    output_path = Path(output_path).expanduser()
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    cog_path = output_path.with_suffix('.cog.tif')
+    save_dir = Path(save_dir).expanduser()
+    save_dir.mkdir(parents=True, exist_ok=True)
+    gtif_path = save_dir/f'geotiff/diversity_maps_bin{bin_width}_max{max_height}.tif'
+    cog_path = save_dir/f'cog/diversity_maps_bin{bin_width}_max{max_height}.cog.tif'
     if cog_path.exists():
         print(f"Output COG already exists: {cog_path}")
         return cog_path
-    if output_path.exists():
-        return to_cog(output_path)
+    if gtif_path.exists():
+        return to_cog(gtif_path)
     
     tif_dir = Path(tif_dir).expanduser()
     
     # Create VRT if not provided
     vrt_file = list(tif_dir.glob('*.vrt'))
     if len(vrt_file) == 0:
-        vrt_file = tif_dir/f'{output_path.stem}.vrt'
+        vrt_file = tif_dir/f'{gtif_path.stem}.vrt'
         create_vrt(tif_dir, vrt_file)
     else:
         vrt_file = vrt_file[0]
@@ -187,7 +188,7 @@ def create_global_diversity_maps(output_path: Path=None, tif_dir: str=None,
         for col_off in range(0, nx, chunk_size):
             h = min(chunk_size, ny - row_off)
             w = min(chunk_size, nx - col_off)
-            ent, enl1d, enl2d, cr, col_off, row_off, w, h = _process_tile((vrt_file, col_off, row_off, w, h, bin_width, max_height))
+            # ent, enl1d, enl2d, cr, col_off, row_off, w, h = _process_tile((vrt_file, col_off, row_off, w, h, bin_width, max_height))
             work_items.append((vrt_file, col_off, row_off, w, h, bin_width, max_height))
 
     print(f"Processing {len(work_items)} tiles with {max_workers} processes")
@@ -200,7 +201,7 @@ def create_global_diversity_maps(output_path: Path=None, tif_dir: str=None,
     # until the whole pool exits).
     max_inflight = max_workers * 2
 
-    with (rasterio.open(output_path, "w", **out_profile) as dst):
+    with (rasterio.open(gtif_path, "w", **out_profile) as dst):
         monitor.start()
         try:
             with ProcessPoolExecutor(max_workers=max_workers) as pool:
@@ -218,7 +219,8 @@ def create_global_diversity_maps(output_path: Path=None, tif_dir: str=None,
                     for fut in done:
                         ent, enl1d, enl2d, cr, col_off, row_off, w, h = fut.result()
                         win = Window(col_off, row_off, w, h)
-                        dst.write(np.stack([ent, enl1d, enl2d, cr], axis=0), window=win)
+                        data = np.stack([ent, enl1d, enl2d, cr], axis=0).squeeze()  # (4, h, w)
+                        dst.write(data, window=win)
                         monitor.tick()
                         # Refill so the pool stays saturated.
                         try:
@@ -232,13 +234,16 @@ def create_global_diversity_maps(output_path: Path=None, tif_dir: str=None,
             dst.set_band_description(4, "cr")
             monitor.stop()
 
-    print(f"Done: {output_path}")
-    to_cog(output_path)
-    return output_path
+    print(f"Done: {gtif_path}")
+    to_cog(gtif_path, cog_path)
+    return gtif_path
 
-def to_cog(gtif_path: Path):
+def to_cog(gtif_path: Path, cog_path: Path=None):
     gtif_path = Path(gtif_path).expanduser()
-    cog_path = gtif_path.with_suffix('.cog.tif')
+    if cog_path is None:
+        cog_path = gtif_path.with_suffix('.cog.tif')
+    else:
+        cog_path = Path(cog_path).expanduser()
     if cog_path.exists():
         return cog_path
     output_profile = cog_profiles.get("ZSTD")
@@ -262,10 +267,10 @@ def to_cog(gtif_path: Path):
 
 
 if __name__ == '__main__':
-    output_path = '~/data/gvs/products/vsm/2020/masked/mosaic/diversity_maps.tif'
-    tif_dir = '~/data/gvs/products/vsm/2020/masked/mosaic/cog'
+    save_dir = '~/data/gvs/products/diversity_indices/2020/masked/mosaic'
+    tif_dir = '~/data/gvs/products/diversity_indices/2020/masked/mosaic/cog'
     bin_width = 1
-    create_global_diversity_maps(output_path=output_path, tif_dir=tif_dir, bin_width=bin_width)
+    create_global_diversity_maps(save_dir=save_dir, tif_dir=tif_dir, bin_width=bin_width)
 
     
     

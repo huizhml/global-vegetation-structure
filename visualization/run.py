@@ -81,7 +81,8 @@ class CreateGlobalMosaicPdfConfig(FunctionConfig):
     product: str = 'vsm'
     mosaic_dir: str = '~/data/gvs/products/{product}/{year}/{version}/mosaic/{data_format}'
     tif_filename_pattern: str = '*.tif'
-    pdf_file: str = '~/data/gvs/results/{product}/global_mosaic_{year}_{version}.pdf'
+    pdf_file: str = '~/data/gvs/results/{product}/global_mosaic/global_mosaic_{year}_{version}.pdf'
+    show_profile: bool = False
     multi_pages: bool = False
     cmin: Optional[int] = None
     cmax: Optional[int] = None

@@ -79,8 +79,9 @@ class DiversityIndicesMapConfig(FunctionConfig):
     max_height: int = 150
     product: str = 'diversity_indices'
     product_version: str = 'masked'
-    tif_dir: str = '~/data/gvs/products/vsm/2020/{product_version}/mosaic/cog'
-    output_path: str = '~/data/gvs/products/{product}/{year}/{product_version}/mosaic/diversity_maps_bin{bin_width}_max{max_height}_test.tif'
+    product_format: str = 'cog'
+    tif_dir: str = '~/data/gvs/products/vsm/2020/{product_version}/mosaic/{product_format}'
+    save_dir: str = '~/data/gvs/products/{product}/{year}/{product_version}/mosaic/'
     _target_: str = "evaluation.diversity_maps.create_global_diversity_maps"
 cs.store(group='run', name='generate_diversity_indices_map', node=DiversityIndicesMapConfig)
 

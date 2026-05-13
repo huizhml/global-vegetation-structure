@@ -120,10 +120,10 @@ def mask_rh_profile(rh_datacube):
     NOTE: rh_datacube should be in meters, nodata should be nan!!! rh_datacube should have 4 dimensions (n, rows, cols, bands)
     """
     valid = np.isfinite(rh_datacube) & (rh_datacube >= 0) # all 101 RH metrics <0 should be invalid
-    invalid_mask = valid.sum(axis=-1, keepdims=True) == 0
+    invalid_mask = valid.sum(axis=-1) == 0
     realistic = (rh_datacube < REALISTIC_MIN) | (rh_datacube > REALISTIC_MAX)
-    realistic_mask = realistic.any(axis=-1, keepdims=True) # any value smaller than -150 or larger than 150, the whole RH profile will be masked out, 
-    nodata_mask = invalid_mask | realistic_mask # (n, rows, cols, 1) True for nodata pixels, False for valid pixels
+    realistic_mask = realistic.any(axis=-1) # any value smaller than -150 or larger than 150, the whole RH profile will be masked out, 
+    nodata_mask = invalid_mask | realistic_mask # (n, rows, cols) True for nodata pixels, False for valid pixels
     n, rows, cols, bands = rh_datacube.shape
     n_pixels = n * rows * cols
     pixel_valid = nodata_mask.reshape(n_pixels, 1) == False

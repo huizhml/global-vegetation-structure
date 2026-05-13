@@ -36,24 +36,24 @@ BAND_NAMES = {
 }
 VIS_PARAMS = {
     'fhd': {
-        'cmin': None,
-        'cmax': None,
+        'cmin': 0,
+        'cmax': 2,
         'cmap': 'viridis'
     },
     'enl1d':{
-        'cmin': None,
-        'cmax': None,
+        'cmin': 1,
+        'cmax': 7,
         'cmap': 'viridis'
     },
     'enl2d':{
-        'cmin': None,  # derive from data: 2% and 98% percentiles
-        'cmax': None,
+        'cmin': 1,  # derive from data: 2% and 98% percentiles
+        'cmax': 7,
         'cmap': 'viridis'
     },
     'cr':{
-        'cmin': 0,
+        'cmin': 0.48,
         'cmax': 1,
-        'cmap': 'viridis_r'
+        'cmap': 'RdBu' # RdGy
     },
     'qskewness':{
         'cmin': -12,
@@ -289,10 +289,9 @@ def plot_tiff_image(image: xr.DataArray, cmin: int=None, cmax: int=None, cmap: s
     return figs
 
 
-
-def plot_tiff_image_with_profile(image: xr.DataArray, cmin: int=None, cmax: int=None, cmap: str = None):
+def plot_tiff_image_with_profile(image: xr.DataArray, cmin: int=None, cmax: int=None, cmap: str = None, show_profile: bool = False):
     """
-    Plot single-band image on Equal Earth projection with a latitudinal mean±sd profile on the left.
+    Plot single-band image on Equal Earth projection with an optional latitudinal mean±sd profile on the left.
     """
     if image.ndim == 2:
         image = image.expand_dims('band')
@@ -305,23 +304,24 @@ def plot_tiff_image_with_profile(image: xr.DataArray, cmin: int=None, cmax: int=
             vis = VIS_PARAMS['rh98_q1']
             band_name = 'RH98_Q1'
 
-        cmap = cmap or vis['cmap']
-        cmin = cmin or vis['cmin']
-        cmax = cmax or vis['cmax']
+        cmap_ = cmap or vis['cmap']
+        cmin_ = cmin or vis['cmin']
+        cmax_ = cmax or vis['cmax']
 
         data = image.sel(band=band)
-        if cmin is None or cmax is None:
-            cmin = float(np.nanpercentile(data, 2))
-            cmax = float(np.nanpercentile(data, 98))
-
+        if cmin_ is None or cmax_ is None:
+            cmin_ = float(np.nanpercentile(data, 2))
+            cmax_ = float(np.nanpercentile(data, 98))
+        print(f'{band.item()} cmin: {cmin_}, cmax: {cmax_}')
         proj = ccrs.EqualEarth()
         data_crs = ccrs.PlateCarree()
 
-        # --- No constrained_layout, manual positioning ---
-        fig = plt.figure(figsize=(9 , 4))
+        fig = plt.figure(figsize=(9, 4))
 
-        # Place map first
-        ax_img = fig.add_axes([0.25, 0.05, 0.72, 0.9], projection=proj)
+        if show_profile:
+            ax_img = fig.add_axes([0.25, 0.05, 0.72, 0.9], projection=proj)
+        else:
+            ax_img = fig.add_axes([0.05, 0.05, 0.9, 0.9], projection=proj)
 
         # --- Map ---
         x = data.x.values
@@ -329,74 +329,80 @@ def plot_tiff_image_with_profile(image: xr.DataArray, cmin: int=None, cmax: int=
         extent = [x.min(), x.max(), y.min(), y.max()]
 
         ax_img.imshow(
-            data.values, cmap=cmap, vmin=cmin, vmax=cmax,
+            data.values, cmap=cmap_, vmin=cmin_, vmax=cmax_,
             origin='upper', extent=extent,
             transform=data_crs
         )
         ax_img.set_global()
         ax_img.coastlines(linewidth=0.3, color='gray')
 
-        # Force render to get correct positions
         fig.canvas.draw()
         map_pos = ax_img.get_position()
-        y_map_bot, y_map_top = ax_img.get_ylim()
 
-        # --- Profile: same y0 and height as map, plotted in projected y-space ---
-        ax_prof = fig.add_axes([
-            map_pos.x0 - 0.16,
-            map_pos.y0,
-            0.1,
-            map_pos.height
-        ])
+        if show_profile:
+            y_map_bot, y_map_top = ax_img.get_ylim()
 
-        data_np = data.values
-        row_mean = np.nanmean(data_np, axis=1)
-        row_std = np.nanstd(data_np, axis=1)
+            ax_prof = fig.add_axes([
+                map_pos.x0 - 0.16,
+                map_pos.y0,
+                0.1,
+                map_pos.height
+            ])
 
-        # Transform each latitude to Equal Earth projected y
-        y_projected = np.array([proj.transform_point(0, lat, data_crs)[1] for lat in y])
+            data_np = data.values
+            if band_name.lower() == 'cr':
+                data_np[data_np < 0] = np.nan
+            row_mean = np.nanmean(data_np, axis=1)
+            row_std = np.nanstd(data_np, axis=1)
 
-        ax_prof.fill_betweenx(y_projected, row_mean - row_std, row_mean + row_std,
-                              alpha=0.3, color='gray', label='sd')
-        ax_prof.plot(row_mean, y_projected, 'k-', linewidth=0.6, label='mean')
+            y_projected = np.array([proj.transform_point(0, lat, data_crs)[1] for lat in y])
 
-        # Match the map's projected y-range exactly
-        ax_prof.set_ylim(y_map_bot, y_map_top)
+            ax_prof.fill_betweenx(y_projected, row_mean - row_std, row_mean + row_std,
+                                  alpha=0.3, color='gray', label='sd')
+            ax_prof.plot(row_mean, y_projected, 'k-', linewidth=0.6, label='mean')
+            ax_prof.set_ylim(y_map_bot, y_map_top)
 
-        # X-axis
-        ax_prof.set_xlabel(BAND_NAMES[band_name.lower()], fontsize=10)
-        n_ticks = 2
-        xtick_vals = np.linspace(cmin, cmax, n_ticks)
-        ax_prof.set_xticks(xtick_vals)
-        ax_prof.set_xticklabels([f'{v:.0f}' for v in xtick_vals])
+            ax_prof.set_xlabel(BAND_NAMES[band_name.lower()], fontsize=10)
+            n_ticks = 2
+            xtick_vals = np.linspace(cmin_, cmax_, n_ticks)
+            ax_prof.set_xticks(xtick_vals)
+            ax_prof.set_xticklabels([f'{v:.0f}' for v in xtick_vals])
 
-        # Y-axis: label projected positions as latitude degrees
-        tick_lats = np.arange(-60, 90, 20)
-        tick_y_proj = [proj.transform_point(0, lat, data_crs)[1] for lat in tick_lats]
-        ax_prof.set_yticks(tick_y_proj)
-        ax_prof.set_yticklabels([f'{v:.0f}°' for v in tick_lats])
-        ax_prof.set_ylabel('Latitude [°]', fontsize=10)
+            tick_lats = np.arange(-60, 90, 20)
+            tick_y_proj = [proj.transform_point(0, lat, data_crs)[1] for lat in tick_lats]
+            ax_prof.set_yticks(tick_y_proj)
+            ax_prof.set_yticklabels([f'{v:.0f}°' for v in tick_lats])
+            ax_prof.set_ylabel('Latitude [°]', fontsize=10)
 
-        ax_prof.legend(loc='lower right', fontsize=7, framealpha=0.7)
+            ax_prof.legend(loc='lower right', fontsize=7, framealpha=0.7)
 
         # --- Colorbar inside map ---
-        cax = fig.add_axes([
-            map_pos.x0 - 0.02,
-            map_pos.y0 + 0.001,
-            map_pos.width * 0.015,
-            map_pos.height * 0.25
-        ])
+        if show_profile:
+            cax = fig.add_axes([
+                map_pos.x0 - 0.02,
+                map_pos.y0 + 0.001,
+                map_pos.width * 0.015,
+                map_pos.height * 0.25
+            ])
+        else:
+            cax = fig.add_axes([
+                map_pos.x0 + 0.14,
+                map_pos.y0 + 0.1,
+                map_pos.width * 0.015,
+                map_pos.height * 0.25
+            ])
         im = ax_img.get_images()[0]
         cbar = fig.colorbar(im, cax=cax, orientation='vertical')
-        cbar.set_ticks([cmin, cmax])
-        cbar.set_ticklabels([f'{cmin:.0f}', f'{cmax:.0f}'])
-        # cbar.set_label(BAND_NAMES[band_name.lower()], fontsize=10, orientation='horizontal')
+        cbar.set_ticks([cmin_, cmax_])
+        if band_name.lower() == 'cr':
+            cbar.set_ticklabels([f'{cmin_:.2f}', f'{cmax_:.2f}'])
+        else:
+            cbar.set_ticklabels([f'{cmin_:.0f}', f'{cmax_:.0f}'])
         cbar.ax.tick_params(size=0, pad=3, labelsize=9)
         cbar.outline.set_visible(False)
 
         figs[band_name] = fig
     return figs
-
 # --------- Main Functions ---------
 
 def make_s2_image_rh_pair_pdf(zarr_dir: str, tile_id: str, pdf_file: Path, year: int = 2020, resolution: int = 100,
@@ -524,7 +530,7 @@ def make_rh_pair_pdf(
             plt.close(fig)
     print(f'saved to {pdf_file}')
     
-def make_global_mosaic_pdf(mosaic_dir: str, tif_filename_pattern: str = 'global_mosaic_*RH*_Q0-Q2.cog.tif', pdf_file: Path=None, multi_pages: bool = False, cmin: float = None, cmax: float = None, cmap: str = None, **kwargs):
+def make_global_mosaic_pdf(mosaic_dir: str, tif_filename_pattern: str = 'global_mosaic_*RH*_Q0-Q2.cog.tif', pdf_file: Path=None, multi_pages: bool = False, cmin: float = None, cmax: float = None, cmap: str = None, show_profile: bool = False, **kwargs):
     '''
     Make a PDF file where each page renders a global mosaic of a TIFF image
     '''
@@ -550,7 +556,7 @@ def make_global_mosaic_pdf(mosaic_dir: str, tif_filename_pattern: str = 'global_
     else:
         for tif_file in tif_files:
             image = rio_read(tif_file)
-            figs = plot_tiff_image_with_profile(image, cmin=cmin, cmax=cmax, cmap=cmap)
+            figs = plot_tiff_image_with_profile(image, cmin=cmin, cmax=cmax, cmap=cmap, show_profile=show_profile)
             for band, fig in figs.items():
                 _pdf_file = pdf_file.parent / f'{pdf_file.stem}_{tif_file.stem}_{band}.pdf'
                 fig.savefig(_pdf_file, bbox_inches='tight', dpi=300)

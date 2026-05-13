@@ -61,7 +61,7 @@ def scatter_plot(df: pd.DataFrame, var: str, metrics: dict, biome_value: int = N
     elif biome_value == 99:
         biome_value = 16
     biome_value = int(biome_value) - 1
-    plot_title = f'{BIOMES[biome_value]['name']}' if biome_value is not None else 'All Biomes'
+    plot_title = f'{BIOMES[biome_value]["name"]}' if biome_value is not None else 'All Biomes'
     file_name = f'scatter_plot_gedi_vs_ours_{var}_{BIOMES[biome_value]["abbr"].replace(".", "")}.pdf'
     fig, ax = plt.subplots(1, 1, figsize=(7, 6))
     sns.histplot(df, x=f'{var}_gedi', y = f'{var}_ours', bins=50, cbar=False, cmap='viridis', ax=ax)
@@ -91,7 +91,7 @@ def boxplot_with_marginal_histograms(df: pd.DataFrame, var: str, rh_col: str='rh
     elif biome_value == 99:
         biome_value = 16
     biome_value = int(biome_value) - 1
-    plot_title = f'{BIOMES[biome_value]['name']}' if biome_value is not None else 'All Biomes'
+    plot_title = f'{BIOMES[biome_value]["name"]}' if biome_value is not None else 'All Biomes'
     file_name = f'boxplot_{var}_{rh_col}_{BIOMES[biome_value]["abbr"].replace(".", "")}.pdf'
     # Create 5m height bins based on rh98
     bin_edges = np.arange(0, max_height+bin_width, bin_width)
@@ -456,11 +456,11 @@ def _chunk_diversity(data, bin_width=5, max_height=MAX_HEIGHT):
     -------
     out : ndarray, shape (rows, cols), float32
     """
-    if data.size == 3:
+    if len(data.shape) == 3:
         data = data[None, ...]  # add band dimension for consistency
 
     n_batch, n_bands, n_rows, n_cols = data.shape
-    hist, nodata_mask = batch_binning(data[None, ...], bin_width=bin_width, max_height=max_height)
+    hist, nodata_mask = batch_binning(data, bin_width=bin_width, max_height=max_height)
 
     # Normalize
     total = hist.sum(axis=-1, keepdims=True)
@@ -480,8 +480,8 @@ def _chunk_diversity(data, bin_width=5, max_height=MAX_HEIGHT):
 
     # CR
     # TODO: check order of RHs? at least rh25 and rh98
-    rh25 = np.maximum(data[24, :], 0)
-    rh98 = data[97, :]
+    rh25 = np.maximum(data[:, 24, :], 0)
+    rh98 = data[:, 97, :]
     cr = np.where(rh98 > 0, (rh98 - rh25) / rh98, np.nan).astype(np.float32)
 
     fhd = fhd.reshape(n_batch, n_rows, n_cols)
