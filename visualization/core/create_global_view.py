@@ -10,7 +10,7 @@ import numpy as np
 from rio_cogeo.cogeo import cog_translate
 from rio_cogeo.profiles import cog_profiles
 import pystac
-from const import NO_DATA, ESA_DATETIME, ESA_UNKNOWN_RAW, ESA_SNOW_RAW, ESA_WATER_RAW
+from const import VSM_NODATA, ESA_DATETIME, ESA_UNKNOWN_RAW, ESA_SNOW_RAW, ESA_WATER_RAW
 from dask.diagnostics import ProgressBar
 try:
     import resource  # Posix: bump soft limit for open files if possible
@@ -119,7 +119,7 @@ class GlobalMosaicker:
                  target_res: float = 0.01,
                  target_crs: int = 4326,
                  resample_alg: str = "average",
-                 dst_nodata: int = NO_DATA,
+                 dst_nodata: int = VSM_NODATA,
                  compression: str = "ZSTD",
                  **kwargs):
         """
@@ -326,10 +326,10 @@ class GlobalMosaicker:
         arr2 = ds2.GetRasterBand(1).ReadAsArray()
 
         # 3. Calculate Difference with NoData handling
-        mask = (arr1 == NO_DATA) | (arr2 == NO_DATA)
+        mask = (arr1 == VSM_NODATA) | (arr2 == VSM_NODATA)
         # Use float32 to prevent overflow/underflow
         diff_arr = arr1.astype(np.float32) - arr2.astype(np.float32)
-        diff_arr[mask] = NO_DATA
+        diff_arr[mask] = VSM_NODATA
         diff_arr = diff_arr.astype(np.int16)
 
         # 4. Create the output TIF
@@ -358,13 +358,13 @@ class GlobalMosaicker:
 
         # Mask: any input is nodata, or denominator is zero
         mask = (
-            (arr_left == NO_DATA) |
-            (arr_right == NO_DATA) |
-            (arr_mid == NO_DATA) |
+            (arr_left == VSM_NODATA) |
+            (arr_right == VSM_NODATA) |
+            (arr_mid == VSM_NODATA) |
             (arr_mid <= 0)
         )
 
-        rel_diff = np.where(mask, NO_DATA,
+        rel_diff = np.where(mask, VSM_NODATA,
                             ((arr_left - arr_right) / arr_mid) * 1000)
         rel_diff = rel_diff.astype(np.int16)
 

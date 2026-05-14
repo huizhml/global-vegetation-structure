@@ -7,12 +7,10 @@ import numpy as np
 import pandas as pd
 import time
 from evaluation.on_diversity_indices import pixel_diversity_indices, _chunk_diversity
+from const import MAX_HEIGHT_METERS, VSM_NODATA
 # --- Constants ---
-MAX_HEIGHT = 150.0
 BIN_WIDTH = 5
-NODATA_IN = 32767
-NODATA_OUT = np.nan
-N_BINS = int(MAX_HEIGHT / BIN_WIDTH)
+N_BINS = int(MAX_HEIGHT_METERS / BIN_WIDTH)
 
 np.random.seed(42)
 
@@ -21,7 +19,7 @@ np.random.seed(42)
 # Baseline: per-pixel loop (reference): pixel_diversity_indices
 # =============================================================================
 
-def pixel_diversity_indices(rhs, bin_width=5, max_height=MAX_HEIGHT):
+def pixel_diversity_indices(rhs, bin_width=5, max_height=MAX_HEIGHT_METERS):
     """
     Compute per-pixel FHD using a simple histogram approach. NOTE!!!: rhs should be in meters!!!
     """
@@ -51,14 +49,14 @@ def pixel_diversity_indices(rhs, bin_width=5, max_height=MAX_HEIGHT):
     
     return fhd, enl1d, enl2d, cr
 
-def baseline_loop(data, bin_width=BIN_WIDTH, max_height=MAX_HEIGHT):
+def baseline_loop(data, bin_width=BIN_WIDTH, max_height=MAX_HEIGHT_METERS):
     """
     Loop over all pixels, call baseline function.
     data: shape (n_pixels, 101), in meters, already cleaned of nodata.
     Returns: fhd, enl1d, enl2d, cr arrays each of shape (n_pixels,)
     """
     n_bands, n_rows, n_cols = data.shape
-    valid = np.isfinite(data) & (data != NODATA_IN) & (data > 0)
+    valid = np.isfinite(data) & (data != VSM_NODATA) & (data > 0)
     nodata_mask = valid.sum(axis=0) == 0
     fhd = np.full((n_rows, n_cols), np.nan, dtype=np.float32)
     enl1d = np.full((n_rows, n_cols), np.nan, dtype=np.float32)
@@ -79,12 +77,12 @@ def baseline_loop(data, bin_width=BIN_WIDTH, max_height=MAX_HEIGHT):
 # =============================================================================
 # Vectorized approach 1: np.add.at
 # =============================================================================
-def vectorized_add_at(data, bin_width=BIN_WIDTH, max_height=MAX_HEIGHT):
+def vectorized_add_at(data, bin_width=BIN_WIDTH, max_height=MAX_HEIGHT_METERS):
     n_bands, n_rows, n_cols = data.shape
     n_pixels = n_rows * n_cols
     n_bins = int(max_height / bin_width)
 
-    valid = np.isfinite(data) & (data != NODATA_IN) & (data > 0)
+    valid = np.isfinite(data) & (data != VSM_NODATA) & (data > 0)
     nodata_mask = valid.sum(axis=0) == 0  # (rows, cols)
 
     data_clean = np.where(valid, np.minimum(data, max_height), 0.0)
@@ -133,7 +131,7 @@ def vectorized_add_at(data, bin_width=BIN_WIDTH, max_height=MAX_HEIGHT):
 # =============================================================================
 # Vectorized approach 2: np.searchsorted, _chunk_diversity
 # =============================================================================
-def _chunk_diversity(data, bin_width=5, max_height=MAX_HEIGHT):
+def _chunk_diversity(data, bin_width=5, max_height=MAX_HEIGHT_METERS):
     """
     Vectorized Shannon entropy for a single spatial chunk.
 
@@ -147,7 +145,7 @@ def _chunk_diversity(data, bin_width=5, max_height=MAX_HEIGHT):
     """
     n_bands, n_rows, n_cols = data.shape
     n_pixels = n_rows * n_cols
-    valid = np.isfinite(data) & (data != NODATA_IN) & (data > 0)
+    valid = np.isfinite(data) & (data != VSM_NODATA) & (data > 0)
     nodata_mask = valid.sum(axis=0) == 0
 
     # Remove: data = data / 10  (data is already in meters)
@@ -233,7 +231,7 @@ for i in range(n_pixels):
 
 # Inject some nodata pixels
 data[0, :] = np.nan
-data[1, :] = NODATA_IN
+data[1, :] = VSM_NODATA
 data[2, :] = -1.0  # all negative
 print(data.shape)
 data = data.reshape(patch_size, patch_size, 101)

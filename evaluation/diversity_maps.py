@@ -14,8 +14,7 @@ from rio_cogeo.cogeo import cog_translate
 from rio_cogeo.profiles import cog_profiles
 from concurrent.futures import ProcessPoolExecutor, FIRST_COMPLETED, wait
 from evaluation.on_diversity_indices import _chunk_diversity
-
-NODATA_OUT = -9999.0
+from const import INDICES_NODATA
 
 class ProgressMonitor:
     """Background thread that prints speed and RAM stats."""
@@ -175,7 +174,7 @@ def create_global_diversity_maps(save_dir: Path=None, tif_dir: str=None,
         "count": 4,
         "crs": crs,
         "transform": transform,
-        "nodata": NODATA_OUT,
+        "nodata": INDICES_NODATA,
         "compress": None,
         "tiled": True,
         "blockxsize": 512,

@@ -8,7 +8,7 @@ import logging
 import numpy as np
 import wandb
 from .utils import check_if_log
-from const import ESA_WC_s
+from const import ESA_WC_SHORT
 
 
 logger = logging.getLogger(__name__)
@@ -32,7 +32,7 @@ class ClassificationLogger(Callback):
             e.g, output_name='tree', then the batch output has key: pred_tree and y_tree
         """
         super().__init__()
-        self.class_names = list(ESA_WC_s.values())
+        self.class_names = list(ESA_WC_SHORT.values())
         self.log_val_every = log_val_every
 
         if log_val_every:

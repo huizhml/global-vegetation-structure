@@ -32,24 +32,20 @@ from sklearn.metrics import r2_score
 import seaborn as sns
 from matplotlib.colors import LogNorm
 import colorsys
-from const import BIOMES
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import matplotlib.gridspec as gridspec
 import matplotlib.patches as mpatches
 from scipy.stats import gaussian_kde, pearsonr
+from const import (
+    BIOMES,
+    MAX_HEIGHT_METERS,
+    VSM_NODATA,
+    INDICES_NODATA,
+    GEDI_META_COLS,
+    KEY_RHS_EVAL,
+)
 
-MAX_HEIGHT = 150.0 # NOTE: GEDI L2B FHD was derived from [0, 150] m height range, with 5 m step size
-NODATA_IN = 32767
-NODATA_OUT = -9999.0
-GEDI_META_COLS =['digital_elevation_model', 'digital_elevation_model_srtm', 'pft_class', 'sensitivity', 'beam',
-                 'elevation_bias_flag', 'energy_total', 'landsat_treecover', 'landsat_water_persistence', 
-                 'leaf_off_doy', 'leaf_off_flag', 'leaf_on_doy', 'leaf_on_cycle', 'modis_nonvegetated', 
-                 'modis_nonvegetated_sd', 'modis_treecover', 'modis_treecover_sd', 'num_detectedmodes',
-                 'solar_azimuth', 'solar_elevation', 'surface_flag', 'urban_focal_window_size', 'urban_proportion', 'slope', 'lc', 
-                 'geometry',
-                 'BIOME', 'ECO_NAME']
-key_rhs = [25, 50, 75, 95, 98]
-RH_COLS = [f'rh{rh}' for rh in key_rhs] + [f'RH{rh}_Q1_raw' for rh in key_rhs]
+RH_COLS = [f'rh{rh}' for rh in KEY_RHS_EVAL] + [f'RH{rh}_Q1_raw' for rh in KEY_RHS_EVAL]
 stac_collection_dir = '~/data/gvs/products/gvsm_stac_catalog/vsm_local'
 
 # ------------------------------------------------------------------------------------------------
@@ -342,8 +338,13 @@ def boxplot_with_marginal_histograms_combined(
 
 def plot_residuals_rh98_bined(df: pd.DataFrame, save_dir: Path = None, max_height: int = 50, rh98_interval: int = 5, **kwargs):
     df['rh98_bins'] = pd.cut(df['rh98'], bins=np.arange(0, max_height + rh98_interval, rh98_interval), right=False)
-
-    for var, name in [('fhd', 'FHD'), ('enl1d', 'ENL 1D'), ('enl2d', 'ENL 2D'), ('cr', 'CR')]:
+    for rh_idx in [25, 98]:
+        df[f'rh{rh_idx}_diff'] = df[f'RH{rh_idx}_Q1_raw'] - df[f'rh{rh_idx}']
+    groups = [
+        ('fhd', 'FHD'), ('enl1d', 'ENL 1D'), ('enl2d', 'ENL 2D'), ('cr', 'CR'),
+        ('rh25', 'RH25'), ('rh98': 'RH98')
+    ]
+    for var, name in groups:
         grouped = df.groupby('rh98_bins', observed=True)[f'{var}_diff']
         labels = [str(k) for k in grouped.groups.keys()]
         data = [g.dropna().values for _, g in grouped]
@@ -353,7 +354,7 @@ def plot_residuals_rh98_bined(df: pd.DataFrame, save_dir: Path = None, max_heigh
 
         # --- background count bars on secondary axis ---
         ax_bar = ax.twinx()
-        ax_bar.bar(range(1, len(counts) + 1), counts, color='lightgrey', alpha=0.3, width=0.6, zorder=1)
+        ax_bar.bar(range(1, len(counts) + 1), counts, color='lightgrey', alpha=0.4, width=0.6, zorder=1)
         ax_bar.set_ylabel('Count', color='grey')
         ax_bar.tick_params(axis='y', labelcolor='grey')
         ax_bar.set_ylim(0, max(counts) * 3)  # push bars down to ~1/3 of plot height
@@ -386,7 +387,7 @@ def plot_residuals_rh98_bined(df: pd.DataFrame, save_dir: Path = None, max_heigh
 # ------------------------------------------------------------------------------------------------
 # Diversity indices
 # ------------------------------------------------------------------------------------------------
-def pixel_diversity_indices(rhs, bin_width=5, max_height=MAX_HEIGHT):
+def pixel_diversity_indices(rhs, bin_width=5, max_height=MAX_HEIGHT_METERS):
     """
     Compute per-pixel FHD using a simple histogram approach. NOTE!!!: rhs should be in meters!!!
     """
@@ -444,7 +445,7 @@ def pixel_vertical_profile(rhs, min_rh=-20, max_rh=50, step=0.1, window=3):
         smoothed_grad = savgol_filter(grad_resampled, safe_window, 1)
     return x, smoothed_grad.astype(np.float32)
 
-def _chunk_diversity(data, bin_width=5, max_height=MAX_HEIGHT):
+def _chunk_diversity(data, bin_width=5, max_height=MAX_HEIGHT_METERS):
     """
     Vectorized Shannon entropy for a single spatial chunk. data is in decimeters.
 
@@ -510,7 +511,7 @@ def _process_tile(args):
 
 
 def compute_entropy(output_dir, tile_id, year, vrt_path=None,
-                         chunk_size=512, max_workers=8, bin_width=5, max_height=MAX_HEIGHT, **kwargs):
+                         chunk_size=512, max_workers=8, bin_width=5, max_height=MAX_HEIGHT_METERS, **kwargs):
     """
     Compute per-pixel FHD entropy — fast version.
 
@@ -569,7 +570,7 @@ def compute_entropy(output_dir, tile_id, year, vrt_path=None,
         "count": 4,
         "crs": crs,
         "transform": transform,
-        "nodata": NODATA_OUT,
+        "nodata": INDICES_NODATA,
         "compress": None,
         "tiled": True,
         "blockxsize": 512,
@@ -739,7 +740,7 @@ def vertical_profile_biome_analysis_ours(points_file, save_dir, s2_grid_file=Non
         vrt_path = str(Path(vrt_path).expanduser())
         #TODO: ...
 
-def cal_diversity_indices(save_dir, gedi_ours_dir, bin_width=5, max_height=MAX_HEIGHT, year=2020, **kwargs):
+def cal_diversity_indices(save_dir, gedi_ours_dir, bin_width=5, max_height=MAX_HEIGHT_METERS, year=2020, **kwargs):
     '''Evaluate the diversity indices against the GEDI reference points on the test set'''
     save_dir = Path(save_dir).expanduser()
     save_dir.mkdir(parents=True, exist_ok=True)

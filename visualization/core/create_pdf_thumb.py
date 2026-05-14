@@ -22,7 +22,7 @@ import cartopy.crs as ccrs
 from cartopy.mpl.ticker import LongitudeFormatter, LatitudeFormatter
 
 from postprocessing.core.s2_tiling import find_intersecting_s2_tiles
-from const import rh_vis_params
+from const import VSM_VIS_PARAMS
 
 os.environ['HYDRA_FULL_ERROR'] = '1'
 BAND_NAMES = {
@@ -34,44 +34,6 @@ BAND_NAMES = {
     'q2': 'Q2',
     'rh98_q1': 'RH98 [m]',
 }
-VIS_PARAMS = {
-    'fhd': {
-        'cmin': 0,
-        'cmax': 2,
-        'cmap': 'viridis'
-    },
-    'enl1d':{
-        'cmin': 1,
-        'cmax': 7,
-        'cmap': 'viridis'
-    },
-    'enl2d':{
-        'cmin': 1,  # derive from data: 2% and 98% percentiles
-        'cmax': 7,
-        'cmap': 'viridis'
-    },
-    'cr':{
-        'cmin': 0.48,
-        'cmax': 1,
-        'cmap': 'RdBu' # RdGy
-    },
-    'qskewness':{
-        'cmin': -12,
-        'cmax': 12,
-        'cmap': 'RdBu_r'
-    },
-    'q2':{
-        'cmin': 0,
-        'cmax': 50,
-        'cmap': 'viridis_r'
-    },
-    'rh98_q1':{
-        'cmin': 0,
-        'cmax': 50,
-        'cmap': 'inferno'
-    }
-}
-
 # --------- I/O Functions ---------
 def rio_read(tif_file: Path, overview_level: int = 0):
     '''
@@ -135,7 +97,8 @@ def get_vis_params(tif_file: Path):
         return 0, 500, 'blues'
     else:
         rh_idx = re.search(r'RH(\d+)', tif_file.stem).group(1)
-        return rh_vis_params[f'RH{rh_idx}']['cmin'], rh_vis_params[f'RH{rh_idx}']['cmax'], 'inferno'
+        vis = VSM_VIS_PARAMS[f'rh{rh_idx}_q1']
+        return vis['cmin'], vis['cmax'], 'inferno'
 
 # --------- Plotting Functions ---------
 def plot_xr_rgb(image: xr.DataArray, *, title: str = None):
@@ -251,10 +214,10 @@ def plot_tiff_image(image: xr.DataArray, cmin: int=None, cmax: int=None, cmap: s
     for band in image.band: # NOTE: single band tiff has no band name
         
         band_name = band.item()
-        if band_name in VIS_PARAMS:
-            vis = VIS_PARAMS[band_name] # TODO: Define vis params for other RH metrics, currently only RH98_Q1 (default), and diversity indices
+        if band_name in VSM_VIS_PARAMS:
+            vis = VSM_VIS_PARAMS[band_name] # TODO: Define vis params for other RH metrics, currently only RH98_Q1 (default), and diversity indices
         else:
-            vis = VIS_PARAMS['rh98_q1']
+            vis = VSM_VIS_PARAMS['rh98_q1']
             band_name = 'RH98_Q1'
             
         cmap = cmap or vis['cmap']
@@ -279,10 +242,7 @@ def plot_tiff_image(image: xr.DataArray, cmin: int=None, cmax: int=None, cmap: s
         cax = fig.add_axes([0.06, 0.3, 0.02, 0.15])
         cbar = fig.colorbar(im, cax=cax, orientation='vertical')
         cbar.set_ticks([cmin, cmax])
-        if 'rh' in band_name.lower():
-            cbar.set_ticklabels([f'{cmin / 10:.0f}', f'{cmax / 10:.0f}'])
-        else:
-            cbar.set_ticklabels([f'{cmin:.0f}', f'{cmax:.0f}'])
+        cbar.set_ticklabels([f'{cmin:.0f}', f'{cmax:.0f}'])
         cbar.ax.tick_params(size=0, pad=2)
         cbar.outline.set_visible(False)
         figs[band_name] = fig
@@ -298,10 +258,10 @@ def plot_tiff_image_with_profile(image: xr.DataArray, cmin: int=None, cmax: int=
     figs = {}
     for band in image.band:
         band_name = band.item()
-        if band_name in VIS_PARAMS:
-            vis = VIS_PARAMS[band_name]
+        if band_name in VSM_VIS_PARAMS:
+            vis = VSM_VIS_PARAMS[band_name]
         else:
-            vis = VIS_PARAMS['rh98_q1']
+            vis = VSM_VIS_PARAMS['rh98_q1']
             band_name = 'RH98_Q1'
 
         cmap_ = cmap or vis['cmap']

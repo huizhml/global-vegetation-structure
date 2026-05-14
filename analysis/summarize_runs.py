@@ -5,7 +5,7 @@ from matplotlib.patches import Patch
 import pandas as pd
 from pathlib import Path
 import numpy as np
-from const import BIOMES_s
+from const import BIOMES_BY_VALUE
 # Choose a colormap (e.g., 'viridis')
 api = wandb.Api()
 
@@ -135,7 +135,7 @@ def analyse_prediction(run_ids, corrected=False, ref_path:str=None, box_width = 
                 
             else:
                 xticks = [(i* group_offset_a) + (len(run_ids)-1)/2  for i in range(len(table.columns))]
-                labels = [ BIOMES_s[col] for col in table.columns]
+                labels = [BIOMES_BY_VALUE[col]['abbr'] for col in table.columns]
                 ax.set_xticks(xticks)
                 ax.set_xticklabels(labels, rotation=45, ha='right')
                 plt.tight_layout()

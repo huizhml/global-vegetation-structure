@@ -1,120 +1,103 @@
-NO_DATA = 32767
-# From train*_filtered_v1
-LAT_MEAN = 12.7596
-LAT_STD = 25.6075
-LON_SIN_MEAN = 0.1098
-LON_SIN_STD = 0.7536
-LON_COS_MEAN = 0.3072
-LON_COS_STD = 0.5706
-SLOPE_MEAN = 6.5781
-SLOPE_STD = 8.9007
+"""
+Project-wide constants, loaded from ``const/hyperparams.yaml``.
 
-SCL_EXCLUDE_LABELS = [0, 1, 3, 8, 9, 10, 11, 65535]
-SCL_WATER = 6
-# predicted land cover labels
-ESA_SNOW = 7 # = 70 in ESA World Cover
-ESA_BUILT_UP = 5 # = 50 in ESA World Cover
-ESA_WATER = 8 # = 80 in ESA World Cover
+To add or change a constant, edit the YAML — no code change needed here unless
+you want to expose a derived value or an alias.
+"""
+from pathlib import Path
+import yaml
 
-# ESA World cover original labels
-ESA_SNOW_RAW = 70
-ESA_BUILT_UP_RAW = 50
-ESA_WATER_RAW = 80
-ESA_UNKNOWN_RAW = 0
+_HP_PATH = Path(__file__).with_name("hyperparams.yaml")
+with _HP_PATH.open() as _f:
+    _HP = yaml.safe_load(_f)
 
-ESA_DATETIME = '2021-01-01/2021-12-31'
-ESA_WC = {
-    'unknown': 0,
-    'Tree cover': 10,
-    'Shrubland': 20,
-    'Grassland': 30,
-    'Cropland': 40,
-    'Built-up': 50,
-    'Bare / sparse vegetation': 60,
-    'Snow and ice': 70,
-    'Permanent water bodies': 80,
-    'Herbaceous wetland': 90,
-    'Mangroves': 95,
-    'Moss and lichen': 100,
-}
 
-ESA_WC_s = {
-    0:'unknown',
-    1: 'Tree',
-    2: 'Shrub',
-    3: 'Grass',
-    4: 'Crop',
-    5: 'Built',
-    6: 'Bare',
-    7: 'Snow',
-    8: 'Water',
-    9: 'Herb',
-    10: 'Moss', 
-    11: 'Mangroves'
-}
+# ---------------------------------------------------------------------------
+# Nodata sentinels
+# ---------------------------------------------------------------------------
+VSM_NODATA     = int(_HP["vsm_nodata"])         # int16 nodata for VSM rasters / inputs
+INDICES_NODATA = float(_HP["indices_nodata"])   # nodata for diversity-index outputs
 
-BIOMES = [
-    # Don't change the order, index is the corresponding BIOME number
-    {'value': 1, 'abbr': 'Tro.Sub.Moi.Br.F', 'name': 'Tropical & Subtropical Moist Broadleaf Forests', }, # 1
-    {'value': 2, 'abbr': 'Tro.Sub.Dry.Br.F', 'name': 'Tropical & Subtropical Dry Broadleaf Forests'},   # 2
-    {'value': 3, 'abbr': 'Tro.Sub.Con.F', 'name': 'Tropical & Subtropical Coniferous Forests'},     # 3
-    {'value': 4, 'abbr': 'Tem.Br.Mix.F', 'name': 'Temperate Broadleaf & Mixed Forests'},          # 4
-    {'value': 5, 'abbr': 'Tem.Con.F', 'name': 'Temperate Conifer Forests'},                     # 5
-    {'value': 6, 'abbr': 'Bor.F.Tai', 'name': 'Boreal Forests/Taiga'},                          # 6
-    {'value': 7, 'abbr': 'Tro.Sub.Gr.Sav.Shr', 'name': 'Tropical & Subtropical Grasslands, Savannas & Shrublands'}, # 7
-    {'value': 8, 'abbr': 'Tem.Gr.Sav.Shr', 'name': 'Temperate Grasslands, Savannas & Shrublands'},          # 8
-    {'value': 9, 'abbr': 'Flo.Gr.Sav', 'name': 'Flooded Grasslands & Savannas'},                        # 9
-    {'value': 10, 'abbr': 'Mon.Gr.Sh', 'name': 'Montane Grasslands & Shrublands'},                    # 10
-    {'value': 11, 'abbr': 'Tun', 'name': 'Tundra'},                                            # 11
-    {'value': 12, 'abbr': 'Med.F.Woo.Scr', 'name': 'Mediterranean Forests, Woodlands & Scrub'},          # 12
-    {'value': 13, 'abbr': 'Des.Xer.Shr', 'name': 'Deserts & Xeric Shrublands'},                          # 13
-    {'value': 14, 'abbr': 'Man', 'name': 'Mangroves'},                                    # 14
-    {'value': 98, 'abbr': 'biome_98', 'name': 'Biome 98'},                                    # 98
-    {'value': 99, 'abbr': 'biome_99', 'name': 'Biome 99'}                                    # 99
-]
+# ---------------------------------------------------------------------------
+# Vertical-profile / height constants
+# ---------------------------------------------------------------------------
+MAX_HEIGHT_METERS = float(_HP["max_height_meters"])
+RH100_INDEX       = int(_HP["rh100_index"])
+RH98_INDEX        = int(_HP["rh98_index"])
 
-BIOMES_s = {
-    1: 'Tropical Moist Broadleaf',
-    2: 'Tropical Dry Broadleaf',
-    3: 'Tropical Coniferous',
-    4: 'Temperate Broadleaf',
-    5: 'Temperate Conifer',
-    6: 'Boreal',
-    7: 'Tropical Grasslands',
-    8: 'Temperate Grasslands',
-    9: 'Flooded Grasslands',
-    10: 'Montane Grasslands',
-    11: 'Tundra',
-    12: 'Mediterranean Forests',
-    13: 'Deserts',
-    14: 'Mangroves'
-}
+# ---------------------------------------------------------------------------
+# Normalisation stats
+# ---------------------------------------------------------------------------
+LAT_MEAN     = float(_HP["lat_mean"])
+LAT_STD      = float(_HP["lat_std"])
+LON_SIN_MEAN = float(_HP["lon_sin_mean"])
+LON_SIN_STD  = float(_HP["lon_sin_std"])
+LON_COS_MEAN = float(_HP["lon_cos_mean"])
+LON_COS_STD  = float(_HP["lon_cos_std"])
+SLOPE_MEAN   = float(_HP["slope_mean"])
+SLOPE_STD    = float(_HP["slope_std"])
 
-MASKED_VALUE = 32767
-RH100_INDEX = 301
-RH98_INDEX = 295
-KEY_RHS = (0, 10, 25, 50, 75, 95, 98, 100)
-CHM_COLS=['rh98', 'rh95', 'rh100', 'lc', 'slope', 'lat', 'lon', 'shot_number', 'RH95_UMD', 'RH98_ETH', 'RH100_UM', 'RH95_META', 'RH95_Q1_raw', 'RH98_Q1_raw', 'RH100_Q1_raw']
-LUMI_PROJECT=465002698
+# ---------------------------------------------------------------------------
+# Sentinel-2 SCL
+# ---------------------------------------------------------------------------
+SCL_EXCLUDE_LABELS = list(_HP["scl_exclude_labels"])
+SCL_WATER          = int(_HP["scl_water"])
 
-coverage_beams = ['BEAM0000', 'BEAM0001', 'BEAM0010', 'BEAM0011']
-power_beams = ['BEAM0101', 'BEAM0110', 'BEAM1000', 'BEAM1011']
-palette = ['#150b37', '#3b0964', '#61136e', '#85216b', '#a92e5e', '#cc4248', '#e75e2e', '#f78410', '#fcae12', '#f5db4c'] # 0: '#010005',  '#fcffa4'
-rh_vis_params = {
-    'RH25': {
-        'cmin': 0,
-        'cmax': 120,
-    },
-    'RH50': {
-        'cmin': 0,
-        'cmax': 200,
-    },
-    'RH75': {
-        'cmin': 0,
-        'cmax': 300,
-    },
-    'RH98': {
-        'cmin': 0,
-        'cmax': 500,
-    }
-}
+# ---------------------------------------------------------------------------
+# ESA World Cover — derived from the unified table in hyperparams.yaml.
+# Every name below is a view into the same source rows.
+# ---------------------------------------------------------------------------
+_ESA_TABLE      = [dict(e) for e in _HP["esa_wc"]]
+_ESA_BY_SHORT   = {e["short"]: e for e in _ESA_TABLE}
+
+ESA_WC_TABLE    = _ESA_TABLE                                # list[dict]: idx, raw, full, short
+ESA_WC_BY_IDX   = {e["idx"]: e for e in _ESA_TABLE}         # lookup by predicted-label idx
+ESA_WC          = {e["full"]: e["raw"] for e in _ESA_TABLE} # full-name → raw (raw-ascending)
+ESA_WC_SHORT    = {e["idx"]: e["short"]                     # idx → short name (idx-ordered)
+                   for e in sorted(_ESA_TABLE, key=lambda r: r["idx"])}
+
+# Convenience scalars used as mask values across datasets/* and postprocessing/*
+ESA_SNOW         = _ESA_BY_SHORT["Snow"]["idx"]
+ESA_BUILT_UP     = _ESA_BY_SHORT["Built"]["idx"]
+ESA_WATER        = _ESA_BY_SHORT["Water"]["idx"]
+
+ESA_SNOW_RAW     = _ESA_BY_SHORT["Snow"]["raw"]
+ESA_BUILT_UP_RAW = _ESA_BY_SHORT["Built"]["raw"]
+ESA_WATER_RAW    = _ESA_BY_SHORT["Water"]["raw"]
+ESA_UNKNOWN_RAW  = _ESA_BY_SHORT["unknown"]["raw"]
+
+ESA_DATETIME = str(_HP["esa_datetime"])
+
+del _ESA_TABLE, _ESA_BY_SHORT
+
+# ---------------------------------------------------------------------------
+# Biomes
+# ---------------------------------------------------------------------------
+BIOMES          = [dict(b) for b in _HP["biomes"]]
+BIOMES_BY_VALUE = {int(b["value"]): b for b in BIOMES}  # lookup biome dict by its 'value' int
+
+# ---------------------------------------------------------------------------
+# GEDI processing
+# ---------------------------------------------------------------------------
+KEY_RHS        = tuple(_HP["key_rhs"])           # full set (postprocessing)
+KEY_RHS_EVAL   = list(_HP["key_rhs_eval"])       # subset for diversity-index eval
+CHM_COLS       = list(_HP["chm_cols"])
+GEDI_META_COLS = list(_HP["gedi_meta_cols"])
+COVERAGE_BEAMS = list(_HP["coverage_beams"])
+POWER_BEAMS    = list(_HP["power_beams"])
+
+# ---------------------------------------------------------------------------
+# External project IDs
+# ---------------------------------------------------------------------------
+LUMI_PROJECT = int(_HP["lumi_project"])
+
+# ---------------------------------------------------------------------------
+# Plotting / visualisation
+# ---------------------------------------------------------------------------
+PALETTE        = list(_HP["palette"])
+# Per-band cmin/cmax/cmap for VSM thumbnails (diversity indices + rh*_q1).
+# rh*_q1 cmin/cmax are in METERS — see hyperparams.yaml note on dm conversion.
+VSM_VIS_PARAMS = {k: dict(v) for k, v in _HP["vsm_vis_params"].items()}
+
+
+del _HP, _HP_PATH, _f, Path, yaml

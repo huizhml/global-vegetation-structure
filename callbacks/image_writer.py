@@ -11,9 +11,8 @@ import xarray as xr
 import rioxarray
 import rasterio
 
-from const import ESA_WC_s, NO_DATA
+from const import ESA_WC_SHORT, VSM_NODATA
 
-MASKED_VALUE = NO_DATA
 RH100_idx = 301
 RH98_idx = 295
 
@@ -28,7 +27,7 @@ class ImageWriter(Callback):
         self.mask_with_scl = mask_with_scl
         self.rh_idx = slice(0, 303) if predict_full_profile else (RH100_idx, RH98_idx)
         self.prediction_cache = {}
-        self.nodata_value = NO_DATA
+        self.nodata_value = VSM_NODATA
         self.scl_exclude_labels = np.array([0, 3, 8, 9, 11, 6, self.nodata_value], dtype=np.uint16)
         self.scl_exclude_labels_tensor = None
 
@@ -79,7 +78,7 @@ class ImageWriter(Callback):
             # aggregate predictions with median
             prediction_no_border, _ = torch.nanmedian(prediction_no_border, dim=0)          
             prediction_no_border.mul_(100).round_()  # In-place operations
-            prediction_no_border = torch.nan_to_num(prediction_no_border, nan=MASKED_VALUE).to(torch.int16)
+            prediction_no_border = torch.nan_to_num(prediction_no_border, nan=VSM_NODATA).to(torch.int16)
             
             # Move to CPU once and do all numpy operations together
             prediction_no_border = prediction_no_border.cpu().numpy()
@@ -95,7 +94,7 @@ class ImageWriter(Callback):
         self.patch_size_no_border = trainer.datamodule.pred_dataset.patch_size_no_border
         self.patch_coords_dict = trainer.datamodule.pred_dataset.patch_coords_dict
         print(f'img_height: {self.img_height}, img_width: {self.img_width}, border: {self.border}, patch_size_no_border: {self.patch_size_no_border}')
-        self.full_pred = np.full((303, self.img_height, self.img_width), MASKED_VALUE, dtype=np.int16)
+        self.full_pred = np.full((303, self.img_height, self.img_width), VSM_NODATA, dtype=np.int16)
         
 
 

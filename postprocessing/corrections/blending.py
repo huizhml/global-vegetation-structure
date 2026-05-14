@@ -16,7 +16,7 @@ import dask.array as da
 from rasterio.crs import CRS
 import dask
 import time
-from const import NO_DATA
+from const import VSM_NODATA
 
 @lru_cache(maxsize=16)
 def create_distance_arr(shape: tuple):
@@ -237,7 +237,7 @@ class Blending:
                 resolution=10, rescale=False, dtype='float32', fill_value=np.float32(np.nan))
 
         blended = (intersect_images * weights_normalized.data).sum(dim='time', min_count=1) #!!!!! skipna=True is the default, and it'll return 0 if all are nan, we need min_count=1 to be able to mask water, built-up, snow
-        blended = blended.round().fillna(NO_DATA).astype(np.int16)
+        blended = blended.round().fillna(VSM_NODATA).astype(np.int16)
         return dist_images, intersect_images, blended
         
     
@@ -267,7 +267,7 @@ class Blending:
         
         blended = blended.compute()
         blended = blended.astype(np.float32)
-        blended = np.where(blended==NO_DATA, np.nan, blended)
+        blended = np.where(blended==VSM_NODATA, np.nan, blended)
         dist_images = dist_images.compute()
         intersect_images = intersect_images.compute()
         current_tile_idx = np.argmax(intersect_images.id.data == current_tile.id)

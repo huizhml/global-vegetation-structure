@@ -20,13 +20,13 @@ from rasterio.transform import rowcol
 import rasterio
 from concurrent.futures import ThreadPoolExecutor
 
+from const import MAX_HEIGHT_METERS, VSM_NODATA
+
 STAC_URL = "https://planetarycomputer.microsoft.com/api/stac/v1"
 
 NON_VEGETATION_CLASSES = {50, 60, 70, 80}
 REALISTIC_MAX=150 #m
 REALISTIC_MIN=-150
-MAX_HEIGHT = 150.0
-NODATA_IN = 32767
 
 class ProgressMonitor:
     """Background thread that prints speed and RAM stats."""
@@ -105,7 +105,7 @@ def prepare_rh_profile(rh_datacube):
     dtype = rh_datacube.dtype
     # reshape
     rh_datacube = rh_datacube.transpose(0, 2, 3, 1).astype(np.float32)
-    rh_datacube[rh_datacube == NODATA_IN] = np.nan
+    rh_datacube[rh_datacube == VSM_NODATA] = np.nan
     if dtype == np.int16: # rh_datacube is in decimeters, convert to meters
         rh_datacube = rh_datacube/10
     return rh_datacube, n_batch, n_bands, n_rows, n_cols
@@ -132,7 +132,7 @@ def mask_rh_profile(rh_datacube):
     band_valid_flat = valid.reshape(n_pixels, bands) & pixel_valid     # per-band AND per-pixel
     return tile_clean, nodata_mask, band_valid_flat, n_pixels
 
-def batch_binning(tile, bin_width=5, max_height=MAX_HEIGHT):
+def batch_binning(tile, bin_width=5, max_height=MAX_HEIGHT_METERS):
     """
     Vectorized binning for a batch of spatial chunks using searchsorted.
     """
@@ -163,7 +163,7 @@ def batch_binning(tile, bin_width=5, max_height=MAX_HEIGHT):
     return hist, nodata_mask
 
 
-def batch_binning_add_at(tile, bin_width=5, max_height=MAX_HEIGHT):
+def batch_binning_add_at(tile, bin_width=5, max_height=MAX_HEIGHT_METERS):
     """
     Vectorized binning for a batch of spatial chunks.
     """
@@ -181,7 +181,7 @@ def batch_binning_add_at(tile, bin_width=5, max_height=MAX_HEIGHT):
     hist = hist.reshape(n_batch, n_rows, n_cols, n_bins)
     return hist, nodata_mask
 
-def loop_binning(tile, bin_width=5, max_height=MAX_HEIGHT):
+def loop_binning(tile, bin_width=5, max_height=MAX_HEIGHT_METERS):
     """
     Per-pixel np.histogram as reference. Same preprocessing/masking pipeline
     as batch_binning and batch_binning_add_at — just unvectorized histogramming.
@@ -228,11 +228,11 @@ def verify_batch_binning():
     n_batch, n_bands, n_rows, n_cols = 10, 101, 11, 11
     tile = np.random.randint(0, 1500, size=(n_batch, n_bands, n_rows, n_cols), dtype=np.int16)
 
-    # Inject zeros and NODATA_IN sentinels (no np.nan — int16 can't hold it)
+    # Inject zeros and VSM_NODATA sentinels (no np.nan — int16 can't hold it)
     mask = np.random.random(tile.shape) < 0.3
     tile[mask] = 0
     mask2 = np.random.random(tile.shape[:-1]) < 0.05
-    tile[mask2] = NODATA_IN
+    tile[mask2] = VSM_NODATA
 
     # Run all three
     hist_search, _ = batch_binning(tile.copy(), bin_width=5)

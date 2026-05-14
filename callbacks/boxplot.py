@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
 from .utils import check_if_log
-from const import BIOMES_s
+from const import BIOMES_BY_VALUE
 
     
 def boxplot_from_stats(name, table):
@@ -98,7 +98,7 @@ class BoxplotLogger(Callback):
                 table = stats[name].T
                 table_biome = stats_biome[name].T
                 table_biome = table_biome.drop(columns=[98,99])
-                table_biome.columns = [BIOMES_s[col] for col in table_biome.columns]
+                table_biome.columns = [BIOMES_BY_VALUE[col]['abbr'] for col in table_biome.columns]
                 
                 wandb.log({f'Table RH98_intervals/{name}': wandb.Table(dataframe=table.reset_index())})
                 wandb.log({f'Table BIOME/{name}': wandb.Table(dataframe=table_biome.reset_index())})

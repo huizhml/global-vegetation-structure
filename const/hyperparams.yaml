@@ -1,0 +1,176 @@
+# Central hyperparameters / constants for the project.
+# Loaded by const/__init__.py and re-exported as UPPER_SNAKE_CASE module attrs.
+# Keep keys lowercase here; the loader uppercases them on import.
+# ---------------------------------------------------------------------------
+# GEDI processing
+# ---------------------------------------------------------------------------
+chm_cols:
+  - rh98
+  - rh95
+  - rh100
+  - lc
+  - slope
+  - lat
+  - lon
+  - shot_number
+  - RH95_UMD
+  - RH98_ETH
+  - RH100_UM
+  - RH95_META
+  - RH95_Q1_raw
+  - RH98_Q1_raw
+  - RH100_Q1_raw
+
+gedi_meta_cols:
+  - digital_elevation_model
+  - digital_elevation_model_srtm
+  - pft_class
+  - sensitivity
+  - beam
+  - elevation_bias_flag
+  - energy_total
+  - landsat_treecover
+  - landsat_water_persistence
+  - leaf_off_doy
+  - leaf_off_flag
+  - leaf_on_doy
+  - leaf_on_cycle
+  - modis_nonvegetated
+  - modis_nonvegetated_sd
+  - modis_treecover
+  - modis_treecover_sd
+  - num_detectedmodes
+  - solar_azimuth
+  - solar_elevation
+  - surface_flag
+  - urban_focal_window_size
+  - urban_proportion
+  - slope
+  - lc
+  - geometry
+  - BIOME
+  - ECO_NAME
+
+coverage_beams: [BEAM0000, BEAM0001, BEAM0010, BEAM0011]
+power_beams:    [BEAM0101, BEAM0110, BEAM1000, BEAM1011]
+# ---------------------------------------------------------------------------
+# Sentinel / nodata values
+# ---------------------------------------------------------------------------
+vsm_nodata: 32767        # nodata sentinel used in int16 VSM rasters / inputs
+indices_nodata: -9999.0  # nodata used by diversity-index raster writers
+
+
+
+# ---------------------------------------------------------------------------
+# Normalisation stats (from train*_filtered_v1)
+# ---------------------------------------------------------------------------
+lat_mean: 12.7596
+lat_std:  25.6075
+lon_sin_mean: 0.1098
+lon_sin_std:  0.7536
+lon_cos_mean: 0.3072
+lon_cos_std:  0.5706
+slope_mean: 6.5781
+slope_std:  8.9007
+
+# ---------------------------------------------------------------------------
+# Sentinel-2 SCL labels
+# ---------------------------------------------------------------------------
+scl_exclude_labels: [0, 1, 3, 8, 9, 10, 11, 65535]
+scl_water: 6
+
+# ---------------------------------------------------------------------------
+# Plotting / visualisation
+# ---------------------------------------------------------------------------
+# 10-step viridis-like palette (0 ≈ '#010005', 9 ≈ '#fcffa4' omitted)
+palette:
+  - '#150b37'
+  - '#3b0964'
+  - '#61136e'
+  - '#85216b'
+  - '#a92e5e'
+  - '#cc4248'
+  - '#e75e2e'
+  - '#f78410'
+  - '#fcae12'
+  - '#f5db4c'
+
+# Colormap ranges for VSM thumbnails (diversity indices + per-RH bands).
+# cmin/cmax for rh*_q1 entries are in METERS — convert to decimeters (×10)
+# when the underlying raster is stored in decimeters (see create_pdf_thumb).
+vsm_vis_params:
+  fhd:       {cmin: 0,    cmax: 2,  cmap: viridis}
+  enl1d:     {cmin: 1,    cmax: 7,  cmap: viridis}
+  enl2d:     {cmin: 1,    cmax: 7,  cmap: viridis}   # derive from data: 2%/98% pct
+  cr:        {cmin: 0.48, cmax: 1,  cmap: RdBu}      # RdGy
+  qskewness: {cmin: -12,  cmax: 12, cmap: RdBu_r}
+  q2:        {cmin: 0,    cmax: 50, cmap: viridis_r}
+  rh25_q1:   {cmin: 0,    cmax: 12, cmap: inferno}
+  rh50_q1:   {cmin: 0,    cmax: 20, cmap: inferno}
+  rh75_q1:   {cmin: 0,    cmax: 30, cmap: inferno}
+  rh98_q1:   {cmin: 0,    cmax: 50, cmap: inferno}
+
+# ---------------------------------------------------------------------------
+# Vertical-profile / height constants (GEDI L2B derived)
+# ---------------------------------------------------------------------------
+max_height_meters: 150.0  # FHD was derived from [0, 150] m height range, 5 m step
+rh100_index: 301
+rh98_index: 295
+
+key_rhs: [0, 10, 25, 50, 75, 95, 98, 100]      # full set (postprocessing)
+key_rhs_eval: [25, 50, 75, 95, 98]             # subset used in diversity-index eval
+
+
+# ---------------------------------------------------------------------------
+# ESA World Cover — one row per class
+#   idx:   predicted-label-space index (model output channel)
+#   raw:   raw label value in the ESA WorldCover product
+#   full:  full ESA name (used by ESA_WC['Built-up']-style lookups)
+#   short: compact label for plot/table headers
+# Listed in raw-ascending order so ESA_WC.values() stays monotonic
+# (required by the histogram bin edges in preprocessing/core/plotting.py).
+# Note: idx ≠ raw ordering — Mangroves (raw 95) has idx 11, Moss (raw 100) has idx 10.
+# ---------------------------------------------------------------------------
+esa_wc:
+  - {idx: 0,  raw: 0,   full: unknown,                  short: unknown}
+  - {idx: 1,  raw: 10,  full: Tree cover,               short: Tree}
+  - {idx: 2,  raw: 20,  full: Shrubland,                short: Shrub}
+  - {idx: 3,  raw: 30,  full: Grassland,                short: Grass}
+  - {idx: 4,  raw: 40,  full: Cropland,                 short: Crop}
+  - {idx: 5,  raw: 50,  full: Built-up,                 short: Built}
+  - {idx: 6,  raw: 60,  full: Bare / sparse vegetation, short: Bare}
+  - {idx: 7,  raw: 70,  full: Snow and ice,             short: Snow}
+  - {idx: 8,  raw: 80,  full: Permanent water bodies,   short: Water}
+  - {idx: 9,  raw: 90,  full: Herbaceous wetland,       short: Herb}
+  - {idx: 11, raw: 95,  full: Mangroves,                short: Mangroves}
+  - {idx: 10, raw: 100, full: Moss and lichen,          short: Moss}
+
+esa_datetime: '2021-01-01/2021-12-31'
+
+# ---------------------------------------------------------------------------
+# RESOLVE biomes — order matters, index is the BIOME number
+# ---------------------------------------------------------------------------
+biomes:
+  - {value: 1,  abbr: Tro.Sub.Moi.Br.F,    name: 'Tropical & Subtropical Moist Broadleaf Forests'}
+  - {value: 2,  abbr: Tro.Sub.Dry.Br.F,    name: 'Tropical & Subtropical Dry Broadleaf Forests'}
+  - {value: 3,  abbr: Tro.Sub.Con.F,       name: 'Tropical & Subtropical Coniferous Forests'}
+  - {value: 4,  abbr: Tem.Br.Mix.F,        name: 'Temperate Broadleaf & Mixed Forests'}
+  - {value: 5,  abbr: Tem.Con.F,           name: 'Temperate Conifer Forests'}
+  - {value: 6,  abbr: Bor.F.Tai,           name: 'Boreal Forests/Taiga'}
+  - {value: 7,  abbr: Tro.Sub.Gr.Sav.Shr,  name: 'Tropical & Subtropical Grasslands, Savannas & Shrublands'}
+  - {value: 8,  abbr: Tem.Gr.Sav.Shr,      name: 'Temperate Grasslands, Savannas & Shrublands'}
+  - {value: 9,  abbr: Flo.Gr.Sav,          name: 'Flooded Grasslands & Savannas'}
+  - {value: 10, abbr: Mon.Gr.Sh,           name: 'Montane Grasslands & Shrublands'}
+  - {value: 11, abbr: Tun,                 name: 'Tundra'}
+  - {value: 12, abbr: Med.F.Woo.Scr,       name: 'Mediterranean Forests, Woodlands & Scrub'}
+  - {value: 13, abbr: Des.Xer.Shr,         name: 'Deserts & Xeric Shrublands'}
+  - {value: 14, abbr: Man,                 name: 'Mangroves'}
+  - {value: 98, abbr: biome_98,            name: 'Biome 98'}
+  - {value: 99, abbr: biome_99,            name: 'Biome 99'}
+
+
+# ---------------------------------------------------------------------------
+# External project IDs
+# ---------------------------------------------------------------------------
+lumi_project: 465002698
+

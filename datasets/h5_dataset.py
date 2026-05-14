@@ -15,7 +15,7 @@ import pandas as pd
 from lightning.pytorch import LightningDataModule
 
 from download.core.utils import get_epsg_from_tile, get_dense_latlon
-from const import NO_DATA, SCL_EXCLUDE_LABELS, SCL_WATER, ESA_BUILT_UP, ESA_WATER, ESA_SNOW
+from const import VSM_NODATA, SCL_EXCLUDE_LABELS, SCL_WATER, ESA_BUILT_UP, ESA_WATER, ESA_SNOW
 
 
 import zarr
@@ -35,10 +35,10 @@ def init_out_zarr(pred_fp: Path = None, length: int = None):
         store.create_dataset('slope',      shape=(length, 15, 15),       chunks=(loc_chunk, 15, 15),       dtype='float32',  fill_value=0)
         store.create_dataset('centroid',   shape=(length, 2),            chunks=(length, 2),               dtype='float32',  fill_value=0)
         store.create_dataset('rowid',      shape=(length,),              chunks=(length,),                 dtype='int32',    fill_value=0)
-        store.create_dataset('s2',         shape=(length, 12, 15, 15),   chunks=(loc_chunk, 12, 15, 15),  dtype='int16',    fill_value=NO_DATA)
-        store.create_dataset('vsm_median', shape=(length, 101, 15, 15),  chunks=(loc_chunk, 101, 15, 15), dtype='int16',    fill_value=NO_DATA)
-        store.create_dataset('vsm_lower',  shape=(length, 101, 15, 15),  chunks=(loc_chunk, 101, 15, 15), dtype='int16',    fill_value=NO_DATA)
-        store.create_dataset('vsm_upper',  shape=(length, 101, 15, 15),  chunks=(loc_chunk, 101, 15, 15), dtype='int16',    fill_value=NO_DATA)
+        store.create_dataset('s2',         shape=(length, 12, 15, 15),   chunks=(loc_chunk, 12, 15, 15),  dtype='int16',    fill_value=VSM_NODATA)
+        store.create_dataset('vsm_median', shape=(length, 101, 15, 15),  chunks=(loc_chunk, 101, 15, 15), dtype='int16',    fill_value=VSM_NODATA)
+        store.create_dataset('vsm_lower',  shape=(length, 101, 15, 15),  chunks=(loc_chunk, 101, 15, 15), dtype='int16',    fill_value=VSM_NODATA)
+        store.create_dataset('vsm_upper',  shape=(length, 101, 15, 15),  chunks=(loc_chunk, 101, 15, 15), dtype='int16',    fill_value=VSM_NODATA)
         
         print(f'Zarr store {pred_fp} created')
         
@@ -234,7 +234,7 @@ class SparsePredDataset(Dataset):
         rhs.masked_fill_(invalid_mask, torch.nan)
 
         rhs.mul_(10).round_()
-        rhs = torch.nan_to_num(rhs, nan=NO_DATA)
+        rhs = torch.nan_to_num(rhs, nan=VSM_NODATA)
 
         border = (rhs.shape[2] - 15) // 2
 

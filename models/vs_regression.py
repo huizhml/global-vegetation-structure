@@ -8,9 +8,8 @@ from kornia.enhance import normalize
 from pathlib import Path
 from models.metrics import MAE, RMSE, ME
 from models.modules.util import get_veg_mask
-from const import LAT_MEAN, LAT_STD, LON_SIN_MEAN, LON_SIN_STD, LON_COS_MEAN, LON_COS_STD, SLOPE_MEAN, SLOPE_STD, NO_DATA
+from const import LAT_MEAN, LAT_STD, LON_SIN_MEAN, LON_SIN_STD, LON_COS_MEAN, LON_COS_STD, SLOPE_MEAN, SLOPE_STD, VSM_NODATA
 
-MASKED_VALUE = NO_DATA
 S2_MEAN = np.array([587.0255, 1361.4782, 1091.5225,  739.6226, 1772.4885, 2550.3611,
         2870.9454, 2952.2076, 3080.6981, 3086.7147, 2886.7224, 2175.1265
     # 630.6893, # 628.1879 , # unfiltered

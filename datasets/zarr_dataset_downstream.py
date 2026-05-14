@@ -11,7 +11,7 @@ import xarray as xr
 import random
 import torch
 from download.core.utils import get_dense_latlon
-from const import MASKED_VALUE
+from const import VSM_NODATA
 
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="zarr.codecs.vlen_utf8")
@@ -127,7 +127,7 @@ class ZarrSentinel2Downstream(Dataset):
             invalid_mask = invalid_mask.unsqueeze(1) # Add  channel dimensions
             prediction = torch.where(invalid_mask, torch.tensor(np.nan, device=prediction.device), prediction)
         prediction = (prediction * 100).round()
-        prediction = np.nan_to_num(prediction.cpu().numpy(), nan=MASKED_VALUE).astype(np.int16)
+        prediction = np.nan_to_num(prediction.cpu().numpy(), nan=VSM_NODATA).astype(np.int16)
         rhs = prediction[:, :303, :, :].reshape(-1, 101, 3, 15, 15)
         vsm_median = rhs[:,:,1,:,: ]
         vsm_lower = rhs[:,:,0,:,: ]

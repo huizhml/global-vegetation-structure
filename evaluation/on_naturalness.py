@@ -19,7 +19,7 @@ import xgboost as xgb
 import warnings
 from evaluation.utils import load_vsm_naturalness
 from evaluation.on_diversity_indices import _chunk_diversity
-from const import NO_DATA
+from const import VSM_NODATA
 warnings.filterwarnings('ignore')
 warnings.filterwarnings(action='ignore', category=DeprecationWarning)
 pd.set_option('display.max_columns', None)
@@ -394,13 +394,13 @@ def _read_vsm(patch_file: Path, ps: int=15):
         store = zarr.open(str(patch_file), mode='r')
         vsm = store['vsm_median'][:]
         vsm = vsm.astype(np.float32)
-        vsm[vsm == NO_DATA] = np.nan
+        vsm[vsm == VSM_NODATA] = np.nan
         rowids = store['rowid'][:]
     else:
         with h5py.File(patch_file, 'r') as f:
             vsm = f['vsm_median'][:]
             vsm = vsm.astype(np.float32)
-            vsm[vsm == NO_DATA] = np.nan
+            vsm[vsm == VSM_NODATA] = np.nan
             rowids = f['rowid'][:]
     if ps < 15:
         border = (15 - ps) // 2
