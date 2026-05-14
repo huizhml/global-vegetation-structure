@@ -99,16 +99,16 @@ palette:
 # cmin/cmax for rh*_q1 entries are in METERS — convert to decimeters (×10)
 # when the underlying raster is stored in decimeters (see create_pdf_thumb).
 vsm_vis_params:
-  fhd:       {cmin: 0,    cmax: 2,  cmap: viridis}
-  enl1d:     {cmin: 1,    cmax: 7,  cmap: viridis}
-  enl2d:     {cmin: 1,    cmax: 7,  cmap: viridis}   # derive from data: 2%/98% pct
-  cr:        {cmin: 0.48, cmax: 1,  cmap: RdBu}      # RdGy
-  qskewness: {cmin: -12,  cmax: 12, cmap: RdBu_r}
-  q2:        {cmin: 0,    cmax: 50, cmap: viridis_r}
-  rh25_q1:   {cmin: 0,    cmax: 12, cmap: inferno}
-  rh50_q1:   {cmin: 0,    cmax: 20, cmap: inferno}
-  rh75_q1:   {cmin: 0,    cmax: 30, cmap: inferno}
-  rh98_q1:   {cmin: 0,    cmax: 50, cmap: inferno}
+  fhd:       {cmin: 0,    cmax: 2,  cmap: viridis,   name: FHD,      min_residual: -2,  max_residual: 2}
+  enl1d:     {cmin: 1,    cmax: 7,  cmap: viridis,   name: ENL1D,    min_residual: -7,  max_residual: 7}
+  enl2d:     {cmin: 1,    cmax: 7,  cmap: viridis,   name: ENL2D,    min_residual: -7,  max_residual: 7}
+  cr:        {cmin: 0.48, cmax: 1,  cmap: RdBu,      name: CR,       min_residual: -1,  max_residual: 1}      # RdGy
+  qskewness: {cmin: -12,  cmax: 12, cmap: RdBu_r,    name: Skewness, min_residual: -12, max_residual: 12}
+  q2:        {cmin: 0,    cmax: 50, cmap: viridis_r, name: Q2,       min_residual: -50, max_residual: 50}
+  rh25_q1:   {cmin: 0,    cmax: 12, cmap: inferno,   name: RH25,     min_residual: -30, max_residual: 50} # same with RH98 to compare
+  rh50_q1:   {cmin: 0,    cmax: 20, cmap: inferno,   name: RH50,     min_residual: -30, max_residual: 50}
+  rh75_q1:   {cmin: 0,    cmax: 30, cmap: inferno,   name: RH75,     min_residual: -30, max_residual: 50}
+  rh98_q1:   {cmin: 0,    cmax: 50, cmap: inferno,   name: RH98,     min_residual: -30, max_residual: 50}
 
 # ---------------------------------------------------------------------------
 # Vertical-profile / height constants (GEDI L2B derived)

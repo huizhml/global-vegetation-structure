@@ -104,8 +104,11 @@ class VisualizeDatacubeConfig(FunctionConfig):
     rh_step: int = 2
     version: str = '2'
     data_dir: str = '~/data/gvs/products/{product}/{year}/{product_version}/mosaic/{product_format}/'
-    save_path: str = '~/data/gvs/results/vsm_datacube/{product}_every{rh_step}rhs_black_bg_v{version}.png'
+    save_path: str = '~/data/gvs/results/vsm_datacube/{product}_every{rh_step}rhs_{bg_color}_bg_v{version}.png'
     cmap: str = 'cividis'
+    bg_color: str = 'white'
+    show_top_boundary: bool = True
+    aspect_ratio: float = 2.0
     _target_: str = "visualization.core.datacube.visualize_datacube"
 cs.store(group='run', name='visualize_datacube', node=VisualizeDatacubeConfig)
 

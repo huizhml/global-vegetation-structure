@@ -39,7 +39,7 @@ from scipy.stats import gaussian_kde, pearsonr
 from const import (
     BIOMES,
     MAX_HEIGHT_METERS,
-    VSM_NODATA,
+    VSM_VIS_PARAMS,
     INDICES_NODATA,
     GEDI_META_COLS,
     KEY_RHS_EVAL,
@@ -336,53 +336,111 @@ def boxplot_with_marginal_histograms_combined(
         print(f'Saved to {save_dir / file_name}')
     plt.close(fig)
 
-def plot_residuals_rh98_bined(df: pd.DataFrame, save_dir: Path = None, max_height: int = 50, rh98_interval: int = 5, **kwargs):
+def plot_residuals_rh98_bined(df: pd.DataFrame, save_dir: Path = None, max_height: int = 50, rh98_interval: int = 5, save_separate: bool = False, **kwargs):
+    from matplotlib.ticker import ScalarFormatter
+
     df['rh98_bins'] = pd.cut(df['rh98'], bins=np.arange(0, max_height + rh98_interval, rh98_interval), right=False)
     for rh_idx in [25, 98]:
         df[f'rh{rh_idx}_diff'] = df[f'RH{rh_idx}_Q1_raw'] - df[f'rh{rh_idx}']
     groups = [
-        ('fhd', 'FHD'), ('enl1d', 'ENL 1D'), ('enl2d', 'ENL 2D'), ('cr', 'CR'),
-        ('rh25', 'RH25'), ('rh98': 'RH98')
+        ('rh25', VSM_VIS_PARAMS['rh25_q1']), ('enl1d', VSM_VIS_PARAMS['enl1d']),  ('fhd', VSM_VIS_PARAMS['fhd']),
+        ('rh98', VSM_VIS_PARAMS['rh98_q1']), ('enl2d', VSM_VIS_PARAMS['enl2d']),  ('cr', VSM_VIS_PARAMS['cr']),
     ]
-    for var, name in groups:
+    label_fontsize=16
+    annot_fontsize = 10
+    ticks_fontsize = 9
+
+    # Pre-compute per-group data so we can render separate and/or combined figures.
+    grouped_data = []
+    global_max_count = 0
+    for var, cfg in groups:
         grouped = df.groupby('rh98_bins', observed=True)[f'{var}_diff']
         labels = [str(k) for k in grouped.groups.keys()]
         data = [g.dropna().values for _, g in grouped]
         counts = [len(d) for d in data]
+        grouped_data.append((var, cfg, labels, data, counts))
+        if counts:
+            global_max_count = max(global_max_count, max(counts))
 
-        fig, ax = plt.subplots(figsize=(10, 6))
+    def _draw(ax, cfg, labels, data, counts, count_ymax, show_xlabel=True, show_count_label=True,
+              show_count_ticks=True, title_full=True):
 
         # --- background count bars on secondary axis ---
         ax_bar = ax.twinx()
         ax_bar.bar(range(1, len(counts) + 1), counts, color='lightgrey', alpha=0.4, width=0.6, zorder=1)
-        ax_bar.set_ylabel('Count', color='grey')
-        ax_bar.tick_params(axis='y', labelcolor='grey')
-        ax_bar.set_ylim(0, max(counts) * 3)  # push bars down to ~1/3 of plot height
+        if show_count_label:
+            ax_bar.set_ylabel('Count', color='grey')
+        ax_bar.tick_params(axis='y', labelcolor='grey', labelright=show_count_ticks)
+        ax_bar.set_ylim(0, count_ymax)  # push bars down to ~1/3 of plot height
+        # Render scientific notation as 10^x rather than 1e6.
+        fmt = ScalarFormatter(useMathText=True)
+        fmt.set_powerlimits((-3, 3))
+        ax_bar.yaxis.set_major_formatter(fmt)
 
         # count labels: format large numbers with comma separator
         for i, n in enumerate(counts, start=1):
-            ax_bar.text(i, n + max(counts) * 0.02, f'{n:,}', ha='center', va='bottom',
-                        fontsize=7, color='grey', fontweight='light')
+            ax_bar.text(i, n + count_ymax * 0.02 / 3, f'{n:,}', ha='center', va='bottom',
+                        fontsize=annot_fontsize, color='grey', fontweight='light')
 
         # --- dashed zero line (behind boxes, in front of bars) ---
         ax.axhline(y=0, color='dimgrey', linestyle='--', linewidth=0.8, zorder=2)
 
         # --- boxplot on top ---
-        ax.boxplot(data, labels=labels, showfliers=False, zorder=3)
-        ax.set_xticklabels(labels, rotation=45, ha='right')
-        ax.set_xlabel('Canopy Top Height (m)')
-        ax.set_ylabel(f'{name} Residual')
-        ax.set_title(f'{name} Residuals by Canopy Top Height')
+        # Set xticks explicitly so this works under sharex=True (where the
+        # shared locator would otherwise accumulate positions across subplots
+        # and mismatch the label count).
+        positions = list(range(1, len(labels) + 1))
+        ax.boxplot(data, positions=positions, showfliers=False, zorder=3, manage_ticks=False)
+        ax.set_xticks(positions)
+        ax.set_xticklabels(labels, rotation=45, ha='right', fontsize=ticks_fontsize)
+        if show_xlabel:
+            ax.set_xlabel('Canopy Top Height (m)', fontsize=label_fontsize)
+        ax.set_ylabel(f'{cfg["name"]} Residual', fontsize=label_fontsize)
+        ax.set_title(f'{cfg["name"]} Residuals by Canopy Top Height' if title_full else cfg['name'], fontsize=label_fontsize)
 
         # keep boxplot axis in front
         ax.set_zorder(ax_bar.get_zorder() + 1)
         ax.patch.set_visible(False)
+        return ax_bar
 
-        fig.tight_layout()
-        for ext in ('pdf', 'png'):
-            fig.savefig(save_dir / f'residuals_{var}_rh98_binned.{ext}', dpi=300, bbox_inches='tight')
-        print(f"Saved to {save_dir / f'residuals_{var}_rh98_binned.[pdf|png]'}")
-        plt.close(fig)
+    if save_separate:
+        for var, cfg, labels, data, counts in grouped_data:
+            fig, ax = plt.subplots(figsize=(10, 6))
+            _draw(ax, cfg, labels, data, counts, count_ymax=max(counts) * 3)
+            fig.tight_layout()
+            for ext in ('pdf', 'png'):
+                fig.savefig(save_dir / f'residuals_{var}_rh98_binned.{ext}', dpi=300, bbox_inches='tight')
+            print(f"Saved to {save_dir / f'residuals_{var}_rh98_binned.[pdf|png]'}")
+            plt.close(fig)
+
+    # Combined figure: 2x3 grid sharing x-axis and the right (count) y-axis.
+    fig, axes = plt.subplots(2, 3, figsize=(18, 10), sharex=True)
+    bar_axes = []
+    count_ymax = global_max_count * 3 if global_max_count else 1
+    for idx, (var, cfg, labels, data, counts) in enumerate(grouped_data):
+        row, col = divmod(idx, 3)
+        ax = axes[row, col]
+        ax_bar = _draw(
+            ax, cfg, labels, data, counts,
+            count_ymax=count_ymax,
+            show_xlabel=(row == 1),
+            show_count_label=(col == 2),
+            show_count_ticks=(col == 2),
+            title_full=False,
+        )
+        bar_axes.append(ax_bar)
+
+    # Link the right y-axes so they share scale.
+    base_bar = bar_axes[0]
+    for ax_bar in bar_axes[1:]:
+        ax_bar.sharey(base_bar)
+
+    fig.suptitle('Residuals by Canopy Top Height', fontsize=label_fontsize)
+    fig.tight_layout()
+    for ext in ('pdf', 'png'):
+        fig.savefig(save_dir / f'residuals_all_rh98_binned.{ext}', dpi=300, bbox_inches='tight')
+    print(f"Saved to {save_dir / 'residuals_all_rh98_binned.[pdf|png]'}")
+    plt.close(fig)
 
 # ------------------------------------------------------------------------------------------------
 # Diversity indices
