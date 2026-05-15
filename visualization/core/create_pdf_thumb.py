@@ -20,6 +20,7 @@ import stackstac
 import geopandas as gpd
 import cartopy.crs as ccrs
 from cartopy.mpl.ticker import LongitudeFormatter, LatitudeFormatter
+import seaborn as sns
 
 from postprocessing.core.s2_tiling import find_intersecting_s2_tiles
 from const import VSM_VIS_PARAMS
@@ -44,8 +45,10 @@ def rio_read(tif_file: Path, overview_level: int = 0):
         band_names = list(src.descriptions)
 
     data = data.assign_coords(band=band_names)
+
     if 'RH' in tif_file.stem:
         data = data / 10
+
     return data
 
 def read_rh_8neighbors(tile_id: str, s2_grid: gpd.GeoDataFrame, stac_collection_dir: Path, year: int = 2020, resolution: int = 100):
@@ -287,7 +290,8 @@ def plot_tiff_image_with_profile(image: xr.DataArray, cmin: int=None, cmax: int=
         x = data.x.values
         y = data.y.values
         extent = [x.min(), x.max(), y.min(), y.max()]
-
+        if cmap_.lower() == 'mako':
+            cmap_ = sns.color_palette("mako", as_cmap=True)
         ax_img.imshow(
             data.values, cmap=cmap_, vmin=cmin_, vmax=cmax_,
             origin='upper', extent=extent,
@@ -518,7 +522,8 @@ def make_global_mosaic_pdf(mosaic_dir: str, tif_filename_pattern: str = 'global_
             image = rio_read(tif_file)
             figs = plot_tiff_image_with_profile(image, cmin=cmin, cmax=cmax, cmap=cmap, show_profile=show_profile)
             for band, fig in figs.items():
-                _pdf_file = pdf_file.parent / f'{pdf_file.stem}_{tif_file.stem}_{band}.pdf'
+                band_name = '' if 'RH' in band else band
+                _pdf_file = pdf_file.parent / f'{tif_file.stem}{band_name}.pdf' # band is for multibands tif
                 fig.savefig(_pdf_file, bbox_inches='tight', dpi=300)
                 fig.savefig(_pdf_file.with_suffix('.png'), bbox_inches='tight', dpi=300)
                 plt.close(fig)

@@ -76,20 +76,21 @@ cs.store(group='run', name='create_global_relative_diff_mosaic', node=CreateGlob
 @dataclass
 class CreateGlobalMosaicPdfConfig(FunctionConfig):
     year: int = 2020
-    version: str = 'masked'
+    product_version: str = 'masked'
     data_format: str = 'cog'
     product: str = 'vsm'
-    mosaic_dir: str = '~/data/gvs/products/{product}/{year}/{version}/mosaic/{data_format}'
+    version: str = '1'
+    mosaic_dir: str = '~/data/gvs/products/{product}/{year}/{product_version}/mosaic/{data_format}'
     tif_filename_pattern: str = '*.tif'
-    pdf_file: str = '~/data/gvs/results/{product}/global_mosaic/global_mosaic_{year}_{version}.pdf'
+    pdf_file: str = '~/data/gvs/results/{product}/global_mosaic/{product_version}/global_mosaic_{year}_{product_version}_v{version}.pdf'
     show_profile: bool = False
     multi_pages: bool = False
     cmin: Optional[int] = None
-    cmax: Optional[int] = None
+    cmax: Optional[int] = None # in meters
     cmap: Optional[str] = None
     _target_: str = "visualization.core.create_pdf_thumb.make_global_mosaic_pdf"
 cs.store(group='run', name='create_global_mosaic_pdf', node=CreateGlobalMosaicPdfConfig)
-
+# python -m visualization.run run=create_global_mosaic_pdf run.product=prediction_intervals run.tif_filename_pattern='*RH98*.tif' run.cmap=mako run.cmax=30 run.cmin=0
 
 # -----------------------------------------------------------------
 #  Visualize datacube
