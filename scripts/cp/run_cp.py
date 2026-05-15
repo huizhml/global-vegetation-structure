@@ -10,11 +10,13 @@ from cp.config import GVSCPConfig
 from cp.constants import BIOME_MAPPING, BIOME_SHORT_MAPPING
 from cp.cp import ConformalPredictor
 from cp.dl import load_data
-from cp.plot import plot_rh_coverage_per_biome
+from cp.plot import plot_rh_coverage_per_biome, plot_rh_width_changes_per_biome
 
 
 def run_cp(config: GVSCPConfig, save_root):
-    data = load_data(config.data, config.cp.cal_data_root, config.cp.cal_data_path)
+    data = load_data(
+        config.data, config.cp.cal_data_root, config.cp.cal_data_path
+    )
     cp_res_rows = []
     for cp_method in config.cp.cqr_methods:
         for biome in BIOME_MAPPING.keys():
@@ -109,7 +111,9 @@ def eval_cp(config: GVSCPConfig, cp_res_df: pd.DataFrame, save_root):
                 "avg_width_dm": avg_width(q_lo_corr, q_hi_corr),
             }
         )
-    eval_stats_df = pd.DataFrame(eval_stats_rows).set_index(["method", "biome", "rh"])
+    eval_stats_df = pd.DataFrame(eval_stats_rows).set_index(
+        ["method", "biome", "rh"]
+    )
     eval_stats_df.to_parquet(save_root / "eval_stats.parquet", index=True)
     return eval_stats_df
 
@@ -119,7 +123,9 @@ def get_cp_method_eval_stat(eval_stats_df: pd.DataFrame, method: str, stat):
     # reset index so we can pivot
     method_stat_df = method_stat_df.reset_index()
     # pivot: rows=rh, columns=biome, values=coverage
-    method_stat_df = method_stat_df.pivot(index="rh", columns="biome", values=stat)
+    method_stat_df = method_stat_df.pivot(
+        index="rh", columns="biome", values=stat
+    )
     method_stat_df.rename(columns=BIOME_MAPPING, inplace=True)
     method_stat_df.rename(columns=BIOME_SHORT_MAPPING, inplace=True)
     method_stat_df.index = ["RH" + str(rh) for rh in method_stat_df.index]
@@ -128,19 +134,33 @@ def get_cp_method_eval_stat(eval_stats_df: pd.DataFrame, method: str, stat):
 
 def plot(config: GVSCPConfig, eval_stats_df: pd.DataFrame, save_root: Path):
     cp_methods = eval_stats_df.index.get_level_values("method").unique()
-    baseline_cov_df = get_cp_method_eval_stat(eval_stats_df, "Baseline", "coverage")
+    baseline_cov_df = get_cp_method_eval_stat(
+        eval_stats_df, "Baseline", "coverage"
+    )
+    baseline_width_df = get_cp_method_eval_stat(
+        eval_stats_df, "Baseline", "avg_width_dm"
+    )
     rh_order = sorted(baseline_cov_df.index.tolist(), key=lambda x: int(x[2:]))
     biome_order = [
-        BIOME_SHORT_MAPPING[BIOME_MAPPING[i + 1]] for i in range(len(BIOME_MAPPING))
+        BIOME_SHORT_MAPPING[BIOME_MAPPING[i + 1]]
+        for i in range(len(BIOME_MAPPING))
     ]
     for cp_method in cp_methods:
         if cp_method == "Baseline":
             continue
         fig_save_root = save_root / "figures" / cp_method
         os.makedirs(fig_save_root, exist_ok=True)
+        skip_biomes = None
+        if config.plot.skip_biomes:
+            skip_biomes = [
+                BIOME_SHORT_MAPPING[BIOME_MAPPING[biome_id]]
+                for biome_id in config.plot.skip_biomes
+            ]
+
         method_cov_df = get_cp_method_eval_stat(
             eval_stats_df, method=cp_method, stat="coverage"
         )
+        config.plot.set_coverage_plot_style()
         plot_rh_coverage_per_biome(
             method_cov_df,
             baseline_cov_df,
@@ -148,12 +168,36 @@ def plot(config: GVSCPConfig, eval_stats_df: pd.DataFrame, save_root: Path):
             biome_order,
             rh_order,
             config.cp.alpha,
+            skip_groups=skip_biomes,
+            figsize=config.plot.get_coverage_figsize(),
+        )
+
+        method_width_df = get_cp_method_eval_stat(
+            eval_stats_df, method=cp_method, stat="avg_width_dm"
+        )
+        config.plot.set_avg_width_plot_style()
+        plot_rh_width_changes_per_biome(
+            baseline_width_df,
+            method_width_df,
+            f"{fig_save_root}/width.pdf",
+            biome_order,
+            rh_order,
+            figsize=config.plot.get_avg_width_figsize(),
+            skip_groups=skip_biomes,
         )
 
 
 def main(args: argparse.Namespace):
     config = GVSCPConfig(args.config_path)
     save_root = Path(args.config_path).parent
+    # Skip CP and evaluation if only plotting
+    if args.plot_only:
+        eval_res_df = pd.read_parquet(
+            save_root / "eval_stats.parquet",
+        )
+        plot(config, eval_res_df, save_root)
+        return 0
+    # Otherwise run everything
     if args.load_corrections:
         cp_res_df = pd.read_parquet(
             save_root / "cp_results.parquet",
@@ -180,6 +224,11 @@ def parse_args():
         "--load_corrections",
         action="store_true",
         help="Use precomputed quantile corrections instead of running CP calibration",
+    )
+    parser.add_argument(
+        "--plot_only",
+        action="store_true",
+        help="Only generate plots using precomputed CP results and evaluation stats",
     )
     return parser.parse_args()
 

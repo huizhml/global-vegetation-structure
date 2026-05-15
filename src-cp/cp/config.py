@@ -1,4 +1,27 @@
 import yaml
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+
+NATURE_FIG_STYLE = {
+    "font.family": "sans-serif",
+    "font.sans-serif": ["Arial", "Helvetica"],
+    "font.size": 7,
+    "axes.titlesize": 8,
+    "axes.labelsize": 7,
+    "xtick.labelsize": 6,
+    "ytick.labelsize": 6,
+    "axes.linewidth": 0.5,
+    "xtick.major.width": 0.5,
+    "ytick.major.width": 0.5,
+    "xtick.direction": "out",
+    "ytick.direction": "out",
+}
+
+
+def set_plot_style(kwargs):
+    mpl.rcParams.update(mpl.rcParamsDefault)
+    for key, value in kwargs.items():
+        plt.rcParams[key] = value
 
 
 class RHDataCPConfig:
@@ -64,6 +87,45 @@ class EvalCPConfig:
         self.data_path = config.get("data_path")
 
 
+def pt_to_inch(pt_val):
+    return pt_val / 72.27
+
+
+class CoveragePlotConfig:
+    def __init__(self, config):
+        self.plot_style = NATURE_FIG_STYLE.copy()
+        self.plot_style.update(config.get("plot_style", {}))
+        self.fig_width_in = pt_to_inch(config.get("fig_width_pt", 511))
+        self.fig_height_in = pt_to_inch(config.get("fig_height_pt", 324))
+
+
+class AvgWidthPlotConfig:
+    def __init__(self, config):
+        self.plot_style = NATURE_FIG_STYLE.copy()
+        self.plot_style.update(config.get("plot_style", {}))
+        self.fig_width_in = pt_to_inch(config.get("fig_width_pt", 511))
+        self.fig_height_in = pt_to_inch(config.get("fig_height_pt", 324))
+
+
+class PlotCPConfig:
+    def __init__(self, config):
+        self.skip_biomes = config.get("skip_biomes")
+        self._coverage = CoveragePlotConfig(config.get("coverage", {}))
+        self._avg_width = AvgWidthPlotConfig(config.get("avg_width", {}))
+
+    def set_coverage_plot_style(self):
+        set_plot_style(self._coverage.plot_style)
+
+    def get_coverage_figsize(self):
+        return self._coverage.fig_width_in, self._coverage.fig_height_in
+
+    def get_avg_width_figsize(self):
+        return self._avg_width.fig_width_in, self._avg_width.fig_height_in
+
+    def set_avg_width_plot_style(self):
+        set_plot_style(self._avg_width.plot_style)
+
+
 class GVSCPConfig:
     def __init__(self, config_path):
         with open(config_path, "r") as f:
@@ -71,3 +133,4 @@ class GVSCPConfig:
         self.data = RHDataCPConfig(config["data"])
         self.cp = RunCPConfig(config["cp"])
         self.eval = EvalCPConfig(config["eval"])
+        self.plot = PlotCPConfig(config["plot"])
