@@ -34,6 +34,7 @@ BAND_NAMES = {
     'qskewness': 'Qskewness',
     'q2': 'Q2',
     'rh98_q1': 'RH98 [m]',
+    'rh25_q1': 'RH25 [m]',
 }
 # --------- I/O Functions ---------
 def rio_read(tif_file: Path, overview_level: int = 0):
@@ -48,7 +49,7 @@ def rio_read(tif_file: Path, overview_level: int = 0):
 
     if 'RH' in tif_file.stem:
         data = data / 10
-
+        data['band'] = [f'{s.lower()}_q1' for s in tif_file.stem.split('_') if 'RH' in s]
     return data
 
 def read_rh_8neighbors(tile_id: str, s2_grid: gpd.GeoDataFrame, stac_collection_dir: Path, year: int = 2020, resolution: int = 100):
