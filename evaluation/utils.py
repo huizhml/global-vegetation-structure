@@ -500,7 +500,12 @@ def partition_points_by_tile(gdf_file: str, s2_tile_file: str, save_dir: str, **
         print(f"Saved {len(points_gdf_tile)} points to {save_dir / f'{tile}.parquet'}")
 
 
-
+def _short_count(n):
+    if n >= 1_000_000:
+        return f'{n/1e6:.1f}M'
+    if n >= 1_000:
+        return f'{n/1e3:.0f}K'
+    return str(n)
 
 
 if __name__ == "__main__":

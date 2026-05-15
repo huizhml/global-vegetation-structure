@@ -44,6 +44,7 @@ from const import (
     GEDI_META_COLS,
     KEY_RHS_EVAL,
 )
+from evaluation.utils import _short_count
 
 RH_COLS = [f'rh{rh}' for rh in KEY_RHS_EVAL] + [f'RH{rh}_Q1_raw' for rh in KEY_RHS_EVAL]
 stac_collection_dir = '~/data/gvs/products/gvsm_stac_catalog/vsm_local'
@@ -346,7 +347,7 @@ def plot_residuals_rh98_bined(df: pd.DataFrame, save_dir: Path = None, max_heigh
         ('rh25', VSM_VIS_PARAMS['rh25_q1']), ('enl1d', VSM_VIS_PARAMS['enl1d']),  ('fhd', VSM_VIS_PARAMS['fhd']),
         ('rh98', VSM_VIS_PARAMS['rh98_q1']), ('enl2d', VSM_VIS_PARAMS['enl2d']),  ('cr', VSM_VIS_PARAMS['cr']),
     ]
-    label_fontsize=16
+    label_fontsize=18
     annot_fontsize = 10
     ticks_fontsize = 9
 
@@ -362,12 +363,12 @@ def plot_residuals_rh98_bined(df: pd.DataFrame, save_dir: Path = None, max_heigh
         if counts:
             global_max_count = max(global_max_count, max(counts))
 
-    def _draw(ax, cfg, labels, data, counts, count_ymax, show_xlabel=True, show_count_label=True,
+    def _draw(ax, cfg, labels, data, counts, count_ymax, show_xlabel=True, show_ylabel=True, show_count_label=True,
               show_count_ticks=True, title_full=True):
 
         # --- background count bars on secondary axis ---
         ax_bar = ax.twinx()
-        ax_bar.bar(range(1, len(counts) + 1), counts, color='lightgrey', alpha=0.4, width=0.6, zorder=1)
+        ax_bar.bar(range(1, len(counts) + 1), counts, color='#B0C4DE', alpha=0.4, width=0.6, zorder=1)
         if show_count_label:
             ax_bar.set_ylabel('Count', color='grey')
         ax_bar.tick_params(axis='y', labelcolor='grey', labelright=show_count_ticks)
@@ -379,8 +380,10 @@ def plot_residuals_rh98_bined(df: pd.DataFrame, save_dir: Path = None, max_heigh
 
         # count labels: format large numbers with comma separator
         for i, n in enumerate(counts, start=1):
-            ax_bar.text(i, n + count_ymax * 0.02 / 3, f'{n:,}', ha='center', va='bottom',
-                        fontsize=annot_fontsize, color='grey', fontweight='light')
+            # ax_bar.text(i, n + count_ymax * 0.02 / 3, f'{n:,}', ha='center', va='bottom',
+            #             fontsize=annot_fontsize, color='grey', fontweight='light')
+            ax_bar.text(i, n + count_ymax * 0.02 / 3, _short_count(n), ha='center', va='bottom',
+                         fontsize=annot_fontsize, color='grey', fontweight='light')
 
         # --- dashed zero line (behind boxes, in front of bars) ---
         ax.axhline(y=0, color='dimgrey', linestyle='--', linewidth=0.8, zorder=2)
@@ -390,13 +393,35 @@ def plot_residuals_rh98_bined(df: pd.DataFrame, save_dir: Path = None, max_heigh
         # shared locator would otherwise accumulate positions across subplots
         # and mismatch the label count).
         positions = list(range(1, len(labels) + 1))
-        ax.boxplot(data, positions=positions, showfliers=False, zorder=3, manage_ticks=False)
+        # ax.boxplot(data, positions=positions, showfliers=False, zorder=3, manage_ticks=False)
+        bp = ax.boxplot(
+            data, positions=positions, showfliers=False, zorder=3, manage_ticks=False,
+            patch_artist=True,
+            # Option 1:
+            boxprops=dict(facecolor='#4C72B0', alpha=0.6, edgecolor='#2d4a7a', linewidth=0.8),
+            medianprops=dict(color='white', linewidth=1.5),
+            whiskerprops=dict(color='#4C72B0', linewidth=1.2, linestyle='-'),
+            capprops=dict(color='#4C72B0', linewidth=1.2),
+            meanprops=dict(marker='D', markerfacecolor='white', markeredgecolor='#2d4a7a', markersize=4),
+            # Option 2
+            # boxprops=dict(facecolor='#cce5ff', alpha=0.8, edgecolor='#3a7ebf', linewidth=1.0),
+            # medianprops=dict(color='#d94f00', linewidth=1.8),
+            # whiskerprops=dict(color='#555555', linewidth=0.8),
+            # capprops=dict(color='#555555', linewidth=0.8),
+            # Option 3
+            # boxprops=dict(facecolor='#E8927C', alpha=0.7, edgecolor='#c1624e', linewidth=0.8),
+            # medianprops=dict(color='#333333', linewidth=1.5),
+            # whiskerprops=dict(color='#c1624e', linewidth=1.0),
+            # capprops=dict(color='#c1624e', linewidth=1.0),
+            showmeans=True,
+        )
         ax.set_xticks(positions)
         ax.set_xticklabels(labels, rotation=45, ha='right', fontsize=ticks_fontsize)
         if show_xlabel:
-            ax.set_xlabel('Canopy Top Height (m)', fontsize=label_fontsize)
-        ax.set_ylabel(f'{cfg["name"]} Residual', fontsize=label_fontsize)
-        ax.set_title(f'{cfg["name"]} Residuals by Canopy Top Height' if title_full else cfg['name'], fontsize=label_fontsize)
+            ax.set_xlabel('RH98(m)', fontsize=label_fontsize)
+        if show_ylabel:
+            ax.set_ylabel(f'Residual', fontsize=label_fontsize)
+        ax.set_title(cfg['name'], fontsize=label_fontsize)
 
         # keep boxplot axis in front
         ax.set_zorder(ax_bar.get_zorder() + 1)
@@ -424,6 +449,7 @@ def plot_residuals_rh98_bined(df: pd.DataFrame, save_dir: Path = None, max_heigh
             ax, cfg, labels, data, counts,
             count_ymax=count_ymax,
             show_xlabel=(row == 1),
+            show_ylabel=(col == 0),
             show_count_label=(col == 2),
             show_count_ticks=(col == 2),
             title_full=False,
@@ -435,7 +461,7 @@ def plot_residuals_rh98_bined(df: pd.DataFrame, save_dir: Path = None, max_heigh
     for ax_bar in bar_axes[1:]:
         ax_bar.sharey(base_bar)
 
-    fig.suptitle('Residuals by Canopy Top Height', fontsize=label_fontsize)
+    # fig.suptitle('Residuals by Canopy Top Height', fontsize=label_fontsize)
     fig.tight_layout()
     for ext in ('pdf', 'png'):
         fig.savefig(save_dir / f'residuals_all_rh98_binned.{ext}', dpi=300, bbox_inches='tight')
