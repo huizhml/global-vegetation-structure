@@ -12,7 +12,7 @@ from dask.distributed import Client, LocalCluster
 
 from download.core import DaskDownloader
 from download.core.utils import authenticate, check_unfinished_files 
-# authenticate()
+authenticate()
 
 def set_fc_properties(row):
     geom = row.geometry
@@ -146,8 +146,10 @@ class SOTAChmDownloader(DaskDownloader):
             partition_dfs['um'].append(dfs[1])
             partition_dfs['meta'].append(dfs[2])
         if len(partition_dfs['eth_umd']) == 0 or len(partition_dfs['um']) == 0 or len(partition_dfs['meta']) == 0:
-            print(f'No data downloaded for {file.stem}')
+            loc_df[['RH95_UMD', 'RH98_ETH', 'RH100_UM', 'RH95_META']] = pd.NA
+            loc_df.to_parquet(output_file)
             return
+            
         df1s = pd.concat(partition_dfs['eth_umd'])
         df2s = pd.concat(partition_dfs['um'])
         df3s = pd.concat(partition_dfs['meta'])
