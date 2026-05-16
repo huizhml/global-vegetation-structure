@@ -7,6 +7,20 @@ from dataclasses import dataclass, field
 import hydra
 from omegaconf import OmegaConf, MISSING
 from config.base_config_class import ClassConfig, FunctionConfig
+from tools.utils import resolve_args
+
+defaults = [
+    {'run': 'download_sota_chms'},
+    "_self_"
+]
+
+@dataclass
+class RunConfig:
+    defaults: List[Any] = field(default_factory=lambda: defaults)
+    run: Any = MISSING
+    
+cs = ConfigStore.instance()
+
 
 @dataclass
 class DownloadForestTempConfig(FunctionConfig):
@@ -72,6 +86,16 @@ class GetTilesCoveredByGEDIConfig(ClassConfig):
     save_dir: str = f'~/data/gvs/deploy/correction_{year}'
     _target_: str = "download.products.gedi.GEDI"
     target_method: str = 'get_tiles_covered_by_gedi'
+
+@dataclass
+class DedupShotsConfig(FunctionConfig):
+    root_dir: str = '~/data/gvs/gedi/veg_sensitivity_gt0p95'
+    split: str = 'test'
+    year: int = 2020
+    data_name: str = 'original_with_sota_chms_biome'
+    parq_dir: str = '{root_dir}/subset_{split}/{data_name}/{year}'
+    _target_: str = 'download.products.gedi.dedup_shots'
+cs.store(group='run', name='dedup_shots', node=DedupShotsConfig)
 
 # ================================ Download S2 Configs ================================
 @dataclass
@@ -215,17 +239,6 @@ class DownloadSOTAChmConfig(ClassConfig):
 
 
 
-defaults = [
-    {'run': 'download_sota_chms'},
-    "_self_"
-]
-
-@dataclass
-class RunConfig:
-    defaults: List[Any] = field(default_factory=lambda: defaults)
-    run: Any = MISSING
-    
-cs = ConfigStore.instance()
 cs.store(group='run', name='download_sota_chms', node=DownloadSOTAChmConfig)
 cs.store(group='run', name='download_forest_temp', node=DownloadForestTempConfig)
 # ================================ MGRS Configs ================================
@@ -262,12 +275,13 @@ cs.store(name='base_config', node=RunConfig) # NOTE: name here should match the 
 def main(cfg):
     t0 = time.time()
     print(OmegaConf.to_yaml(cfg))
+    resolve_args(cfg)
     if cfg.run.target_type == 'function':
         instantiate(cfg.run)
     elif cfg.run.target_type == 'class':
         obj = instantiate(cfg.run)
         excute_method = getattr(obj, cfg.run.target_method)
-        excute_method()
+        excute_method(**cfg.run.func_args)
     else:
         raise ValueError(f"Invalid target: {cfg.run.target_type}")
     t1 = time.time()

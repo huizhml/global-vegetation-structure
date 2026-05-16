@@ -24,7 +24,7 @@ def get_data(h5_file: str, naturalness_fp: str, use_full_profile: bool=False, s2
         
         y = target_df.loc[rowid, 'class_idx']
         if rhs_only:
-            x = f['vsm_median'][idx]
+            x = f['rhs_median'][idx]
             if to_meter:
                 x = x / 100
                 return x, y
@@ -39,7 +39,7 @@ def get_data(h5_file: str, naturalness_fp: str, use_full_profile: bool=False, s2
             var = x.var(axis=(2,3))
             return np.concatenate([avg, var], axis=1), y
         elif use_full_profile:
-            rhs = f['vsm_median'][idx]
+            rhs = f['rhs_median'][idx]
             s2 = f['s2'][idx]
             if to_meter:
                 rhs = rhs / 100
@@ -50,7 +50,7 @@ def get_data(h5_file: str, naturalness_fp: str, use_full_profile: bool=False, s2
             x = np.concatenate([avg_s2, var_s2, avg_rhs, var_rhs], axis=1)
             return x, y
         else: # use top height
-            rhs = f['vsm_median'][idx, 98:99]
+            rhs = f['rhs_median'][idx, 98:99]
             if to_meter:
                 rhs = rhs / 100
             avg_rhs = rhs.mean(axis=(2,3))

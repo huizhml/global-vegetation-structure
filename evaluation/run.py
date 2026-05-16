@@ -229,7 +229,7 @@ class MergePatchStatsConfig(FunctionConfig):
     ps: int = 15
     filename_pattern: str = '*train.parquet'
     save_fp: str = '~/data/gvs/evaluation/downstream_tasks/naturalness/results_from_vsm_2017/vsm_patch_stats_ps{ps}_train.parquet'
-    _target_: str = "tools.parq_ops.merge_parq_cols"
+    _target_: str = "tools.parq_ops.merge_columns_from_files"
     
 cs.store(group='run', name='merge_patch_stats', node=MergePatchStatsConfig)
 

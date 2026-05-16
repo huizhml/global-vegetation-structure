@@ -86,6 +86,44 @@ class CreateUpdatedStacCollectionConfig(ClassConfig):
     
 cs.store(group='run', name='create_updated_stac_collection', node=CreateUpdatedStacCollectionConfig)
 
+
+# -----------------------------------------------------------------
+#  Sample VSM
+# -----------------------------------------------------------------
+
+@dataclass
+class SampleVSMPointsConfig(FunctionConfig):
+    '''
+    #Note: no rh_idxs or q_idx, extract all 303 layers for other potential use, more importantly, to aviold different subsets and version mismatch 
+    '''
+    year: int = 2020
+    split: str = 'test'
+    product_version: str = 'masked'
+    data_name: str = 'original_with_sota_chms_biome'
+    root_dir : str = '~/data/gvs/gedi/veg_sensitivity_gt0p95'
+    loc_dir: str = '{root_dir}/subset_{split}/{data_name}/{year}'
+    save_dir: str = '{root_dir}/subset_{split}/version={product_version}/{year}'
+    stac_col_dir: str = '~/data/gvs/products/gvsm_stac_catalog/vsm_local_{product_version}/'
+    _target_: str = "postprocessing.core.sample_vsm.sample_points"
+cs.store(group='run', name='sample_vsm_points', node=SampleVSMPointsConfig)
+
+@dataclass
+class SampleVSMPatchesConfig(FunctionConfig):
+    '''
+    #todo: remove rh_idxs and q_idxs, extract all 303 layers for other potential use, more importantly, to aviold different subsets and version mismatch 
+    '''
+    year: int = 2020
+    product_version: str = 'masked'
+    root_dir: str = '~/data/gvs/evaluation/downstream_tasks/naturalness'
+    loc_dir: str = '{root_dir}/loc_by_tile/'
+    stac_col_dir: str = '~/data/gvs/products/gvsm_stac_catalog/vsm_local_{product_version}/'
+    save_dir: str = '{root_dir}/vsm_patches_ps11/'
+    rh_idxs: list[int] = field(default_factory=lambda: list(range(101)))
+    q_idxs: list[int] = field(default_factory=lambda: [1])
+    _target_: str = "postprocessing.core.sample_vsm.sample_patches"
+
+cs.store(group='run', name='sample_vsm_patches', node=SampleVSMPatchesConfig)
+
 @dataclass
 class SampleForestTempConfig(FunctionConfig):
     tif_dir: str = '~/data/gvs/evaluation/downstream_tasks/forest_temp/'
@@ -219,33 +257,17 @@ class AddOursBlendedToSOTAGEDIConfig(FunctionConfig):
     _target_: str = "postprocessing.core.extract_sparse_points.pair_predictions_with_gedi_ref_data"
 
 
-@dataclass
-class ExtractPredConfig(FunctionConfig):
-    loc_dir: str = '~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_cal/original/2020'
-    save_dir: str = '~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_cal/original_with_ours_biome/2020'
-    stac_col_dir: str = '~/data/gvs/products/gvsm_stac_catalog/vsm_local/'
-    year: int = 2020
-    rh_idxs: list[int] = field(default_factory=lambda: list(range(101)))
-    _target_: str = "postprocessing.core.sample_vsm.sample_points"
-    
-
-@dataclass
-class SampleVSMPatchesConfig(FunctionConfig):
-    loc_dir: str = '~/data/gvs/evaluation/downstream_tasks/naturalness/loc_by_tile/'
-    stac_col_dir: str = '~/data/gvs/products/gvsm_stac_catalog/vsm_local/'
-    save_dir: str = '~/data/gvs/evaluation/downstream_tasks/naturalness/vsm_patches_ps11/'
-    year: int = 2020
-    rh_idxs: list[int] = field(default_factory=lambda: list(range(101)))
-    q_idxs: list[int] = field(default_factory=lambda: [1])
-    _target_: str = "postprocessing.core.sample_vsm.sample_patches"
 
 @dataclass
 class AddBiomeConfig(FunctionConfig): 
     '''Add biome info to partitioned geoparquet files'''
-    parq_dir: str = '~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_test/original_with_sota_chms/2020'
+    split: str = 'cal'
+    root_dir: str = '~/data/gvs/gedi/veg_sensitivity_gt0p95'
+    parq_dir: str = '{root_dir}/subset_{split}/original_with_sota_chms/2020'
     biome_file: str = '~/data/GEDI/ecoregions/wwf_terr_ecos.shp'
-    save_dir: str = '~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_test/original_with_sota_chms_biome/2020'
+    save_dir: str = '{root_dir}/subset_{split}/original_with_sota_chms_biome/2020'
     _target_: str = "postprocessing.core.extract_sparse_points.add_biome"
+cs.store(group='run', name='add_biome', node=AddBiomeConfig)
 
 @dataclass
 class EvaluateBiasCorrectionConfig(FunctionConfig):
@@ -255,7 +277,7 @@ class EvaluateBiasCorrectionConfig(FunctionConfig):
     correction_stats_dir: str = '~/data/gvs/assets/bias_correction_stats/slope_lt20_minpoints2000/2020/stats_with_median_and_trimmed_5_95_by_tile'
     save_dir: str = '~/data/gvs/assets/bias_correction_stats/slope_lt20_minpoints2000/2020/figures/cal_slope_lt20'
     _target_: str = "postprocessing.corrections.bias_correction.evaluate_bias_correction_against_sota_chm"
-
+cs.store(group='run', name='evaluate_bias_correction', node=EvaluateBiasCorrectionConfig)
 @dataclass
 class CreateVRTConfig(FunctionConfig):
     tile_list_file: str = '~/data/gvs/assets/worklists/total_tiles_2020.txt'
@@ -271,8 +293,6 @@ cs.store(group='run', name='make_parq_subcolumns', node=MakeParqSubcolumnsConfig
 cs.store(group='run', name='get_tiles_reblend', node=GetTilesReblendConfig)
 cs.store(group='run', name='repartition_data', node=RepartitionDataConfig)
 cs.store(group='run', name='extract_gedi_from_h5', node=ExtractGEDIFromH5Config)
-cs.store(group='run', name='extract_pred', node=ExtractPredConfig)
-cs.store(group='run', name='sample_vsm_patches', node=SampleVSMPatchesConfig)
 
 cs.store(group='run', name='check_after_bias_correction', node=CheckfterBiasCorrectionConfig)
 cs.store(group='run', name='check_two_partitioned_datasets', node=CheckTwoPartitionedDatasetsConfig)
@@ -280,10 +300,10 @@ cs.store(group='run', name='check_two_datasets', node=CheckTwoDatasetsConfig)
 cs.store(group='run', name='make_manifest', node=MakeManifestConfig)
 cs.store(group='run', name='add_ours_to_sota_gedi', node=AddOursToSOTAGEDIConfig)
 cs.store(group='run', name='add_ours_blended_to_sota_gedi', node=AddOursBlendedToSOTAGEDIConfig)
-cs.store(group='run', name='evaluate_bias_correction', node=EvaluateBiasCorrectionConfig)
+
 cs.store(group='run', name='get_tiles_wo_enough_gedi_gt', node=GetTilesWooEnoughGEDIConfig)
 cs.store(group='run', name='run_blending', node=RunBlendingConfig)
-cs.store(group='run', name='add_biome', node=AddBiomeConfig)
+
 cs.store(group='run', name='create_distance_maps', node=CreateDistanceMapsConfig)
 cs.store(group='run', name='create_vrt', node=CreateVRTConfig)
 cs.store(group='run', name='translate_predictions', node=TranslatePredictionsConfig)

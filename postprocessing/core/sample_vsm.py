@@ -129,6 +129,11 @@ def _sample_tile_points(loc_file: Path, pred_dir: Path, out_file: Path, rh_idxs:
     '''
     Extract the RH profile from the tif files
     '''
+    if pred_dir is None:  # tile not in stac collection (see _resolve_vsm_path)
+        return
+    if not loc_file.exists():
+        print(f'{loc_file} not found, skipping')
+        return
     if out_file.exists():
         return
     loc_df = gpd.read_parquet(loc_file)
@@ -169,7 +174,7 @@ def _sample_tile_points(loc_file: Path, pred_dir: Path, out_file: Path, rh_idxs:
     preds = np.where(preds == nodata, np.nan, preds)
     vsm_cols = [f'RH{i}_Q{j}' for i in rh_idxs for j in q_idxs]
     _df = pd.DataFrame(preds/10., index=loc_df.index, columns=vsm_cols)
-    df = loc_df.join(_df)
+    df = loc_df[['shot_number', 'geometry']].join(_df) # keep shot_number and geometry for alignment
     df = gpd.GeoDataFrame(df, geometry='geometry', crs="EPSG:4326")
     df = df.to_crs(epsg=4326)
     df.to_parquet(out_file)
@@ -396,10 +401,12 @@ def sample_points(
         save_dir: str = None,
         stac_col_dir: str = None,
         year: int = 2020,
-        rh_idxs: List[int] = np.arange(101),
+        # rh_idxs: List[int] = np.arange(101),
         **kwargs):
     '''extract predictions and add biome info for conformal prediction
     '''
+    rh_idxs = np.arange(101)
+    q_idxs = np.arange(3)
     loc_dir = Path(loc_dir).expanduser()
     stac_col_dir = Path(stac_col_dir).expanduser()
     save_dir = Path(save_dir).expanduser()
@@ -417,10 +424,12 @@ def sample_points(
     # all_tiles = ['48RWN']
     tasks = []
     for tile_id in all_tiles:
+        # pred_dir = _resolve_vsm_path(stac_col_dir, tile_id, year, return_stac_item=False)
         pred_dir = dask.delayed(_resolve_vsm_path)(stac_col_dir, tile_id, year, return_stac_item=False)
         out_file = save_dir / f'{tile_id}.parquet'
         loc_file = loc_dir / f'{tile_id}.parquet'
-        tasks.append(dask.delayed(_sample_tile_points)(loc_file, pred_dir, out_file, rh_idxs))
+        tasks.append(dask.delayed(_sample_tile_points)(loc_file, pred_dir, out_file, rh_idxs, q_idxs))
+        # _sample_tile_points(loc_file, pred_dir, out_file, rh_idxs, q_idxs)
     with ProgressBar():
         dask.compute(*tasks)
 

@@ -9,13 +9,6 @@ from omegaconf import OmegaConf, MISSING
 from config.base_config_class import ClassConfig, FunctionConfig
 
 
-@dataclass
-class UpdateReadmeConfig(FunctionConfig):
-    data_dir: str = '~/data/gvs/assets'
-    dry_run: bool = False
-    _target_: str = "tools.update_readme.update_all_readmes"
-
-
 defaults = [
     {'run': 'update_readme'}, # default group
     "_self_"
@@ -27,7 +20,23 @@ class RunConfig:
     run: Any = MISSING
     
 cs = ConfigStore.instance()
+
+@dataclass
+class UpdateReadmeConfig(FunctionConfig):
+    data_dir: str = '~/data/gvs/assets'
+    dry_run: bool = False
+    _target_: str = "tools.update_readme.update_all_readmes"
 cs.store(group='run', name='update_readme', node=UpdateReadmeConfig)
+
+
+@dataclass
+class AddColsFromDirConfig(FunctionConfig):
+    target_dir: str = '/projects/dereeco/data/gvs/gedi/veg_sensitivity_gt0p95/subset_cal/original_with_ours_biome/2020'
+    source_dir: str = '/projects/dereeco/data/gvs/gedi/veg_sensitivity_gt0p95/subset_cal/original_with_sota_chms/2020'
+    validate_cols: List = field(default_factory=lambda: ['shot_number', 'geometry'])
+    _target_: str = 'tools.parq_ops.add_columns_from_dir'
+cs.store(group='run', name='add_cols_from_dir', node=AddColsFromDirConfig)
+
 # ================================ Main Config ================================
 cs.store(name='base_config', node=RunConfig) # NOTE: name here should match the default in ../config/base/no_log.yaml
 

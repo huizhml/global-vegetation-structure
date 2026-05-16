@@ -2,6 +2,7 @@ import os
 import ee
 import json
 import logging
+from typing import List
 from pathlib import Path
 from datetime import datetime
 from collections import defaultdict
@@ -562,4 +563,44 @@ class GEDI(DaskDownloader):
 
         tiles_covered_by_gedi = s2_tiles[s2_tiles.intersects(gedi_table_index['geometry'])]['Name'].unique()
         tiles_covered_by_gedi.to_csv(self.save_dir / 'tiles_covered_by_gedi.txt', header=None, index=None, sep=' ', mode='w')
+
+
+def get_unique_shotnumbers(tiles: List[Path]):
+    
+    records = []
+    for t in tiles:
+        shots = pq.read_table(t, columns=["shot_number"]).to_pandas()
+        shots["_tile"] = t.name
+        records.append(shots)
+
+    all_shots = pd.concat(records)
+    print(f"Total rows: {len(all_shots)}, unique shot_number: {all_shots['shot_number'].nunique()}")
+
+    # 每个 shot_number 只保留第一个出现的 tile
+    keep = all_shots.drop_duplicates(subset=["shot_number"], keep="first")
+    print(f'Before: {len(all_shots)}, after: {len(keep)}')
+    import ipdb; ipdb.set_trace()
+    return keep
+
+
+def dedup_shots(parq_dir: str, **kwargs):
+    '''
+    Remove duplicated shoots. Not applied, for furture use
+    '''
+    parq_dir = Path(parq_dir).expanduser()
+    tiles = sorted(parq_dir.glob("*.parquet"))
+    keep = get_unique_shotnumbers(tiles)
+    for t in tiles:
+        tile_name = t.name
+        keep_shots = keep[keep["_tile"] == tile_name]["shot_number"]
+        
+        df = pd.read_parquet(t)
+        before = len(df)
+        df = df[df["shot_number"].isin(keep_shots.values)]
+        after = len(df)
+        
+        if before != after:
+            print(f"{tile_name}: {before} → {after} (removed {before - after})")
+            df.to_parquet(str(t) + ".tmp")
+            os.replace(str(t) + ".tmp", str(t))
 

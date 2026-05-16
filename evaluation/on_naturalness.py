@@ -540,7 +540,7 @@ def cal_vsm_patch_stats(ref_by_tile_dir: str, vsm_patches_dir: str, save_dir: st
     return
 
 # ----------------------------------------------------------------------------------------
-#  Step 3. Merge patch statistics from different data -- tools.parq_ops.merge_parq_cols
+#  Step 3. Merge patch statistics from different data -- tools.parq_ops.merge_columns_from_files
 # ----------------------------------------------------------------------------------------
 # ----------------------------------------------------------------------------------------
 #  Step 4. Run classification

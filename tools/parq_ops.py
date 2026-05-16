@@ -1,8 +1,19 @@
+from typing import List
+import os
 import pandas as pd
+import geopandas as gpd
 import dask.dataframe as dd
 from pathlib import Path
 from omegaconf import OmegaConf
 import omegaconf.listconfig
+import pyarrow.parquet as pq
+import dask
+from dask.diagnostics import ProgressBar
+
+def is_geoparquet(path) -> bool:
+    schema = pq.read_schema(path)
+    meta = schema.metadata or {}
+    return b'geo' in meta
 
 
 def make_parq_subcolumns(parq_dir: str, subcolumns: list[str], save_fp: str = None, **kwargs):
@@ -27,9 +38,10 @@ def make_parq_subcolumns(parq_dir: str, subcolumns: list[str], save_fp: str = No
     return df
 
 
-def merge_parq_cols(parq_dir: str, filename_pattern: str = '*.parquet',
+def merge_columns_from_files(parq_dir: str, filename_pattern: str = '*.parquet',
                       save_fp: str = None, **kwargs) -> pd.DataFrame:
     '''
+    Merge multiple parquet files in a directory by joining new columns.
     Merge per-data-type patch stats parquets into a single table, joined on rowid.
     Shared columns, are taken from the first file.
     '''
@@ -50,3 +62,79 @@ def merge_parq_cols(parq_dir: str, filename_pattern: str = '*.parquet',
         save_fp.parent.mkdir(parents=True, exist_ok=True)
         df.to_parquet(save_fp)
     return df
+
+def check_missing_files(target_files, source_files):
+    target_names = {f.name for f in target_files}
+    source_names = {f.name for f in source_files}
+    missing = target_names - source_names
+    assert not missing, f'Files in target but not in source: {missing}'
+
+def _already_processed(target_file: Path, source_file: Path) -> bool:
+    target_schema = pq.read_schema(target_file)
+    source_schema = pq.read_schema(target_file)
+    new_cols = set(source_schema.names) - set(target_schema.names)
+    return len(new_cols) == 0
+
+
+def add_columns_from_dir(target_dir: str, source_dir: str, validate_cols: List[str], **kwargs):
+    '''
+    Add cols from source_dir into target_dir and write back to target_dir.
+    The parquet filenames should match for the two directories.
+    '''
+    target_dir = Path(target_dir).expanduser()
+    source_dir = Path(source_dir).expanduser()
+    target_files = sorted(target_dir.glob('*.parquet'))
+    source_files = sorted(source_dir.glob('*.parquet'))
+    # check_missing_files(target_files, source_files)
+    # remove tmp files
+    for tmp in target_dir.glob("*.tmp"):
+        tmp.unlink()
+    
+
+    is_geo = is_geoparquet(target_files[0])
+    read_fn = gpd.read_parquet if is_geo else pd.read_parquet
+    filenames = [f.name for f in target_files]
+    filenames = [fn for fn in filenames if not _already_processed(target_dir /fn, source_dir/fn)]
+    print(f"{len(filenames)} files to process, rest already done")
+
+    def _update(filename: str):
+        target_path = target_dir / filename
+        source_path = source_dir / filename
+        if not source_path.exists():
+            df1 = read_fn(target_path)
+            return 
+        # assert source_path.exists(), f'{filename} not found in {source_dir}'
+
+        df1 = read_fn(target_path)
+        df2 = read_fn(source_path)
+        df1 = df1.to_crs('EPSG:4326')
+        df2 = df2.to_crs('EPSG:4326')
+        assert len(df1) == len(df2), f'Row count mismatch for {filename}'
+
+        for col in validate_cols:
+            if col == 'geometry':
+                # assert (df1.geometry.x.values == df2.geometry.x.values).all(), \
+                #     f'geometry.x not aligned for {filename}'
+                assert df1.geometry.geom_equals_exact(df2.geometry, tolerance=1e-10).all(), f'geometry not aligned for {filename}'
+            else:
+                assert (df1[col].values == df2[col].values).all(), \
+                    f'{col} not aligned for {filename}'
+
+        new_cols = df2.columns.difference(df1.columns)
+        df = pd.concat([df1, df2[new_cols]], axis=1)
+
+        if is_geo:
+            df = gpd.GeoDataFrame(df, geometry='geometry', crs='EPSG:4326')
+            df.to_parquet(str(target_path) + '.tmp')
+        else:
+            df.to_parquet(str(target_path) + '.tmp')
+        os.replace(str(target_path) + '.tmp', target_path)
+
+    # filenames = [f for f in filenames if '43RBN.parquet' in f]
+    # _update(filenames[0])
+    tasks = [dask.delayed(_update)(fn) for fn in filenames]
+    with ProgressBar():
+        dask.compute(*tasks)
+    
+
+

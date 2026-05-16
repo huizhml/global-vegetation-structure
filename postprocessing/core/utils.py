@@ -1,4 +1,4 @@
-
+import glob
 import os
 from osgeo import gdal
 from pathlib import Path
@@ -60,3 +60,28 @@ def generate_run_log(log_file: str, run_config: OmegaConf, runtime: float):
 
     return log_file
     
+    
+def create_vrt_for_tile(tile_dir, vrt_path, q_idx="1"):
+    tile_dir = Path(tile_dir).expanduser()
+    vrt_path = Path(vrt_path).expanduser()
+    vrt_path.parent.mkdir(parents=True, exist_ok=True)
+
+    tile_id = tile_dir.stem
+    files = sorted(
+        glob.glob(f"{tile_dir}/RH*_Q{q_idx}.tif"),
+        key=lambda x: int(x.split("RH")[-1].split("_")[0]),
+    )
+    files = files[:100]
+    print(f"Creating VRT for {tile_id} with {len(files)} files")
+    assert len(files) == 100, f"Expected 100 files, found {len(files)}"
+
+    vrt_options = gdal.BuildVRTOptions(separate=True)
+    vrt = gdal.BuildVRT(str(vrt_path), files, options=vrt_options)
+
+    for i in range(1, len(files) + 1):
+        band = vrt.GetRasterBand(i)
+        band.SetDescription(f"RH{i - 1}")
+
+    vrt.FlushCache()
+    vrt = None
+    return vrt_path
