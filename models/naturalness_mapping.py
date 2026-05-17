@@ -8,15 +8,21 @@ from pathlib import Path
 from kornia.enhance import normalize
 from wandb.plot.custom_chart import plot_table
 
+from const import VSM_NODATA
+from datasets.h5_dataset import resolve_rh_idxs, resolve_diversity, diversity_indices_torch
+
 class NaturalnessMapping(LightningModule):
-    def __init__(self, 
+    def __init__(self,
                  transform: nn.Module = None,
                  loss_fc: nn.Module = None,
                  backbone: nn.Module = None,
                  mean_std_fp: str = None,
+                 rh_idxs='rh98',
+                 use_s2: bool = False,
+                 diversity=None,
                  **kwargs):
         super(NaturalnessMapping, self).__init__()
-        
+
         self.loss_fc = loss_fc
         self.transform = transform
         # self.backbone = backbone
@@ -24,35 +30,48 @@ class NaturalnessMapping(LightningModule):
             for name, module in backbone.named_children():
                 setattr(self, name, module)
         self.forward = backbone.forward
-        
-        # Get mean and std of the input data
+
+        # Input composition mirrors NaturalnessDataModule's three knobs:
+        # rh_idxs (which RH bands) + use_s2 (concat Sentinel-2) + diversity
+        # (which RH-derived indices). Auto-wired from the data config in run.py,
+        # so the model can never disagree with the dataset. The dataset serves
+        # the full 101 profile; selection / diversity / concat happen here on
+        # GPU (see on_after_batch_transfer).
+        self.rh_idxs = resolve_rh_idxs(rh_idxs)
+        self.use_s2 = use_s2
+        self.div_idxs = resolve_diversity(diversity)
+        self.n_rh = len(self.rh_idxs)
+        self.n_div = len(self.div_idxs)
+        # Index tensors as (non-persistent) buffers so Lightning moves them to
+        # the batch device; not learned, so kept out of the checkpoint.
+        self.register_buffer('rh_idx_t', torch.as_tensor(self.rh_idxs, dtype=torch.long), persistent=False)
+        self.register_buffer('div_idx_t', torch.as_tensor(self.div_idxs, dtype=torch.long), persistent=False)
+
+        # Channel order is S2 -> RH -> diversity, applied identically here and
+        # in on_after_batch_transfer: [s2(12)..., rh(n_rh)..., div(n_div)...].
         mean_std_fp = Path(mean_std_fp).expanduser()
         if not mean_std_fp.exists():
             raise ValueError(f'Mean and std file {mean_std_fp} does not exist')
         file = np.load(mean_std_fp)
-        if backbone.in_channels == 1: # rh98 only
-            self.mean = file['mean'][98:99]
-            self.std = file['std'][98:99]
-        if backbone.in_channels == 12: # s2 only
-            self.mean = file['mean_s2']
-            self.std = file['std_s2']
-        elif backbone.in_channels == 13: # s2 and rh98
-            mean_top_height = file['mean'][98:99]
-            std_top_height = file['std'][98:99]
-            mean_s2 = file['mean_s2']
-            std_s2 = file['std_s2']
-            self.mean = np.concatenate([mean_s2, mean_top_height], axis=0)
-            self.std = np.concatenate([std_s2, std_top_height], axis=0)
-        elif backbone.in_channels == 101: # rhs only
-            self.mean = file['mean']
-            self.std = file['std']
-        elif backbone.in_channels == 113: # s2 and rhs
-            mean_top_height = file['mean'][98:99]
-            std_top_height = file['std'][98:99]
-            mean_s2 = file['mean_s2']
-            std_s2 = file['std_s2']
-            self.mean = np.concatenate([mean_s2, mean_top_height], axis=0)
-            self.std = np.concatenate([std_s2, std_top_height], axis=0)
+        mean_parts, std_parts = [], []
+        if self.use_s2:
+            mean_parts.append(np.asarray(file['mean_s2']))
+            std_parts.append(np.asarray(file['std_s2']))
+        if self.n_rh > 0:
+            mean_parts.append(np.asarray(file['mean'])[self.rh_idxs])
+            std_parts.append(np.asarray(file['std'])[self.rh_idxs])
+        if self.n_div > 0:
+            if 'mean_div' not in file.files:
+                raise ValueError(
+                    f'{mean_std_fp} has no diversity stats (mean_div/std_div). '
+                    'Regenerate with step6_calculate_naturalness_stats (it now '
+                    'also computes diversity-index stats).')
+            mean_parts.append(np.asarray(file['mean_div'])[self.div_idxs])
+            std_parts.append(np.asarray(file['std_div'])[self.div_idxs])
+        if not mean_parts:
+            raise ValueError('No input channels: rh_idxs empty, use_s2 False, diversity None')
+        self.mean = np.concatenate(mean_parts, axis=0)
+        self.std = np.concatenate(std_parts, axis=0)
 
         # Overall metrics
         self.val_metrics_veg = None
@@ -76,6 +95,41 @@ class NaturalnessMapping(LightningModule):
     def normalize(self, x):
         return normalize(x, self.mean, self.std)
 
+    def on_after_batch_transfer(self, batch, dataloader_idx):
+        '''Build + normalise the model input on-GPU from the full profile the
+        dataset serves: select RH bands, derive diversity, concat in the SAME
+        order as self.mean/std -> [s2..., rh..., div...], normalise, then zero
+        the RH/diversity channels at nodata pixels (Plan C).
+
+        RH nodata is whole-pixel (all 101 bands share it). Zeroing AFTER
+        normalisation makes a nodata pixel exactly 0 == the per-channel mean
+        (mean/std were computed excluding nodata), so conv / BatchNorm never
+        see the raw VSM_NODATA outlier. No explicit mask channel: the net
+        infers "no data" from the all-zero RH.
+
+        S2 is NOT zeroed: it has its own validity (still observed over water /
+        built-up where RH is masked), so the RH mask must not touch it.
+        '''
+        vsm, s2, y = batch
+        # whole-pixel RH validity (any band carries it; use band 0) -> (B,1,H,W)
+        valid = vsm[:, :1] != VSM_NODATA
+        parts = []
+        if self.use_s2:
+            parts.append(s2.float())
+        if self.n_rh > 0:
+            parts.append(vsm[:, self.rh_idx_t].float())
+        if self.n_div > 0:
+            div = diversity_indices_torch(vsm)[:, self.div_idx_t]
+            parts.append(torch.nan_to_num(div, nan=0.0))
+        x = torch.cat(parts, dim=1) if len(parts) > 1 else parts[0]
+        x = self.normalize(x.float())
+        # Zero ONLY the RH(+diversity) channels at nodata pixels (in-place slice
+        # assignment, no cat); the S2 block (first 12 channels iff use_s2) is
+        # left untouched. torch.where broadcasts valid (B,1,H,W) and 0.0.
+        s2_c = 12 if self.use_s2 else 0
+        x[:, s2_c:] = torch.where(valid, x[:, s2_c:], 0.0)
+        return x, y
+
 
     # def on_load_checkpoint(self, checkpoint):
     #     sd = checkpoint.get('state_dict', {})
@@ -90,29 +144,16 @@ class NaturalnessMapping(LightningModule):
         self.val_metrics.reset()
     
     def training_step(self, batch, batch_idx):
-        rhs, s2, y = batch
-        if self.mean.shape[0] == 1 or self.mean.shape[0] == 101:
-            x = rhs
-        elif self.mean.shape[0] == 12:
-            x = s2
-        elif self.mean.shape[0] == 13 or self.mean.shape[0] == 113:
-            x = torch.cat([rhs, s2], dim=1)
-        x = self.normalize(x.float())
+        x, y = batch  # composed + normalised by on_after_batch_transfer
         y_hat = self(x)
         loss = self.loss_fc(y_hat[:, :, 7,7], y)
         self.log('train.loss', loss)
         self.train_metrics(y_hat[:, :, 7,7], y)
         return loss
-    
+
     def validation_step(self, batch, batch_idx):
-        rhs, s2, y = batch
-        if self.mean.shape[0] == 1 or self.mean.shape[0] == 101:
-            x = rhs
-        elif self.mean.shape[0] == 12:
-            x = s2
-        elif self.mean.shape[0] == 13 or self.mean.shape[0] == 113:
-            x = torch.cat([rhs, s2], dim=1)
-        y_hat = self(x.float())
+        x, y = batch  # composed + normalised by on_after_batch_transfer
+        y_hat = self(x)
         loss = self.loss_fc(y_hat[:, :, 7,7], y)
         self.log('val.loss', loss)
         self.val_metrics(y_hat[:, :, 7,7], y)

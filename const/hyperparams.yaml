@@ -118,7 +118,7 @@ rh100_index: 301
 rh98_index: 295
 
 key_rhs: [0, 10, 25, 50, 75, 95, 98, 100]      # full set (postprocessing)
-key_rhs_eval: [25, 50, 75, 95, 98]             # subset used in diversity-index eval
+key_rhs_eval: [25, 50, 75, 90, 95, 98]             # subset used in diversity-index eval
 
 
 # ---------------------------------------------------------------------------

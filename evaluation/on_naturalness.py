@@ -19,7 +19,7 @@ import xgboost as xgb
 import warnings
 from evaluation.utils import load_vsm_naturalness
 from evaluation.on_diversity_indices import _chunk_diversity
-from const import VSM_NODATA
+from const import VSM_NODATA, KEY_RHS_EVAL
 warnings.filterwarnings('ignore')
 warnings.filterwarnings(action='ignore', category=DeprecationWarning)
 pd.set_option('display.max_columns', None)
@@ -600,7 +600,7 @@ def run_classification(classifier: str, patch_stats_dir: str,  save_dir: str, **
         'full_profile': [f'std_vsm_band{i}' for i in range(101)] + [f'avg_vsm_band{i}' for i in range(101)],
         'rh98_s2': [f'std_s2_band{i}' for i in range(12)] + [f'avg_s2_band{i}' for i in range(12)] + ['std_vsm_band98', 'avg_vsm_band98'],
         # 's2_only': [f'std_s2_band{i}' for i in range(12)] + [f'avg_s2_band{i}' for i in range(12)],
-        'key_rhs': [f'std_vsm_band{i}' for i in [25, 50, 75, 90, 95, 98]] + [f'avg_vsm_band{i}' for i in [25, 50, 75, 90, 95, 98]],
+        'key_rhs': [f'std_vsm_band{i}' for i in KEY_RHS_EVAL] + [f'avg_vsm_band{i}' for i in KEY_RHS_EVAL],
         'rh98_cr': ['std_vsm_band98', 'avg_vsm_band98'] + [f'{metric}_{var}' for metric in ['std', 'avg'] for var in ['cr']],
         'rh98_fhd': ['std_vsm_band98', 'avg_vsm_band98'] + [f'{metric}_{var}' for metric in ['std', 'avg'] for var in ['fhd']],
         'rh98_enl2d': ['std_vsm_band98', 'avg_vsm_band98'] +[f'{metric}_{var}' for metric in ['std', 'avg'] for var in ['enl2d']],

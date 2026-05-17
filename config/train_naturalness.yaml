@@ -3,12 +3,12 @@ optimizer:
   class_path: torch.optim.Adam
   init_args:
     lr: 0.0001
-    weight_decay: 0.01 # 0.0001
+    weight_decay: 0.05 # 0.0001
 lr_scheduler:
   class_path:  models._scheduler.ChainedScheduler # torch.optim.lr_scheduler.StepLR
   init_args:
-    warmup_steps: 460 # 10 epochs, 1800
-    T_0: 9200 # 36000
+    warmup_steps: 1010 # 10 epochs, 2020, was 1800
+    T_0: 40400 # 36000
     eta_min: 1e-6
     max_lr: 0.0001
     gamma: 0.2
@@ -17,10 +17,12 @@ lr_scheduler:
 data:
   class_path: datasets.h5_dataset.NaturalnessDataModule
   init_args: 
-    h5_file: ~/data/gvs/downstream_task_data/rhs_predictions_2017_izraz2av.h5
+    data_file: ~/data/gvs/downstream_task_data/rhs_predictions_2017_izraz2av.h5
     naturalness_fp: ~/data/gvs/downstream_task_data/naturalness/reference_data_set_updated.csv
-    use_full_profile: True
-    num_workers: 4
+    rh_idxs: full_profile
+    use_s2: false
+    diversity: null   # null | all | [fhd, enl1d, enl2d, cr]  (RH-derived, computed on GPU)
+    num_workers: 0
     batch_size: 1024 # per device
 
 model:
@@ -40,7 +42,7 @@ trainer:
   # check_val_every_n_epoch: 1
   max_epochs: 200
   num_sanity_val_steps: 0
-  reload_dataloaders_every_n_epochs: 1
+  reload_dataloaders_every_n_epochs: 0  # naturalness preloads into RAM once; rebuilding每epoch会重载~11GB
   # fast_dev_run: 100
   # profiler: advanced
   # profiler: simple
