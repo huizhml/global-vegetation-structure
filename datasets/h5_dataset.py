@@ -417,6 +417,10 @@ class NaturalnessDataset(Dataset):
             # Targets aligned to the same (file-order) selection; precomputed
             # once. Assumes target_df.index (rowid) is unique.
             self.targets = target_df.loc[rowids[mask], 'class_idx'].to_numpy()
+            # Same file-order selection -> aligned with vsm/s2/targets row i.
+            # Always emitted as the 4th item so predictions can be joined back
+            # to the reference_data_set CSV (lat/lon, biome, ...) by rowid.
+            self.rowids = rowids[mask].astype(np.int64)
         finally:
             close = getattr(store, 'close', None)
             if callable(close):
@@ -428,37 +432,9 @@ class NaturalnessDataset(Dataset):
     def __getitem__(self, idx):
         # Pure in-memory; full 101-band profile (RH selection + diversity happen
         # model-side on GPU). numpy -> default_collate -> int16/int64 tensors.
-        return self.vsm[idx], self.s2[idx], self.targets[idx]
+        # rowid is always the 4th item; train/val steps ignore it, test emits it.
+        return self.vsm[idx], self.s2[idx], self.targets[idx], self.rowids[idx]
             
-
-# Not used, integrated into the model, 2025-09-15
-class Normalize(nn.Module):
-    def __init__(self, rhs_only:bool=False, input_rhs:bool=False, input_top_height:bool=False, mean_std_fp:str=None):
-        super().__init__()
-        mean_std_fp = Path(mean_std_fp).expanduser()
-        if not mean_std_fp.exists():
-            raise ValueError(f'Mean and std file {mean_std_fp} does not exist')
-        file = np.load(mean_std_fp)
-        if rhs_only:
-            self.mean = file['mean']
-            self.std = file['std']
-            return
-        self.mean = file['mean_s2']
-        self.std = file['std_s2']
-        if input_rhs:
-            self.mean_rhs = file['mean']
-            self.std_rhs = file['std']
-            self.mean = np.concatenate([self.mean_rhs, self.mean], axis=0)
-            self.std = np.concatenate([self.std_rhs, self.std], axis=0)
-        if input_top_height:
-            self.mean_top_height = file['mean'][98:99]
-            self.std_top_height = file['std'][98:99]
-            self.mean = np.concatenate([self.mean, self.mean_top_height], axis=0)
-            self.std = np.concatenate([self.std, self.std_top_height], axis=0)
-
-    @torch.no_grad()
-    def forward(self, x) -> Tensor:
-        return normalize(x.float(), self.mean, self.std)
 
 class NaturalnessDataModule(LightningDataModule):
     def __init__(self, data_file: str = None, naturalness_fp: str = None, rh_idxs='rh98',
@@ -488,7 +464,8 @@ class NaturalnessDataModule(LightningDataModule):
             53: 6   # Agroforestry. 
         }
         data_file = Path(data_file).expanduser()
-        
+        self.data_file = data_file  # exposed so prediction callbacks can write beside it
+
         if data_file.suffix == '.zarr':
             rowids_with_valid_vsm = zarr.open(data_file, mode='r')['rowid'][:]
         else:
@@ -532,7 +509,6 @@ class NaturalnessDataModule(LightningDataModule):
 
         self.train_dataset = NaturalnessDataset(data_file, self.target_df_train)
         self.val_dataset = NaturalnessDataset(data_file, self.target_df_val)
-
         # Create reverse mapping for reference
         self.id_to_land_use = {v: k for k, v in self.land_use_mapping.items()}
 
@@ -588,6 +564,12 @@ class NaturalnessDataModule(LightningDataModule):
         return DataLoader(self.val_dataset, shuffle=False, drop_last=False,
                           **self._loader_kwargs())
 
+
+
+def check_naturalness_data_distribution(data_file: str):
+    data_file = Path(data_file).expanduser()
+    
+    return
 
 class S2Dataset(Dataset):
 
