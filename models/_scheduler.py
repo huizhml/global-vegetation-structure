@@ -55,6 +55,33 @@ class CosineScheduler(LambdaLR):
     
 
 
+class ConstantLRScheduler(LRScheduler):
+    """
+    Holds the learning rate constant at whatever value it had at the moment
+    this scheduler takes over. Used as the final stage of ChainedScheduler so
+    that the LR stops changing once training passes the T_0 milestone.
+    """
+
+    def __init__(self, optimizer: torch.optim.Optimizer, last_epoch=-1):
+        self._frozen_lrs = None
+        super(ConstantLRScheduler, self).__init__(optimizer, last_epoch)
+
+    def get_last_lr(self):
+        if self._frozen_lrs is None:
+            return [group['lr'] for group in self.optimizer.param_groups]
+        return list(self._frozen_lrs)
+
+    def step(self, epoch=None):
+        # SequentialLR calls `step(0)` exactly when it switches into this
+        # scheduler at the milestone; capture the current (cosine) LR at that
+        # moment and freeze it for the rest of training.
+        if epoch == 0 or self._frozen_lrs is None:
+            self._frozen_lrs = [group['lr'] for group in self.optimizer.param_groups]
+        for param_group, lr in zip(self.optimizer.param_groups, self._frozen_lrs):
+            param_group['lr'] = lr
+        self.last_epoch = self.last_epoch + 1 if epoch is None else epoch
+
+
 class WarmUpScheduler(LRScheduler):
     """
     From: https://github.com/saadnaeem-dev/pytorch-linear-warmup-cosine-annealing-warm-restarts-weight-decay/blob/main/linear_warmup_cosine_annealing_warm_restarts_weight_decay/lr_scheduler.py
@@ -312,8 +339,16 @@ class ChainedScheduler(SequentialLR):
             max_lr=self.max_lr,
             gamma=self.gamma,
         )
-        
-        super(ChainedScheduler, self).__init__(optimizer, [self.cosine_scheduler1, self.cosine_scheduler2], milestones=[warmup_steps], last_epoch=last_epoch)
+        # Third stage: once we reach T_0 steps, freeze the LR at its current
+        # value so it stays unchanged for the remainder of training.
+        self.constant_scheduler3 = ConstantLRScheduler(optimizer)
+
+        super(ChainedScheduler, self).__init__(
+            optimizer,
+            [self.cosine_scheduler1, self.cosine_scheduler2, self.constant_scheduler3],
+            milestones=[warmup_steps, self.T_0],
+            last_epoch=last_epoch,
+        )
         
     # @property
     # def optimizer(self, epoch=None):

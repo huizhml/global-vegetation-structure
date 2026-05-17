@@ -110,7 +110,7 @@ class NaturalnessMapping(LightningModule):
         S2 is NOT zeroed: it has its own validity (still observed over water /
         built-up where RH is masked), so the RH mask must not touch it.
         '''
-        vsm, s2, y = batch
+        vsm, s2, y, *extra = batch  # extra == [rowid]; passed through untouched
         # whole-pixel RH validity (any band carries it; use band 0) -> (B,1,H,W)
         valid = vsm[:, :1] != VSM_NODATA
         parts = []
@@ -128,7 +128,8 @@ class NaturalnessMapping(LightningModule):
         # left untouched. torch.where broadcasts valid (B,1,H,W) and 0.0.
         s2_c = 12 if self.use_s2 else 0
         x[:, s2_c:] = torch.where(valid, x[:, s2_c:], 0.0)
-        return x, y
+        # (x, y) for train/val; (x, y, rowid) for test (extra passed through).
+        return (x, y, *extra)
 
 
     # def on_load_checkpoint(self, checkpoint):
@@ -144,7 +145,7 @@ class NaturalnessMapping(LightningModule):
         self.val_metrics.reset()
     
     def training_step(self, batch, batch_idx):
-        x, y = batch  # composed + normalised by on_after_batch_transfer
+        x, y, *_ = batch  # composed + normalised by on_after_batch_transfer; rowid unused
         y_hat = self(x)
         loss = self.loss_fc(y_hat[:, :, 7,7], y)
         self.log('train.loss', loss)
@@ -152,12 +153,21 @@ class NaturalnessMapping(LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx):
-        x, y = batch  # composed + normalised by on_after_batch_transfer
+        x, y, *_ = batch  # composed + normalised by on_after_batch_transfer; rowid unused
         y_hat = self(x)
         loss = self.loss_fc(y_hat[:, :, 7,7], y)
         self.log('val.loss', loss)
         self.val_metrics(y_hat[:, :, 7,7], y)
         return loss
+
+    def test_step(self, batch, batch_idx):
+        # rowid is the join key back to reference_data_set (lat/lon, biome...).
+        # Returned tuple becomes `outputs` in the prediction-logger callback's
+        # on_test_batch_end (same contract as callbacks.prediction_logger).
+        x, y, rowid = batch  # composed + normalised by on_after_batch_transfer
+        logits = self(x)[:, :, 7, 7]            # center pixel, (B, n_classes)
+        probs = torch.softmax(logits, dim=1)
+        return probs, y, rowid
     
     def on_validation_epoch_end(self):
         val_metrics = self.val_metrics.compute()

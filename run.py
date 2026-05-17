@@ -163,7 +163,9 @@ class MyLightningCLI(LightningCLI):
                 val_fp = copy.copy(config.data.init_args.val_fp)
                 cal_fp = copy.copy(config.data.init_args.cal_fp)
             elif subcommand == "test":
-                test_fp = copy.copy(config.data.init_args.test_fp)
+                # NaturalnessDataModule has no test_fp (uses data_file); .get
+                # keeps the canopy-height path working while not crashing here.
+                test_fp = copy.copy(config.data.init_args.get('test_fp'))
             # # NOTE: resume run if training or validating or testing
             if not config.trainer.logger.init_args.resume:
                 # Create a new run,
@@ -213,7 +215,7 @@ class MyLightningCLI(LightningCLI):
             # check if training/validation data exists
             if subcommand == "fit" and (not os.path.exists(train_fp)):
                 self.config[subcommand].data.init_args.train_fp = train_fp
-            elif subcommand =='test':
+            elif subcommand == 'test' and test_fp is not None:
                 self.config[subcommand].data.init_args.test_fp = test_fp
 
             artifacts = run_.logged_artifacts()
