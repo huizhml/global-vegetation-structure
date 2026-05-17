@@ -15,11 +15,114 @@ import pandas as pd
 from lightning.pytorch import LightningDataModule
 
 from download.core.utils import get_epsg_from_tile, get_dense_latlon
-from const import VSM_NODATA, SCL_EXCLUDE_LABELS, SCL_WATER, ESA_BUILT_UP, ESA_WATER, ESA_SNOW
+from const import VSM_NODATA, SCL_EXCLUDE_LABELS, SCL_WATER, ESA_BUILT_UP, ESA_WATER, ESA_SNOW, KEY_RHS_EVAL, MAX_HEIGHT_METERS
 
 
 import zarr
 from zarr.codecs import BloscCodec, BloscShuffle
+
+# Named RH-band selectors. 'key_rhs' is the project-wide set from const
+# (KEY_RHS); presets keep YAML/hydra configs free of literal index lists,
+# while an explicit list is still accepted for ad-hoc experimentation.
+RH_PRESETS = {
+    'rh98': np.array([98]),
+    'key_rhs': np.asarray(KEY_RHS_EVAL),
+    'full_profile': np.arange(101),
+}
+
+
+def resolve_rh_idxs(rh_idxs='rh98') -> np.ndarray:
+    '''Normalise the RH-band selector to a 1-D int array.
+
+    rh_idxs may be a preset name ('rh98', 'key_rhs', 'full_profile') or an
+    explicit list/tuple/array of band indices. Idempotent, so an
+    already-resolved array can safely be passed back through it.
+    '''
+    if isinstance(rh_idxs, str):
+        try:
+            return RH_PRESETS[rh_idxs]
+        except KeyError:
+            raise ValueError(
+                f'Unknown rh_idxs preset {rh_idxs!r}; choose from '
+                f'{sorted(RH_PRESETS)} or pass an explicit list of ints')
+    return np.asarray(rh_idxs)
+
+
+# Diversity indices derived from the full 101-band RH profile, in fixed
+# stack order. Selected via the `diversity` knob (None / 'all' / list of names).
+DIVERSITY_NAMES = ('fhd', 'enl1d', 'enl2d', 'cr')
+
+
+def resolve_diversity(diversity) -> np.ndarray:
+    '''Normalise the diversity selector to indices into DIVERSITY_NAMES.
+
+    None -> [] (disabled); 'all' -> all four; a name or list of names ->
+    their stack positions. Order of the returned indices follows the request.
+    '''
+    if diversity is None:
+        return np.array([], dtype=int)
+    if isinstance(diversity, str):
+        if diversity == 'all':
+            return np.arange(len(DIVERSITY_NAMES))
+        diversity = [diversity]
+    idx = []
+    for name in diversity:
+        if name not in DIVERSITY_NAMES:
+            raise ValueError(
+                f'Unknown diversity index {name!r}; choose from '
+                f'{DIVERSITY_NAMES}, "all", or None')
+        idx.append(DIVERSITY_NAMES.index(name))
+    return np.asarray(idx, dtype=int)
+
+
+def diversity_indices_torch(vsm, nodata=VSM_NODATA, bin_width: float = 5.0,
+                            max_height: float = MAX_HEIGHT_METERS):
+    '''Per-pixel FHD / ENL1D / ENL2D / CR from a full RH profile, batched on
+    whatever device ``vsm`` is on (designed to run on GPU per training batch).
+
+    Numerically mirrors evaluation.on_diversity_indices.pixel_diversity_indices
+    (validated against it): equal-width histogram over [0, max_height] of the
+    valid RH values, then Shannon entropy and effective number of layers; CR
+    from RH25/RH98. Uniform bins -> a single vectorised scatter_add, no Python
+    per-pixel loop (unlike batch_binning's searchsorted), so it is cheap enough
+    to recompute every batch.
+
+    Args:
+        vsm: (B, 101, H, W) raw stored values (meters * 10), ``nodata`` sentinel.
+    Returns:
+        (B, 4, H, W) float tensor in DIVERSITY_NAMES order; invalid pixels NaN
+        (caller decides how to fill before feeding the backbone).
+
+    NOTE: RH25/RH98 use indices 25/98 (RH0..RH100 -> idx == RH number). The
+    legacy _chunk_diversity uses 24/97, which is an off-by-one; this follows
+    pixel_diversity_indices (25/98), the semantically correct one.
+    '''
+    vsm = vsm.float()
+    n_bins = int(max_height / bin_width)
+    valid = (vsm != nodata) & (vsm > 0)            # finite & >0, mirrors reference
+    rh_m = vsm / 10.0                              # raw (m*10) -> meters
+    bins = torch.clamp((torch.clamp(rh_m, max=max_height) / bin_width).long(),
+                       0, n_bins - 1)             # (B, 101, H, W)
+    B, _, H, W = vsm.shape
+    hist = torch.zeros(B, n_bins, H, W, device=vsm.device, dtype=torch.float32)
+    hist.scatter_add_(1, bins, valid.float())      # valid band count per bin/pixel
+    total = hist.sum(dim=1, keepdim=True)          # (B, 1, H, W)
+    p = hist / total.clamp(min=1.0)
+    logp = torch.where(p > 0, p.log(), torch.zeros_like(p))
+    fhd = -(p * logp).sum(dim=1)                   # (B, H, W)
+    enl1d = torch.exp(fhd)
+    sum_p2 = (p * p).sum(dim=1)
+    nan = torch.tensor(float('nan'), device=vsm.device)
+    enl2d = torch.where(sum_p2 > 0, 1.0 / sum_p2, nan)
+    rh25 = torch.clamp(rh_m[:, 25], min=0.0)
+    rh98 = rh_m[:, 98]
+    cr = torch.where(rh98 > 0, (rh98 - rh25) / rh98, nan)
+    # pixels with no valid band -> all indices NaN
+    no_valid = total.squeeze(1) <= 0               # (B, H, W)
+    out = torch.stack([fhd, enl1d, enl2d, cr], dim=1)  # (B, 4, H, W)
+    out = torch.where(no_valid.unsqueeze(1), nan, out)
+    return out
+
 
 def init_out_zarr(pred_fp: Path = None, length: int = None):
     if not os.path.exists(pred_fp):
@@ -270,40 +373,62 @@ class SparsePredDataModule(LightningDataModule):
 
 
 class NaturalnessDataset(Dataset):
-    def __init__(self, rhs_fp: str = None, target_df: pd.DataFrame = None, use_full_profile: bool = False, transform=None):
+    def __init__(self, rhs_fp: Path = None, target_df: pd.DataFrame = None,
+                 transform=None, _read_block: int = 8192):
         super().__init__()
-        self.rhs_fp = Path(rhs_fp).expanduser()
+        self.rhs_fp = rhs_fp
         self.target_df = target_df
         self.transform = transform
-        if use_full_profile:
-            self.idx = slice(None)
-        else:
-            self.idx = slice(98, 99)
-        
+        # The labelled naturalness set is small (~50 KB/sample at 15x15 int16)
+        # but the source is a chunk-by-1 compressed zarr -> per-sample random
+        # reads starve the (tiny) model's GPU (util ~0%). Preload ONCE into RAM
+        # here; __getitem__ is then pure in-memory indexing: no per-sample
+        # decompress, no pandas .loc, no per-worker file handles.
+        suffix = Path(self.rhs_fp).suffix
+        store = (zarr.open(str(self.rhs_fp), mode='r') if suffix == '.zarr'
+                 else h5py.File(self.rhs_fp, 'r'))
+        try:
+            from tqdm import tqdm
+            rowids = store['rowid'][:]
+            # target_df is a filtered/split SUBSET; keep only file rows whose
+            # rowid is in it. mask is over ALL file rows, in file order.
+            mask = np.isin(rowids, target_df.index.values)
+            n_total = len(rowids)
+            n = int(mask.sum())
+            vsm_ds, s2_ds = store['vsm_median'], store['s2']
+            # Keep int16 (no upcast) to bound RAM; model casts to float later.
+            self.vsm = np.empty((n, *vsm_ds.shape[1:]), dtype=vsm_ds.dtype)
+            self.s2 = np.empty((n, *s2_ds.shape[1:]), dtype=s2_ds.dtype)
+            # CONTIGUOUS block reads (vsm_ds[a:b]) then in-memory boolean subset
+            # -- sequential chunk decompression, far faster than scattered fancy
+            # indexing of a chunk-by-1 compressed store. Progress is shown so a
+            # slow filesystem doesn't look like a hang.
+            w = 0
+            for a in tqdm(range(0, n_total, _read_block),
+                          desc=f'preload {Path(self.rhs_fp).name}'):
+                b = min(a + _read_block, n_total)
+                m = mask[a:b]
+                k = int(m.sum())
+                if k == 0:
+                    continue
+                self.vsm[w:w + k] = vsm_ds[a:b][m]
+                self.s2[w:w + k] = s2_ds[a:b][m]
+                w += k
+            # Targets aligned to the same (file-order) selection; precomputed
+            # once. Assumes target_df.index (rowid) is unique.
+            self.targets = target_df.loc[rowids[mask], 'class_idx'].to_numpy()
+        finally:
+            close = getattr(store, 'close', None)
+            if callable(close):
+                close()
+
     def __len__(self):
-        if not hasattr(self, 'data'):
-            if self.rhs_fp.suffix == '.zarr':
-                self.data = zarr.open(str(self.rhs_fp), mode='r')
-            else:
-                self.data = h5py.File(self.rhs_fp)
-        return len(self.data['vsm_median'])
-    
+        return len(self.targets)
+
     def __getitem__(self, idx):
-        if not hasattr(self, 'data'):
-            if self.rhs_fp.suffix == '.zarr':
-                self.data = zarr.open(str(self.rhs_fp), mode='r')
-            else:
-                self.data = h5py.File(self.rhs_fp)
-        rhs = self.data['vsm_median'][idx, self.idx]
-        s2 = self.data['s2'][idx]
-        rowid = self.data['rowid'][idx]
-        # Return the mapped class index instead of original land use ID
-        target = self.target_df.loc[rowid, 'class_idx']
-        return rhs, s2, target
-    
-    def __del__(self):
-        if hasattr(self, 'data'):
-            self.data.close()
+        # Pure in-memory; full 101-band profile (RH selection + diversity happen
+        # model-side on GPU). numpy -> default_collate -> int16/int64 tensors.
+        return self.vsm[idx], self.s2[idx], self.targets[idx]
             
 
 # Not used, integrated into the model, 2025-09-15
@@ -336,13 +461,22 @@ class Normalize(nn.Module):
         return normalize(x.float(), self.mean, self.std)
 
 class NaturalnessDataModule(LightningDataModule):
-    def __init__(self, h5_file: str = None, naturalness_fp: str = None, use_full_profile: bool = False, 
-                 batch_size: int = 1, num_workers: int = 4, train_val_split: float = 0.8, 
+    def __init__(self, data_file: str = None, naturalness_fp: str = None, rh_idxs='rh98',
+                 use_s2: bool = False, diversity=None,
+                 batch_size: int = 1, num_workers: int = 4, train_val_split: float = 0.8,
                  class_balance: bool = False,
                  **kwargs):
         super().__init__()
         self.batch_size = batch_size
         self.num_workers = num_workers
+        # Three independent input knobs: rh_idxs (which RH bands), use_s2 (concat
+        # Sentinel-2), diversity (which RH-derived indices). The dataset just
+        # serves the full 101 profile + s2; selection / diversity / concat all
+        # happen model-side on GPU. backbone.in_channels and mean/std are derived
+        # from these (auto-wired in run.py before_instantiate_classes).
+        self.rh_idxs = resolve_rh_idxs(rh_idxs)
+        self.use_s2 = use_s2
+        self.diversity = diversity
         # Map original land use IDs to consecutive class indices
         self.land_use_mapping = {
             0: 0,   # No forest
@@ -353,46 +487,106 @@ class NaturalnessDataModule(LightningDataModule):
             40: 5,  # Oil palm plantations.  
             53: 6   # Agroforestry. 
         }
+        data_file = Path(data_file).expanduser()
         
-        self.target_df = pd.read_csv(naturalness_fp, index_col='rowid')
-        # remove unsure labels (-1) and labels with no high resolution images (1)
-        self.target_df = self.target_df[~self.target_df['Land_use_ID'].isin([1, -1])]
-        self.target_df['class_idx'] = self.target_df['Land_use_ID'].map(self.land_use_mapping)
-        # Fill NaN values with 0 (Unknown/No data class)
-        self.target_df['class_idx'] = self.target_df['class_idx'].fillna(0)
-        self.target_df['class_idx'] = self.target_df['class_idx'].astype(int)
-        self.target_df = self.target_df.astype({'class_idx': 'int64'})
+        if data_file.suffix == '.zarr':
+            rowids_with_valid_vsm = zarr.open(data_file, mode='r')['rowid'][:]
+        else:
+            with h5py.File(data_file) as f:
+                rowids_with_valid_vsm = f['rowid'][:]
+        
+        naturalness_fp = Path(naturalness_fp).expanduser()
+        # NOTE: .with_suffix() can't append '_train.csv' (it needs a leading
+        # dot and replaces the existing suffix), so build the names explicitly.
+        train_csv = naturalness_fp.with_name(f'{naturalness_fp.stem}_train.csv')
+        val_csv = naturalness_fp.with_name(f'{naturalness_fp.stem}_val.csv')
 
-        self.full_dataset = NaturalnessDataset(h5_file, self.target_df, use_full_profile=use_full_profile)
+        if not (train_csv.exists() and val_csv.exists()):
+            # No pre-split files: split the raw CSV once and persist it, so
+            # subsequent runs reuse the same fixed split.
+            raw = pd.read_csv(naturalness_fp)
+            if class_balance:
+                # Balanced split: downsample each label to the rarest class,
+                # then split per label so both sides stay balanced.
+                raw = raw[~raw['Land_use_ID'].isin([-1,1])]
+                raw = raw.dropna(subset='Land_use_ID')
+                min_count = raw['Land_use_ID'].value_counts().min()
+                balanced = raw.groupby('Land_use_ID', group_keys=False).apply(
+                    lambda g: g.sample(min_count, random_state=42))
+                train_raw = balanced.groupby('Land_use_ID', group_keys=False).apply(
+                    lambda g: g.sample(frac=train_val_split, random_state=42))
+                val_raw = balanced.drop(train_raw.index)
+            else:
+                train_raw = raw.sample(frac=train_val_split, random_state=42)
+                val_raw = raw.drop(train_raw.index)
+            train_raw.to_csv(train_csv, index=False)
+            val_raw.to_csv(val_csv, index=False)
+            print(f'No pre-split files; wrote {train_csv.name} / {val_csv.name} '
+                  f'({len(train_raw)}/{len(val_raw)} rows, frac={train_val_split})')
+
+        # Both paths now load identically: preprocess_target is the single place
+        # that filters labels and maps class_idx.
+        self.target_df_train = self.preprocess_target(train_csv, rowids_with_valid_vsm)
+        self.target_df_val = self.preprocess_target(val_csv, rowids_with_valid_vsm)
+
+
+        self.train_dataset = NaturalnessDataset(data_file, self.target_df_train)
+        self.val_dataset = NaturalnessDataset(data_file, self.target_df_val)
 
         # Create reverse mapping for reference
         self.id_to_land_use = {v: k for k, v in self.land_use_mapping.items()}
-        if class_balance:
-            class_counts = self.target_df['class_idx'].value_counts()
-            min_count = class_counts.min()
-            self.target_df = self.target_df.groupby('class_idx', group_keys=False).apply(lambda x: x.sample(min_count, random_state=42))
-        
-        self.target_df_train = self.target_df.groupby('class_idx', group_keys=False).apply(lambda x: x.sample(frac=0.8))
-        self.target_df_val = self.target_df[~self.target_df.index.isin(self.target_df_train.index)]
-        with h5py.File(h5_file) as f:
-            rowids = f['rowid'][:]
-        self.train_idx = np.where(np.isin(rowids, self.target_df_train.index))[0]
-        self.val_idx = np.where(np.isin(rowids, self.target_df_val.index))[0]
-        self.train_dataset = torch.utils.data.Subset(self.full_dataset, self.train_idx)
-        self.val_dataset = torch.utils.data.Subset(self.full_dataset, self.val_idx)
-         
-        
+
+    @property
+    def n_rh_channels(self) -> int:
+        '''Number of RH bands fed to the model (one input channel each).'''
+        return len(self.rh_idxs)
+
+    @property
+    def input_channels(self) -> int:
+        '''Total backbone in_channels = s2(12 if use_s2) + #RH + #diversity.
+
+        This is the single derivation; run.py computes the same from the
+        config and injects it into backbone.init_args.in_channels.
+        '''
+        return ((12 if self.use_s2 else 0)
+                + self.n_rh_channels
+                + len(resolve_diversity(self.diversity)))
+
+    def preprocess_target(self, csv_file, valid_rowids):
+        '''
+        Filter the original expert annoated naturalness labels, following excluded
+        1. no valid vsm predictions
+        2. unsure labels [-1,1]
+        '''
+        df = pd.read_csv(csv_file, index_col='rowid')
+        # remove unsure labels (-1) and labels with no high resolution images (1)
+        df = df.dropna(subset=['Land_use_ID'])
+        df = df[~df['Land_use_ID'].isin([1, -1])]
+        df['class_idx'] = df['Land_use_ID'].map(self.land_use_mapping)
+        # Fill NaN values with 0 (Unknown/No data class)
+        df = df.astype({'class_idx': 'int64'})
+        df = df.loc[df.index.intersection(valid_rowids)]
+        return df
+
+
+    def _loader_kwargs(self):
+        kw = dict(batch_size=self.batch_size, num_workers=self.num_workers,
+                  pin_memory=True)
+        if self.num_workers > 0:  # invalid when num_workers == 0
+            kw.update(persistent_workers=True, prefetch_factor=4)
+        return kw
+
     def train_dataloader(self):
-        return DataLoader(self.train_dataset, batch_size=self.batch_size, 
-                         num_workers=self.num_workers, shuffle=True, drop_last=True)
-    
+        return DataLoader(self.train_dataset, shuffle=True, drop_last=True,
+                          **self._loader_kwargs())
+
     def val_dataloader(self):
-        return DataLoader(self.val_dataset, batch_size=self.batch_size, 
-                         num_workers=self.num_workers, shuffle=False, drop_last=False)
-    
+        return DataLoader(self.val_dataset, shuffle=False, drop_last=False,
+                          **self._loader_kwargs())
+
     def test_dataloader(self):
-        return DataLoader(self.val_dataset, batch_size=self.batch_size, 
-                         num_workers=self.num_workers, shuffle=False, drop_last=False)
+        return DataLoader(self.val_dataset, shuffle=False, drop_last=False,
+                          **self._loader_kwargs())
 
 
 class S2Dataset(Dataset):

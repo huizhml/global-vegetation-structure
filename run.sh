@@ -235,17 +235,20 @@ python run.py predict -c config/predict.yaml --model.backbone config/model/xcept
 ;;
 61)
 # sync_data_to_scratch
-run_id=0crmfaia
-echo $run_id
+num_sepconv_filters=${2:-128}
+entry_block_filters=${3:-'[128, 256]'}
 echo downstream task training with full profile;
 python run.py fit -c config/train_naturalness.yaml --model.backbone config/model/xception_mix_order.yaml \
         --data.class_path datasets.h5_dataset.NaturalnessDataModule \
-        --data.init_args.h5_file ~/data/gvs/downstream_task_data/rhs_predictions_2017_${run_id}_ps31.h5 \
-        --data.init_args.naturalness_fp ~/data/gvs/downstream_task_data/naturalness/reference_data_set_updated.with_images.csv \
-        --data.init_args.use_full_profile True \
-        --model.init_args.mean_std_fp ~/data/gvs/downstream_task_data/naturalness/mean_std_${run_id}.npz \
-        --model.init_args.backbone.init_args.in_channels 113 \
+        --data.init_args.data_file ~/data/gvs/evaluation/downstream_tasks/naturalness/results_from_vsm_2017/vsm_patches_ps15_single_h5_72xl3wma_ps31.zarr \
+        --data.init_args.naturalness_fp ~/data/gvs/evaluation/downstream_tasks/naturalness/reference_data_set_updated.csv \
+        --model.init_args.mean_std_fp ~/data/gvs/evaluation/downstream_tasks/naturalness/results_from_vsm_2017/vsm_patches_ps15_single_h5_72xl3wma_ps31.npz \
         --model.init_args.backbone.init_args.out_channels 7 \
+        --model.init_args.backbone.init_args.num_sepconv_filters $num_sepconv_filters \
+        --model.init_args.backbone.init_args.num_nonlin_blocks 2 \
+        --model.init_args.backbone.init_args.entry_block_filters "$entry_block_filters" \
+        --data.init_args.use_s2 True \
+        --data.init_args.rh_idxs 'full_profile' \
         --data.init_args.class_balance False \
         --trainer.logger.init_args.name naturalness_s2_rhs
 ;;
@@ -257,13 +260,16 @@ echo $run_id
 echo downstream task training with s2 only;
 python run.py fit -c config/train_naturalness.yaml --model.backbone config/model/xception_mix_order.yaml \
         --data.class_path datasets.h5_dataset.NaturalnessDataModule \
-        --data.init_args.h5_file ~/data/gvs/downstream_task_data/rhs_predictions_2017_${run_id}_ps31.h5 \
-        --data.init_args.naturalness_fp ~/data/gvs/downstream_task_data/naturalness/reference_data_set_updated.with_images.csv \
-        --model.init_args.mean_std_fp ~/data/gvs/downstream_task_data/naturalness/mean_std_${run_id}.npz \
-        --model.init_args.backbone.init_args.in_channels 12 \
+        --data.init_args.data_file ~/data/gvs/evaluation/downstream_tasks/naturalness/results_from_vsm_2017/vsm_patches_ps15_single_h5_72xl3wma_ps31.zarr \
+        --data.init_args.naturalness_fp ~/data/gvs/evaluation/downstream_tasks/naturalness/reference_data_set_updated.csv \
+        --model.init_args.mean_std_fp ~/data/gvs/evaluation/downstream_tasks/naturalness/results_from_vsm_2017/vsm_patches_ps15_single_h5_72xl3wma_ps31.npz \
         --model.init_args.backbone.init_args.out_channels 7 \
+        --model.init_args.backbone.init_args.num_sepconv_filters 128 \
+        --model.init_args.backbone.init_args.num_nonlin_blocks 2 \
+        --data.init_args.use_s2 False \
+        --data.init_args.rh_idxs 'key_rhs' \
         --data.init_args.class_balance False \
-        --trainer.logger.init_args.name naturalness_s2
+        --trainer.logger.init_args.name naturalness_key_rhs
 ;;
 
 63)
@@ -273,14 +279,14 @@ echo $run_id
 echo downstream task training with s2 and top height;
 python run.py fit -c config/train_naturalness.yaml --model.backbone config/model/xception_mix_order.yaml \
         --data.class_path datasets.h5_dataset.NaturalnessDataModule \
-        --data.init_args.h5_file ~/data/gvs/downstream_task_data/rhs_predictions_2017_${run_id}_ps31.h5 \
-        --data.init_args.naturalness_fp ~/data/gvs/downstream_task_data/naturalness/reference_data_set_updated.with_images.csv \
-        --data.init_args.mean_std_fp ~/data/gvs/downstream_task_data/naturalness/mean_std_${run_id}.npz \
-        --data.init_args.use_full_profile False \
-        --model.init_args.transform.init_args.input_top_height True \
-        --model.init_args.transform.init_args.mean_std_fp ~/data/gvs/downstream_task_data/naturalness/mean_std_${run_id}.npz \
-        --model.init_args.backbone.init_args.in_channels 13 \
+        --data.init_args.data_file ~/data/gvs/evaluation/downstream_tasks/naturalness/results_from_vsm_2017/vsm_patches_ps15_single_h5_72xl3wma_ps31.zarr \
+        --data.init_args.naturalness_fp ~/data/gvs/evaluation/downstream_tasks/naturalness/reference_data_set_updated.csv \
+        --model.init_args.mean_std_fp ~/data/gvs/evaluation/downstream_tasks/naturalness/results_from_vsm_2017/vsm_patches_ps15_single_h5_72xl3wma_ps31.npz \
         --model.init_args.backbone.init_args.out_channels 7 \
+        --model.init_args.backbone.init_args.num_sepconv_filters 128 \
+        --model.init_args.backbone.init_args.num_nonlin_blocks 2 \
+        --data.init_args.use_s2 True \
+        --data.init_args.rh_idxs 'rh98' \
         --data.init_args.class_balance False \
         --trainer.logger.init_args.name naturalness_s2_rh98
 ;;
@@ -291,30 +297,33 @@ echo $run_id
 echo downstream task training with rhs only;
 python run.py fit -c config/train_naturalness.yaml --model.backbone config/model/xception_mix_order.yaml \
         --data.class_path datasets.h5_dataset.NaturalnessDataModule \
-        --data.init_args.h5_file ~/data/gvs/downstream_task_data/rhs_predictions_2017_${run_id}_ps31.h5 \
-        --data.init_args.naturalness_fp ~/data/gvs/downstream_task_data/naturalness/reference_data_set_updated.with_images.csv \
-        --data.init_args.use_full_profile True \
-        --model.init_args.mean_std_fp ~/data/gvs/downstream_task_data/naturalness/mean_std_${run_id}.npz \
-        --model.init_args.backbone.init_args.in_channels 101 \
+        --data.init_args.data_file ~/data/gvs/evaluation/downstream_tasks/naturalness/results_from_vsm_2017/vsm_patches_ps15_single_h5_72xl3wma_ps31.zarr \
+        --data.init_args.naturalness_fp ~/data/gvs/evaluation/downstream_tasks/naturalness/reference_data_set_updated.csv \
+        --model.init_args.mean_std_fp ~/data/gvs/evaluation/downstream_tasks/naturalness/results_from_vsm_2017/vsm_patches_ps15_single_h5_72xl3wma_ps31.npz \
         --model.init_args.backbone.init_args.out_channels 7 \
-        --lr_scheduler.init_args.max_lr 0.0001 \
+        --model.init_args.backbone.init_args.num_sepconv_filters 128 \
+        --model.init_args.backbone.init_args.num_nonlin_blocks 2 \
+        --data.init_args.use_s2 False \
+        --data.init_args.rh_idxs 'rh98' \
         --data.init_args.class_balance False \
         --trainer.logger.init_args.name naturalness_rhs_only
 ;;
 
 65)
 # sync_data_to_scratch
-run_id=0crmfaia
-echo $run_id
+
 echo downstream task training with rhs only;
 python run.py fit -c config/train_naturalness.yaml --model.backbone config/model/xception_mix_order.yaml \
         --data.class_path datasets.h5_dataset.NaturalnessDataModule \
-        --data.init_args.h5_file ~/data/gvs/downstream_task_data/rhs_predictions_2017_${run_id}_ps31.h5 \
-        --data.init_args.naturalness_fp ~/data/gvs/downstream_task_data/naturalness/reference_data_set_updated.with_images.csv \
-        --data.init_args.use_full_profile False \
-        --model.init_args.mean_std_fp ~/data/gvs/downstream_task_data/naturalness/mean_std_${run_id}.npz \
-        --model.init_args.backbone.init_args.in_channels 1 \
+        --data.init_args.data_file ~/data/gvs/evaluation/downstream_tasks/naturalness/results_from_vsm_2017/vsm_patches_ps15_single_h5_72xl3wma_ps31.zarr \
+        --data.init_args.naturalness_fp ~/data/gvs/evaluation/downstream_tasks/naturalness/reference_data_set_updated.csv \
+        --model.init_args.mean_std_fp ~/data/gvs/evaluation/downstream_tasks/naturalness/results_from_vsm_2017/vsm_patches_ps15_single_h5_72xl3wma_ps31.npz \
         --model.init_args.backbone.init_args.out_channels 7 \
+        --model.init_args.backbone.init_args.num_sepconv_filters 128 \
+        --model.init_args.backbone.init_args.num_nonlin_blocks 2 \
+        --model.init_args.backbone.init_args.entry_block_filters '[128, 256]' \
+        --data.init_args.use_s2 False \
+        --data.init_args.rh_idxs 'rh98' \
         --data.init_args.class_balance False \
         --trainer.logger.init_args.name naturalness_rh98
 ;;

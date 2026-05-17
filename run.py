@@ -2,6 +2,7 @@ import os
 import logging
 import sys
 import copy
+from pathlib import Path
 from argparse import Namespace
 from typing import Any, Dict, List, Optional, Union, Callable, Type
 import random
@@ -69,6 +70,40 @@ def update_namespace_from_nested_dict(namespace, nested_dict, prefix="", partial
         else:
             # Set the value in the namespace
             namespace[full_key] = value
+
+
+def verify_naturalness_stats(mean_std_fp, data_file):
+    """Fail fast if the naturalness normalisation stats are missing or were
+    computed from a different data_file than the one being trained on.
+
+    Read-only and cheap: loads only the small npz's provenance, never scans
+    the data and never writes -- so no DDP write race and no silent overwrite.
+    step6_calculate_naturalness_stats stays the single, explicit generator.
+    """
+    step6_cmd = (
+        'python -m preprocessing.pipeline.step6_calculate_naturalness_stats '
+        f'data_file={data_file} out_fp={mean_std_fp} force=true')
+    if mean_std_fp is None:
+        raise ValueError('naturalness model.init_args.mean_std_fp is not set')
+    msp = Path(mean_std_fp).expanduser()
+    if not msp.exists():
+        raise FileNotFoundError(
+            f'naturalness stats not found: {msp}\n'
+            f'Generate them first:\n  {step6_cmd}')
+    try:
+        with np.load(msp) as _z:
+            src = _z['provenance_source'].item() if 'provenance_source' in _z.files else None
+    except Exception as e:
+        raise ValueError(
+            f'could not read {msp}: {e}\nRegenerate it:\n  {step6_cmd}')
+    expected = str(Path(data_file).expanduser()) if data_file is not None else None
+    if src != expected:
+        raise ValueError(
+            f'naturalness stats are stale/unverifiable: {msp}\n'
+            f'  provenance_source = {src!r}\n'
+            f'  data_file         = {expected!r}\n'
+            f'Regenerate so normalisation matches the data:\n  {step6_cmd}')
+    print(f'[naturalness] stats OK: {msp} (source matches data_file)')
 
 
 class MyLightningCLI(LightningCLI):
@@ -205,6 +240,41 @@ class MyLightningCLI(LightningCLI):
             
 
     def before_instantiate_classes(self):
+        # Auto-wire the naturalness model's input dims from the data config so
+        # backbone.in_channels and the model's mean/std selection can never
+        # drift from the dataset. A global parser.link_arguments() can't be
+        # used here: this CLI is shared across all tasks in subclass mode, and
+        # a link on data.init_args.rh_idxs would fail to parse for every
+        # non-naturalness config. So gate on the class paths instead.
+        cfg = self.config[self.subcommand]
+        data_cp = str((cfg.get('data') or {}).get('class_path', '') or '')
+        model_cp = str((cfg.get('model') or {}).get('class_path', '') or '')
+        if data_cp.endswith('NaturalnessDataModule') and model_cp.endswith('NaturalnessMapping'):
+            from datasets.h5_dataset import resolve_rh_idxs, resolve_diversity
+            di = cfg['data']['init_args']
+            rh_idxs = di.get('rh_idxs', 'rh98')
+            use_s2 = bool(di.get('use_s2', False))
+            diversity = di.get('diversity', None)
+            in_channels = int(
+                (12 if use_s2 else 0)
+                + len(resolve_rh_idxs(rh_idxs))
+                + len(resolve_diversity(diversity)))
+            mi = cfg['model']['init_args']
+            mi['rh_idxs'] = rh_idxs
+            mi['use_s2'] = use_s2
+            mi['diversity'] = diversity
+            backbone = mi.get('backbone')
+            if backbone is not None and backbone.get('init_args') is not None:
+                backbone['init_args']['in_channels'] = in_channels
+            print(f'[naturalness] auto-set backbone.in_channels={in_channels} '
+                  f'(rh_idxs={rh_idxs!r}, use_s2={use_s2}, diversity={diversity!r})')
+
+            # Training only: refuse to start on missing/stale normalisation
+            # stats. Eval/predict may legitimately use a different dataset, so
+            # there the model's own mean_std_fp existence check suffices.
+            if self.subcommand == 'fit':
+                verify_naturalness_stats(mi.get('mean_std_fp'), di.get('data_file'))
+
         # create  shared memory array for caching predictions
         if self.subcommand == 'predict' and self.config[self.subcommand]['data']['init_args'].get('cache_predictions'):
             import zarr

@@ -298,6 +298,87 @@ def verify_batch_binning():
     
     
 
+def verify_diversity_indices_torch(n=256, bin_width=5, max_height=MAX_HEIGHT_METERS,
+                                   rtol=1e-3, atol=1e-3, seed=42, verbose=True):
+    """
+    Cross-check datasets.h5_dataset.diversity_indices_torch (batched torch,
+    the production path) against
+    evaluation.on_diversity_indices.pixel_diversity_indices (per-pixel numpy
+    reference). Both consume the SAME decimetre-quantised profile, so only the
+    algorithm -- not quantisation -- is compared.
+
+    Prints a per-index table and raises AssertionError if any index disagrees
+    beyond (rtol, atol), so it works as both a quick script and a regression
+    test:  python -c "from evaluation.utils import \
+        verify_diversity_indices_torch as v; v()"
+
+    NOTE: RH25/RH98 are forced valid here. CR is *defined* to differ between
+    the two impls when RH25/RH98 are themselves invalid (reference indexes
+    rhs[25]/rhs[98] with NaN; torch uses the raw value) -- a known, documented
+    gap, out of scope for this equivalence check.
+    """
+    import torch
+    from datasets.h5_dataset import diversity_indices_torch, DIVERSITY_NAMES
+    from evaluation.on_diversity_indices import pixel_diversity_indices
+
+    rng = np.random.default_rng(seed)
+    n_bands = 101
+
+    # Metres, sorted ascending (RH percentiles are non-decreasing), spanning a
+    # bit past max_height to exercise the clipping path.
+    prof_m = np.sort(
+        rng.uniform(0, max_height * 1.2, size=(n, n_bands)).astype(np.float32), axis=1)
+
+    zero_mask = rng.random((n, n_bands)) < 0.15
+    nod_mask = rng.random((n, n_bands)) < 0.05
+    prof_m[zero_mask] = 0.0
+    # Keep RH25/RH98 valid (see NOTE) so CR is comparable.
+    prof_m[:, 25] = rng.uniform(1, max_height, size=n).astype(np.float32)
+    prof_m[:, 98] = rng.uniform(1, max_height, size=n).astype(np.float32)
+    nod_mask[:, [25, 98]] = False
+
+    # Decimetre-quantised raw (m*10 int16), nodata sentinel at nod positions.
+    raw = np.clip(np.round(prof_m * 10.0), -32768, 32767).astype(np.int16)
+    raw[nod_mask] = VSM_NODATA
+    raw[0] = VSM_NODATA  # one fully-invalid profile -> both must be all-NaN
+
+    # Reference gets the SAME quantised metres; invalid -> NaN so its
+    # (finite & >0) filter drops exactly what torch drops via != nodata.
+    prof_ref = raw.astype(np.float32) / 10.0
+    prof_ref[raw == VSM_NODATA] = np.nan
+    ref = np.array(
+        [pixel_diversity_indices(prof_ref[i], bin_width=bin_width, max_height=max_height)
+         for i in range(n)], dtype=np.float64)  # (n, 4)
+
+    vsm = torch.from_numpy(np.ascontiguousarray(raw[:, :, None, None]))
+    got = diversity_indices_torch(
+        vsm, bin_width=bin_width, max_height=max_height
+    ).numpy()[:, :, 0, 0].astype(np.float64)  # (n, 4)
+
+    ok = True
+    if verbose:
+        print("=" * 64)
+        print(f"diversity_indices_torch  vs  pixel_diversity_indices  (n={n})")
+        print("=" * 64)
+    for k, name in enumerate(DIVERSITY_NAMES):
+        a, b = ref[:, k], got[:, k]
+        one_nan = np.isnan(a) ^ np.isnan(b)
+        both_nan = np.isnan(a) & np.isnan(b)
+        finite = ~(np.isnan(a) | np.isnan(b))
+        close = np.isclose(a[finite], b[finite], rtol=rtol, atol=atol)
+        passed = (not one_nan.any()) and bool(close.all())
+        ok &= passed
+        if verbose:
+            md = float(np.abs(a[finite] - b[finite]).max()) if finite.any() else 0.0
+            print(f"{name:6s} | max|Δ| {md:.3e} | nan-mismatch {int(one_nan.sum()):3d}"
+                  f" | both-nan {int(both_nan.sum()):3d} | {'PASS' if passed else 'FAIL'}")
+    if verbose:
+        print("-" * 64)
+        print("OVERALL:", "PASS" if ok else "FAIL")
+    assert ok, "diversity_indices_torch disagrees with pixel_diversity_indices"
+    return ok
+
+
 def plot_biome_samples(gdf_dissolved, points_gdf, save_path=None, figsize=(16, 10)):
     """Plot biome polygons with sampled points overlaid, no explicit loops."""
     fig, ax = plt.subplots(1, 1, figsize=figsize)
