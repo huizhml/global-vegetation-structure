@@ -86,6 +86,26 @@ class DiversityIndicesMapConfig(FunctionConfig):
 cs.store(group='run', name='generate_diversity_indices_map', node=DiversityIndicesMapConfig)
 
 # =======================================
+#   WSCI vs diversity indices correlation
+# =======================================
+@dataclass
+class EvalOnWSCIConfig(FunctionConfig):
+    year: int = 2020
+    product_version: str = 'masked'
+    root_dir: str = '~/data/gvs/evaluation/with_wsci'
+    wsci_file: str = '{root_dir}/GEDI_L4C_WSCI_gridded_1km_20190418_20230317_V2.tif'
+    diversity_file: str = '~/data/gvs/products/diversity_indices/{year}/{product_version}/mosaic/cog/diversity_maps_bin5_max150.cog.tif'
+    test_point_dir: str = '~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_test/original_with_sota_chms_biome/2020'
+    save_dir: str = '{root_dir}/results/'
+    wsci_name: str = 'WSCI'
+    group_by: str = 'BIOME'
+    min_points: int = 30
+    plot_scale: str = 'zscore'  # axis standardization for plots: zscore|minmax|none
+    _target_: str = "evaluation.on_wsci.eval_on_wsci"
+
+cs.store(group='run', name='eval_on_wsci', node=EvalOnWSCIConfig)
+
+# =======================================
 #   Biome analysis - diversity indices
 # =======================================
 @dataclass

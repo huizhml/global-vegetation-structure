@@ -313,7 +313,7 @@ python run.py fit -c config/train_naturalness.yaml --model.backbone config/model
         --model.init_args.backbone.init_args.restrict_rf False \
         --model.init_args.backbone.init_args.num_sepconv_blocks 8 \
         --data.init_args.use_s2 False \
-        --data.init_args.rh_idxs 'rh98' \
+        --data.init_args.rh_idxs 'full_profile' \
         --data.init_args.class_balance False \
         --trainer.logger.init_args.name naturalness_rhs_only
 ;;
