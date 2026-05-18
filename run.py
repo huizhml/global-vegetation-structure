@@ -304,6 +304,12 @@ class MyLightningCLI(LightningCLI):
 
     
     def after_instantiate_classes(self):
+        # Surface the run the model/checkpoint came from so prediction
+        # callbacks can name their outputs by the model rather than the fresh
+        # eval run wandb spins up (logger.id is nulled for non-resume eval).
+        # Same idiom as NaturalnessDataModule.data_file.
+        if getattr(self, 'datamodule', None) is not None:
+            self.datamodule.model_run_id = getattr(self, 'old_id', None)
         correct_bias = self.subcommand in ['validate', 'test', 'predict'] and self.config[self.subcommand].correct_bias or (
             self.config[self.subcommand].correct_bias and self.config[self.subcommand].get('quantize_model'))
         if correct_bias:

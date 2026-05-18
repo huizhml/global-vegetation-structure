@@ -37,19 +37,20 @@ LAND_USE_NAMES = {
     53: {'name':'Agroforestry', 'short_name':'Agroforestry'},
 }
 MODEL_NAMES = {
-    'alpha_em': 'AlphaEarth',
-    'rh98': 'RH98',
-    'full_profile': 'Full Profile',
-    'rh98_s2': 'RH98 + S2',
-    'rh98_cr': 'RH98 + CR',
-    'rh98_fhd': 'RH98 + FHD',
-    'rh98_enl2d': 'RH98 + ENL2D',
-    'key_rhs': 'RH98 + RH25, RH50, RH75, RH90, RH95',
-    'rh98_fhd_enl1d_enl2d_cr': 'RH98 + FHD + ENL1D + ENL2D + CR',
-    'rh98_center': 'RH98 (Center Pixel)',
-    'full_profile_center': 'Full Profile (Center Pixel)',
-    'full_profile_s2': 'Full Profile + S2',
+    'alpha_em':                {'name': 'AlphaEarth',                          'run_id': None},
+    'rh98':                    {'name': 'RH98',                                'run_id': 'swdxk7ep'},
+    'full_profile':            {'name': 'Full Profile',                        'run_id': 'rjl8zl61'},
+    'rh98_s2':                 {'name': 'RH98 + S2',                           'run_id': 'dwl36g52'},
+    'rh98_cr':                 {'name': 'RH98 + CR',                           'run_id': '9fgg5og0'},
+    'rh98_fhd':                {'name': 'RH98 + FHD',                          'run_id': '0ibhc4s1'},
+    'rh98_enl2d':              {'name': 'RH98 + ENL2D',                        'run_id': 'tq0ke6hj'},
+    'key_rhs':                 {'name': 'RH98 + RH25, RH50, RH75, RH90, RH95', 'run_id': '5pf9gyse'},
+    'rh98_fhd_enl1d_enl2d_cr': {'name': 'RH98 + FHD + ENL1D + ENL2D + CR',     'run_id': '5kk3oo0i'},
+    'rh98_center':             {'name': 'RH98 (w/o spatial context)',          'run_id': None},
+    'full_profile_center':     {'name': 'Full Profile (w/o spatial context)',  'run_id': None},
+    'full_profile_s2':         {'name': 'Full Profile + S2',                   'run_id': 'e1y9vkez'},
 }
+
 
 
 # ---------------------------------------
@@ -95,7 +96,7 @@ def plot_bars(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, groups: tupl
     mask = summary_df.Metric == f'{avg} avg'
     summary_df = summary_df.loc[mask,[metric]]
     per_class_df = per_class_df.loc[:, ['Class', metric]]
-    if not include_alpha_em:
+    if not include_alpha_em and 'alpha_em' in summary_df.columns:
         summary_df = summary_df.drop(index='alpha_em')
         per_class_df = per_class_df.drop(index='alpha_em')
         
@@ -113,29 +114,29 @@ def plot_bars(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, groups: tupl
             + [summary_df.loc[model_name, metric]]
         )
 
-    # Sort class categories (except ALL) by Full Profile improvement
-    if show_improve and 'full_profile' in values_dict and baseline_name in values_dict:
-        baseline_vals = values_dict[baseline_name]
-        fp_vals = values_dict['full_profile']
-        non_all_indices = list(range(len(forest_types)))
-        improvements = [max(fp_vals[ci] - baseline_vals[ci], 0) for ci in non_all_indices]
-        sorted_pairs = sorted(zip(non_all_indices, improvements), key=lambda x: x[1])
-        sorted_indices = [p[0] for p in sorted_pairs] + [len(forest_types)]  # append ALL
-        # Reorder
-        forest_types = [forest_types[i] for i in sorted_indices[:-1]]
-        for m in values_dict:
-            values_dict[m] = [values_dict[m][i] for i in sorted_indices]
+    # Manually reorder forest types by Land_use_ID, with ALL placed first
+    manual_order_ids = [11, 20, 53, 31, 32, 40, 0]
+    land_use_ids = list(LAND_USE_NAMES.keys())
+    manual_indices = [land_use_ids.index(_id) for _id in manual_order_ids]
+    all_index = len(forest_types)  # ALL is appended after the per-class values
+    reorder_indices = [all_index] + manual_indices  # ALL first, then forest types
+    forest_types = [forest_types[i] for i in manual_indices]
+    for m in values_dict:
+        values_dict[m] = [values_dict[m][i] for i in reorder_indices]
 
-    class_names = forest_types + ['ALL']
+    class_names = ['ALL'] + forest_types
     baseline_vals = np.array(values_dict[baseline_name])
 
     # Plot setup
     bar_width = 0.5
     group_spacing = 0.5
+    all_gap = n_models * bar_width  # extra space between ALL and the forest-type groups
     x_pos = np.arange(len(class_names)) * (n_models * bar_width + group_spacing)
+    x_pos[1:] = x_pos[1:] + all_gap
 
-    fig, ax = plt.subplots(figsize=(20, 12))
-
+    fig, ax = plt.subplots(figsize=(16, 8))
+    if baseline_name == 'full_profile_center':
+        MODEL_NAMES['full_profile']['name'] = 'Full profile (w/ spatial context)'
     # First pass: draw bars, collect annotations
     annotations = {j: [] for j in range(len(class_names))}
 
@@ -143,7 +144,7 @@ def plot_bars(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, groups: tupl
         values = np.array(values_dict[model_name])
         offsets = x_pos + i * bar_width
 
-        ax.bar(offsets, values, bar_width, label=MODEL_NAMES[model_name])
+        ax.bar(offsets, values, bar_width, label=MODEL_NAMES[model_name]['name'])
 
         if show_improve and model_name != baseline_name:
             improvement = np.maximum(values - baseline_vals, 0)
@@ -157,7 +158,7 @@ def plot_bars(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, groups: tupl
                     annotations[j].append((offsets[j], values[j], f"+{imp:.2f}"))
 
     # Second pass: resolve label overlaps within each group
-    if show_improve:
+    if show_improve and baseline_name == 'full_profile_center':
         min_gap = 0.04
         for j in range(len(class_names)):
             labels = annotations[j]
@@ -170,24 +171,133 @@ def plot_bars(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, groups: tupl
                 if y_positions:
                     desired_y = max(desired_y, y_positions[-1] + min_gap)
                 y_positions.append(desired_y)
-            # for k, (lx, ly, txt) in enumerate(labels):
-            #     label_y = y_positions[k]
-            #     ax.text(lx, label_y, txt, ha='center', va='bottom', fontsize=10)
-            #     if label_y - ly > 0.02:
-            #         ax.plot([lx, lx], [ly, label_y],
-            #                 color='gray', linewidth=0.5, alpha=0.5)
+            for k, (lx, ly, txt) in enumerate(labels):
+                label_y = y_positions[k]
+                ax.text(lx, label_y, txt, ha='center', va='bottom', fontsize=16)
+                if label_y - ly > 0.02:
+                    ax.plot([lx, lx], [ly, label_y],
+                            color='gray', linewidth=0.5, alpha=0.5)
+
+    # Vertical separator between ALL (first group) and the forest types
+    sep_x = (x_pos[0] + (n_models - 1) * bar_width + bar_width / 2 + x_pos[1] - bar_width / 2) / 2
+    ax.axvline(sep_x, color='gray', linestyle='--', linewidth=1.5)
 
     ax.set_xticks(x_pos + bar_width * (n_models - 1) / 2)
-    ax.set_xticklabels(class_names, fontsize=18)
+    ax.set_xticklabels(class_names, fontsize=18, rotation=45, ha='center')
     ax.set_ylabel(f'{metric}', fontsize=18)
     ax.tick_params(axis='y', labelsize=18)
-    ax.set_ylim(0, 1.1)
-    ax.legend(bbox_to_anchor=(0.66, 1), loc='upper left', fontsize=18)
+    ax.set_ylim(0, 1.01 )
+    if baseline_name == 'full_profile_center':
+        ax.legend(bbox_to_anchor=(0.62, 1), loc='upper left', fontsize=18, ncol=1)
+    else:
+        ax.legend(bbox_to_anchor=(0.09, 1), loc='upper left', fontsize=18, ncol=3)
     ax.grid(axis='y', alpha=0.3)
     plt.tight_layout()
     plt.savefig(save_dir / f'barplot_{metric}_{avg}_baseline_{baseline_name}.pdf', dpi=150, bbox_inches='tight')
     plt.close()
     
+def plot_dots(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, groups: tuple[str], metric: str='F1', avg: str='macro', baseline_name: str='rh98', save_dir: str=None, include_alpha_em: bool=False, **kwargs):
+    '''
+    Dot plot of a metric per group.
+    x axis: score value of `metric`; y axis: categories ('ALL' on top, then forest types).
+    Each group gets a distinct marker shape and a distinct color.
+    Args:
+        summary_df: dataframe of summary reports
+        per_class_df: dataframe of per-class reports
+        groups: tuple of group (model) names
+        metric: which score to plot (e.g. 'F1', 'Precision', 'Recall', 'Accuracy')
+        avg: 'macro' or 'weighted'
+        baseline_name: group used as the reference for the improvement coloring
+        save_dir: path to save the plot
+    '''
+    assert avg in ['macro', 'weighted']
+    mask = summary_df.Metric == f'{avg} avg'
+    summary_df = summary_df.loc[mask, [metric]]
+    per_class_df = per_class_df.loc[:, ['Class', metric]]
+    if not include_alpha_em and 'alpha_em' in summary_df.columns:
+        summary_df = summary_df.drop(index='alpha_em')
+        per_class_df = per_class_df.drop(index='alpha_em')
+
+    forest_types = [c['short_name'] for c in LAND_USE_NAMES.values()]
+    n_models = len(groups)
+
+    # Build values dict: model_name -> list of values (per class + ALL)
+    values_dict = {}
+    for model_name in groups:
+        values_dict[model_name] = (
+            per_class_df.loc[model_name, metric].values.tolist()
+            + [summary_df.loc[model_name, metric]]
+        )
+
+    # Manually reorder forest types by Land_use_ID, with ALL placed first
+    manual_order_ids = [11, 20, 53, 31, 32, 40, 0]
+    land_use_ids = list(LAND_USE_NAMES.keys())
+    manual_indices = [land_use_ids.index(_id) for _id in manual_order_ids]
+    all_index = len(forest_types)  # ALL is appended after the per-class values
+    reorder_indices = [all_index] + manual_indices  # ALL first, then forest types
+    forest_types = [forest_types[i] for i in manual_indices]
+    for m in values_dict:
+        values_dict[m] = [values_dict[m][i] for i in reorder_indices]
+
+    class_names = ['ALL'] + forest_types
+    y_base = np.arange(len(class_names))
+
+    # Distinct shape per group; per-shape size factors equalize visual weight.
+    base_s = 130
+    # markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p', 'h', '*']
+    markers = ['D', '^',  'v', '<', '>', 'o', 's', 'p', 'h', '*']
+    marker_size_factor = {
+        'o': 1.0, 's': 0.85, 'D': 1.5, 'p': 1.05, 'h': 1,
+        '^': 1.15, 'v': 1.15, '<': 1.15, '>': 1.15, '*': 2,
+    }
+ 
+    fig, ax = plt.subplots(figsize=(11, 8))
+
+    # Treat missing/NaN scores as 0 so every group is always drawn
+    plot_vals = {m: np.nan_to_num(np.array(values_dict[m], dtype=float), nan=0.0)
+                 for m in groups}
+
+    # Distinct color per group (categorical)
+    colors = plt.cm.tab10(np.linspace(0, 1, 10))
+
+    # Connector line per category spanning the range of group values
+    all_vals = np.array([plot_vals[m] for m in groups])  # (n_models, n_categories)
+    x_min = all_vals.min(axis=0)
+    x_max = all_vals.max(axis=0)
+    ax.hlines(y_base, x_min, x_max, color='gray', linewidth=1.2, zorder=1)
+
+    # All groups share the same y position per forest type
+    for i, model_name in enumerate(groups):
+        mk = markers[i % len(markers)]
+        ax.scatter(
+            plot_vals[model_name],
+            y_base,
+            marker=mk,
+            facecolors=colors[i % len(colors)],
+            edgecolors='white',
+            linewidths=0.8,
+            s=base_s * marker_size_factor.get(mk, 1.0),
+            label=MODEL_NAMES[model_name]['name'],
+            zorder=3,
+            clip_on=False,
+        )
+
+    # Horizontal separator between ALL (top) and the forest types
+    ax.axhline(0.5, color='gray', linestyle='--', linewidth=1.5)
+
+    ax.set_yticks(y_base)
+    ax.set_yticklabels(class_names, fontsize=14)
+    ax.invert_yaxis()  # ALL on top
+    ax.set_xlabel(metric, fontsize=16)
+    ax.set_xlim(-0.02, 0.86)
+    ax.tick_params(axis='x', labelsize=14)
+    ax.grid(axis='x', alpha=0.3)
+    ax.legend(bbox_to_anchor=(0.5, 1.02), loc='lower center', ncol=3, fontsize=12)
+    plt.tight_layout()
+    plt.savefig(save_dir / f'dotplot_{metric}_{avg}.pdf', dpi=150, bbox_inches='tight')
+    plt.close()
+
+
 def plot_improve_heatmap(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, metric: str='Recall', avg: str='macro', save_dir: str=None, show_improve: bool=True, include_alpha_em: bool=False, **kwargs):
     '''
     Plot the improvement heatmap: rows = models, columns = land cover classes + ALL
@@ -249,7 +359,7 @@ def plot_improve_heatmap(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, m
     ax.set_xlabel('')
     ax.set_title(f'{metric} {"improvement over RH98 baseline" if show_improve else ""} ({avg} avg)')
     ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha='right')
-    ax.set_yticklabels([MODEL_NAMES[name] for name in model_names], rotation=0, ha='right')
+    ax.set_yticklabels([MODEL_NAMES[name]['name'] for name in model_names], rotation=0, ha='right')
     plt.tight_layout()
     plt.savefig(save_dir / f'heatmap_{metric}_{avg}.png', dpi=150, bbox_inches='tight')
     plt.close()
@@ -663,6 +773,122 @@ def run_classification(classifier: str, patch_stats_dir: str,  save_dir: str, **
     np.savez(save_dir / 'logistic_regression_confusion_matrices.npz', **all_cms)
     return all_summary_df, all_per_class_df, all_cms
 
+
+
+def build_and_save_reports(y_true_by_group: dict, y_pred_by_group: dict, save_dir: str, prefix: str, labels=None):
+    '''
+    Build the same summary/per-class/confusion-matrix artifacts that
+    run_classification produces, but from arbitrary predictions, so any
+    model (e.g. CNN) plugs straight into plot_results.
+    Args:
+        y_true_by_group: {group_name: ground-truth array (LAND_USE_NAMES codes)}
+        y_pred_by_group: {group_name: predicted array, aligned to y_true}
+        save_dir: directory to write {prefix}_*.csv / .npz into
+        prefix: filename prefix (e.g. 'cnn'); plot_results reads these back
+        labels: explicit class label order; defaults to sorted(LAND_USE_NAMES)
+    Returns:
+        (all_summary_df, all_per_class_df, all_cms)
+    '''
+    save_dir = Path(save_dir).expanduser()
+    save_dir.mkdir(parents=True, exist_ok=True)
+    if labels is None:
+        labels = sorted(LAND_USE_NAMES.keys())
+    all_summary_reports, all_per_class_reports, all_cms = {}, {}, {}
+    for name in y_pred_by_group:
+        y_true = np.asarray(y_true_by_group[name])
+        y_pred = np.asarray(y_pred_by_group[name])
+        all_cms[name] = confusion_matrix(y_true, y_pred, labels=labels)
+
+        per_class_report = classification_report(
+            y_true, y_pred, labels=labels, output_dict=True, zero_division=0)
+        accuracy = accuracy_score(y_true, y_pred)
+        per_class_report = pd.DataFrame(per_class_report).T
+        df = per_class_report.rename(columns={'f1-score': 'F1', 'support': 'Support'})
+        df.columns = df.columns.str.title()
+        df['Support'] = df['Support'].astype(int)
+
+        summary_keys = ['macro avg', 'weighted avg']
+        df_summary = df.loc[summary_keys]
+        df_summary.loc['macro avg', 'accuracy'] = accuracy
+        all_summary_reports[name] = df_summary
+
+        df_per_class = df.drop(index=summary_keys + ['accuracy'], errors='ignore')
+        df_per_class.index = [LAND_USE_NAMES[int(idx)]['short_name']
+                              if int(idx) in LAND_USE_NAMES else idx
+                              for idx in df_per_class.index]
+        all_per_class_reports[name] = df_per_class
+
+    all_summary_df = pd.concat(all_summary_reports, names=['Model', 'Metric'])
+    all_per_class_df = pd.concat(all_per_class_reports, names=['Model', 'Class'])
+    all_summary_df.to_csv(save_dir / f'{prefix}_summary_reports.csv')
+    all_per_class_df.to_csv(save_dir / f'{prefix}_per_class_reports.csv')
+    np.savez(save_dir / f'{prefix}_confusion_matrices.npz', **all_cms)
+    return all_summary_df, all_per_class_df, all_cms
+
+
+def evaluate_cnn_predictions(pred_dir: str, save_dir: str, groups: tuple[str]=None,
+                             prefix: str='cnn',
+                             class_codes=None, predictions_are_class_idx: bool=True,
+                             truth_col: str='Land_use_ID', pred_col: str='pred',
+                             group_files: dict=None, **kwargs):
+    '''
+    Turn per-group CNN prediction parquets (one file per group, as written by
+    callbacks.naturalness_prediction_logger.NaturalnessPredictionLogger) into
+    the artifacts plot_results expects, then point plot_results at
+    {save_dir}/{prefix}_*.csv / .npz unchanged.
+
+    File resolution: each group's run id comes from MODEL_NAMES[group]['run_id'];
+    the file is {pred_dir}/naturalness_predictions_{run_id}{outfile_suffix}.parquet
+    (the logger's naming). Pass group_files to override with explicit paths.
+    Args:
+        pred_dir: directory holding the per-run prediction parquets
+        save_dir: where to write {prefix}_*.csv / .npz
+        groups: model keys to include; defaults to every MODEL_NAMES entry
+            that has a non-None run_id
+        prefix: filename prefix consumed by plot_results (default 'cnn')
+        outfile_suffix: suffix used when the logger wrote the files
+        class_codes: ordered list mapping class index -> Land_use_ID code;
+            defaults to sorted(LAND_USE_NAMES). Used only when
+            predictions_are_class_idx is True.
+        predictions_are_class_idx: the logger stores contiguous class indices
+            (0..C-1); when True, remap truth/pred back to Land_use_ID codes so
+            they align with LAND_USE_NAMES (mirrors the LR `classes[y_pred]`
+            idiom). Set False if the parquet already holds raw codes.
+        truth_col / pred_col: column names in the parquet.
+        group_files: optional {group_name: parquet path} explicit override.
+    Returns:
+        (all_summary_df, all_per_class_df, all_cms)
+    '''
+    pred_dir = Path(pred_dir).expanduser()
+    if class_codes is None:
+        class_codes = sorted(LAND_USE_NAMES.keys())
+    codes = np.asarray(class_codes)
+
+    if group_files is None:
+        if groups is None:
+            groups = [g for g, v in MODEL_NAMES.items() if v.get('run_id')]
+        group_files = {}
+        for g in groups:
+            run_id = MODEL_NAMES[g]['run_id']
+            if run_id is None:
+                raise ValueError(f"MODEL_NAMES[{g!r}]['run_id'] is None; set it "
+                                 f"or pass group_files explicitly")
+            group_files[g] = list(pred_dir.glob(f'naturalness_predictions_{run_id}*.parquet'))[0]
+
+    y_true_by_group, y_pred_by_group = {}, {}
+    for name, fp in group_files.items():
+        df = pd.read_parquet(Path(fp).expanduser(), columns=[truth_col, pred_col])
+        y_true = df[truth_col].to_numpy()
+        y_pred = df[pred_col].to_numpy()
+        if predictions_are_class_idx:
+            y_true = codes[y_true.astype(int)]
+            y_pred = codes[y_pred.astype(int)]
+        y_true_by_group[name] = y_true
+        y_pred_by_group[name] = y_pred
+    return build_and_save_reports(y_true_by_group, y_pred_by_group,
+                                  save_dir, prefix, labels=list(class_codes))
+
+
 def plot_results(summary_file: str, per_class_file: str, all_cms_file: str, save_dir: str, groups: tuple[str]=None, baseline_name: str='rh98', **kwargs):
     '''
     Plot the results
@@ -686,6 +912,10 @@ def plot_results(summary_file: str, per_class_file: str, all_cms_file: str, save
     plot_bars(summary_df, per_class_df, groups=groups, metric='Precision', avg='macro', baseline_name=baseline_name, save_dir=save_dir)
     plot_bars(summary_df, per_class_df, groups=groups, metric='F1', avg='macro', baseline_name=baseline_name, save_dir=save_dir)
     plot_bars(summary_df, per_class_df, groups=groups, metric='Accuracy', avg='macro', baseline_name=baseline_name, save_dir=save_dir)
+    plot_dots(summary_df, per_class_df, groups=groups, metric='Recall', avg='macro', save_dir=save_dir)
+    plot_dots(summary_df, per_class_df, groups=groups, metric='Precision', avg='macro', save_dir=save_dir)
+    plot_dots(summary_df, per_class_df, groups=groups, metric='F1', avg='macro', save_dir=save_dir)
+    plot_dots(summary_df, per_class_df, groups=groups, metric='Accuracy', avg='macro', save_dir=save_dir)
     plot_confusion_matrix(all_cms, save_dir)
 
 
