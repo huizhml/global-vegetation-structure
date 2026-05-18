@@ -949,6 +949,99 @@ def check_distribution(vsm_patch_stats_dir: str, save_dir: str, feature_cols: li
 
     return
 
+# ----------------------------------------------------------------------------------------
+#  Step 5. Investigate predictions
+# ----------------------------------------------------------------------------------------
+
+def agg_preds_from_models(cnn_pred_dir: str, logreg_pred_file: str, save_dir: str=None,
+                          out_name: str='aggregated_predictions.fgb',
+                          class_codes=None, **kwargs):
+    '''
+    Collect per-sample predictions from every CNN run + the logistic
+    regression models into one spatial table and write a FlatGeobuf.
+
+    Join key is `rowid`; runs are outer-joined and placed side by side, no
+    aggregation. Per CNN run (named <group>) the raw per-class
+    probabilities (prob_0..prob_{C-1}, written by
+    callbacks.naturalness_prediction_logger.NaturalnessPredictionLogger)
+    become columns `<group>_prob_<c>`, plus its hard prediction
+    `cnn_<group>`. LR models contribute `lr_<group>` hard predictions.
+    `Land_use_ID` is the ground truth; geometry comes from the LR file.
+    Missing rowids: probs -> NaN, int columns -> -1.
+
+    Args:
+        cnn_pred_dir: dir of naturalness_predictions_*.parquet (one per run)
+        logreg_pred_file: logistic_regression_predictions.parquet
+            (rowid-indexed, geometry + one column per LR model)
+        save_dir: output dir (defaults to cnn_pred_dir)
+        out_name: FlatGeobuf filename
+        class_codes: ordered class-index -> Land_use_ID code map;
+            defaults to sorted(LAND_USE_NAMES)
+    Returns:
+        the aggregated GeoDataFrame
+    '''
+    cnn_pred_dir = Path(cnn_pred_dir).expanduser()
+    logreg_pred_file = Path(logreg_pred_file).expanduser()
+    save_dir = Path(save_dir).expanduser() if save_dir else cnn_pred_dir
+    save_dir.mkdir(parents=True, exist_ok=True)
+    if class_codes is None:
+        class_codes = sorted(LAND_USE_NAMES.keys())
+    codes = np.asarray(class_codes)
+
+    # run_id -> group name, to label each CNN file
+    runid2group = {v['run_id']: g for g, v in MODEL_NAMES.items() if v.get('run_id')}
+
+    cnn_files = sorted(cnn_pred_dir.glob('naturalness_predictions_*.parquet'))
+    if not cnn_files:
+        raise ValueError(f'no naturalness_predictions_*.parquet in {cnn_pred_dir}')
+
+    # One block of columns per CNN run: raw per-class probs + the hard pred
+    parts = []               # list of rowid-indexed DataFrames, one per run
+    truth = None
+    for fp in cnn_files:
+        token = fp.stem.replace('naturalness_predictions_', '')
+        group = next((g for rid, g in runid2group.items() if token.startswith(rid)), token)
+        df = pd.read_parquet(fp).set_index('rowid')
+        prob_cols = sorted([c for c in df.columns if c.startswith('prob_')],
+                           key=lambda c: int(c.split('_')[1]))
+        part = df[prob_cols].astype(np.float32)
+        part.columns = [f'{group}_prob_{c.split("_")[1]}' for c in prob_cols]
+        part[f'cnn_{group}'] = codes[df['pred'].to_numpy().astype(int)].astype('int16')
+        parts.append(part)
+        if truth is None:
+            truth = pd.Series(codes[df['Land_use_ID'].to_numpy().astype(int)],
+                              index=df.index, name='Land_use_ID')
+
+    # Outer-join every run on rowid (no aggregation, just collected side by side)
+    agg = pd.concat(parts, axis=1)
+    common = agg.index
+    agg.insert(0, 'Land_use_ID', truth.reindex(common).fillna(-1).astype('int16'))
+    for col in [c for c in agg.columns if c.startswith('cnn_')]:
+        # FlatGeobuf has no nullable ints; -1 = rowid absent from that run
+        agg[col] = agg[col].fillna(-1).astype('int16')
+
+    # Logistic-regression predictions + geometry, joined by rowid
+    lr = gpd.read_parquet(logreg_pred_file)
+    if 'rowid' in lr.columns:
+        lr = lr.set_index('rowid')
+    lr.index.name = 'rowid'
+    meta = {'Land_use_ID', 'slope', 'geometry', 'flag'}
+    for col in [c for c in lr.columns if c not in meta]:
+        agg[f'lr_{col}'] = lr[col].reindex(common).fillna(-1).astype('int16')
+
+    geom = lr['geometry'].reindex(common)
+    out = gpd.GeoDataFrame(agg.reset_index(), geometry=geom.values, crs='EPSG:4326')
+    missing = out['geometry'].isna().sum()
+    if missing:
+        print(f'[agg_preds_from_models] WARNING: {missing} rows have no geometry '
+              f'(rowid absent from {logreg_pred_file.name}); dropping them')
+        out = out[out['geometry'].notna()]
+
+    out_fp = save_dir / out_name
+    out.to_file(out_fp, driver='FlatGeobuf')
+    print(f'wrote {len(out)} rows from {len(parts)} CNN runs to {out_fp}')
+    return out
+
 if __name__ == '__main__':
     # from evaluation.utils import verify_batch_binning
     # verify_batch_binning()
