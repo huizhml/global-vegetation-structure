@@ -273,7 +273,7 @@ class PlotBarsConfig(FunctionConfig):
     all_cms_file: str = '{root_dir}/logistic_regression_confusion_matrices.npz'
     save_dir: str = '{root_dir}'
     baseline_name: str = 'rh98'
-    groups: tuple[str] = field(default_factory=lambda: ('rh98', 'full_profile', 'rh98_s2', 'key_rhs', 'rh98_cr', 'rh98_fhd', 'rh98_enl2d', 'rh98_fhd_enl1d_enl2d_cr', 'full_profile_s2'))
+    groups: tuple[str] = field(default_factory=lambda: ('rh98', 'rh98_fhd', 'rh98_enl2d','rh98_cr', 'rh98_fhd_enl1d_enl2d_cr', 'key_rhs', 'rh98_s2', 'full_profile', 'full_profile_s2'))
     _target_: str = "evaluation.on_naturalness.plot_results"
     
 cs.store(group='run', name='plot_bars_spatial_context', node=PlotBarsConfig)
@@ -291,7 +291,28 @@ class PlotBarsCenterPixelConfig(FunctionConfig):
     
 cs.store(group='run', name='plot_bars_center_pixel', node=PlotBarsCenterPixelConfig)
 
+# --- CNN results ---
 
+@dataclass
+class EvalCNNResultsConfig(FunctionConfig):
+    pred_dir: str = '~/data/gvs/evaluation/downstream_tasks/naturalness/results_from_vsm_2017/cnn_results'
+    save_dir: str = '{pred_dir}'
+    _target_: str = "evaluation.on_naturalness.evaluate_cnn_predictions"
+    
+cs.store(group='run', name='eval_cnn_results', node=EvalCNNResultsConfig)
+
+@dataclass
+class PlotCNNResultsConfig(FunctionConfig):
+    root_dir: str = '~/data/gvs/evaluation/downstream_tasks/naturalness/results_from_vsm_2017/cnn_results'
+    summary_file: str = '{root_dir}/cnn_summary_reports.csv'
+    per_class_file: str = '{root_dir}/cnn_per_class_reports.csv'
+    all_cms_file: str = '{root_dir}/cnn_confusion_matrices.npz'
+    save_dir: str = '{root_dir}'
+    baseline_name: str = 'rh98'
+    groups: tuple[str] = field(default_factory=lambda: ('rh98', 'rh98_fhd', 'rh98_enl2d','rh98_cr', 'rh98_fhd_enl1d_enl2d_cr', 'key_rhs', 'rh98_s2', 'full_profile', 'full_profile_s2'))
+    _target_: str = "evaluation.on_naturalness.plot_results"
+    
+cs.store(group='run', name='plot_cnn_results', node=PlotCNNResultsConfig)
 # =======================================
 #   Compute GLCM texture
 # =======================================

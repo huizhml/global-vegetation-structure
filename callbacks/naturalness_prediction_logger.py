@@ -21,6 +21,12 @@ class NaturalnessPredictionLogger(Callback):
     is intentionally not added here: it is a spatial join done downstream by
     postprocessing.core.extract_sparse_points.add_biome.
 
+    The output is named by the *model's* run id (the run the tested
+    checkpoint came from), which run.py exposes as
+    `datamodule.model_run_id`; non-resume eval spins up a fresh wandb run,
+    so the current `trainer.logger` id would otherwise mislabel the file.
+    Falls back to the current run id when model_run_id is unavailable.
+
     save_dir defaults to None -> write beside the data_file (the directory
     NaturalnessDataModule loaded from). Pass an explicit save_dir to override.
 
@@ -43,7 +49,7 @@ class NaturalnessPredictionLogger(Callback):
             save_dir = self.save_dir
         else:
             # Beside the data: NaturalnessDataModule.data_file's directory.
-            save_dir = Path(trainer.datamodule.data_file).expanduser().parent
+            save_dir = Path(trainer.datamodule.data_file).expanduser().parent / 'cnn_results'
         save_dir.mkdir(parents=True, exist_ok=True)
         return save_dir
 
@@ -64,7 +70,7 @@ class NaturalnessPredictionLogger(Callback):
         rowid = torch.cat(self._rowid).numpy()
         pred = probs.argmax(axis=1)
 
-        df = pd.DataFrame({'rowid': rowid, 'class_idx': y, 'pred': pred})
+        df = pd.DataFrame({'rowid': rowid, 'Land_use_ID': y, 'pred': pred})
         for c in range(probs.shape[1]):
             df[f'prob_{c}'] = probs[:, c]
 
@@ -87,7 +93,11 @@ class NaturalnessPredictionLogger(Callback):
                   f'non-spatial parquet (no map geometry)')
             gdf = df
 
-        run_id = trainer.logger._experiment.id
+        # Name by the model's run (the run the checkpoint came from), set by
+        # run.py on the datamodule. Falls back to the current run id when it
+        # is unavailable (e.g. testing a freshly fit model in the same run).
+        run_id = (getattr(trainer.datamodule, 'model_run_id', None)
+                  or trainer.logger._experiment.id)
         out_fp = self._resolve_save_dir(trainer) / \
             f'naturalness_predictions_{run_id}{self.outfile_suffix}.parquet'
         gdf.to_parquet(out_fp, index=False)
