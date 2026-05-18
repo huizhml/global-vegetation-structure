@@ -177,7 +177,7 @@ def correlation_plot(df: pd.DataFrame, x_name: str, y_name: str,
 
 def _correlate(df: pd.DataFrame, wsci_name: str, index_name: str,
                save_dir: Path, group_by: str, min_points: int,
-               scale: str = 'zscore') -> list[dict]:
+               scale: str = 'zscore', pclip: int=1) -> list[dict]:
     '''Correlate WSCI against one diversity index, overall and per group.'''
     rows = []
     label = DIVERSITY_LABELS.get(index_name, index_name)
@@ -188,8 +188,8 @@ def _correlate(df: pd.DataFrame, wsci_name: str, index_name: str,
                  'biome_value': -1, **m})
     correlation_plot(sub, wsci_name, index_name, m,
                      save_dir / f'wsci_vs_{index_name}_scatter_all.pdf',
-                     title=f'{wsci_name} vs {label} (all biomes)',
-                     scale=scale, y_label=label)
+                     title=f'{wsci_name} vs {label}',
+                     scale=scale, y_label=label, pclip=pclip)
     print(f'{label} all:', m)
 
     if group_by:
@@ -214,7 +214,7 @@ def _correlate(df: pd.DataFrame, wsci_name: str, index_name: str,
 def eval_on_wsci(wsci_file: str, diversity_file: str, test_point_dir: str,
                  save_dir: str = None, wsci_name: str = 'WSCI',
                  diversity_bands: list = None, group_by: str = 'BIOME',
-                 min_points: int = 30, plot_scale: str = 'zscore', **kwargs):
+                 min_points: int = 30, plot_scale: str = 'zscore', pclip:int=1, **kwargs):
     '''
     Correlation analysis between WSCI and each band of a 4-band diversity
     raster (fhd, enl1d, enl2d, cr) sampled at the test point locations,
@@ -269,7 +269,7 @@ def eval_on_wsci(wsci_file: str, diversity_file: str, test_point_dir: str,
     rows = []
     for band in diversity_bands:
         rows += _correlate(df, wsci_name, band, save_dir, group_by,
-                            min_points, scale=plot_scale)
+                            min_points, scale=plot_scale, pclip=pclip)
     results = pd.DataFrame(rows)
     results.to_csv(save_dir / 'wsci_vs_diversity_correlation.csv', index=False)
     return results

@@ -101,6 +101,7 @@ class EvalOnWSCIConfig(FunctionConfig):
     group_by: str = 'BIOME'
     min_points: int = 30
     plot_scale: str = 'zscore'  # axis standardization for plots: zscore|minmax|none
+    pclip: int = 1
     _target_: str = "evaluation.on_wsci.eval_on_wsci"
 
 cs.store(group='run', name='eval_on_wsci', node=EvalOnWSCIConfig)
@@ -313,6 +314,19 @@ class PlotCNNResultsConfig(FunctionConfig):
     _target_: str = "evaluation.on_naturalness.plot_results"
     
 cs.store(group='run', name='plot_cnn_results', node=PlotCNNResultsConfig)
+
+# --- Agg CNN & logistic regression results ---
+@dataclass
+class AggCNNLogregResults(FunctionConfig):
+    root_dir: str = '~/data/gvs/evaluation/downstream_tasks/naturalness/results_from_vsm_2017'
+    cnn_pred_dir: str = '{root_dir}/cnn_results'
+    logreg_pred_file: str = '{root_dir}/naturalness_classification_ps15/logistic_regression_predictions.parquet'
+    save_dir: str = '{root_dir}'
+    out_name: str = 'aggregated_predictions_cnn_logreg.fgb'
+    _target_: str = "evaluation.on_naturalness.agg_preds_from_models"
+    
+cs.store(group='run', name='agg_preds_from_models', node=AggCNNLogregResults)
+
 # =======================================
 #   Compute GLCM texture
 # =======================================
