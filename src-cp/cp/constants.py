@@ -1,0 +1,46 @@
+BIOME_MAPPING = {
+    1: "Tropical and Subtropical Moist Broadleaf Forests",
+    2: "Tropical and Subtropical Dry Broadleaf Forests",
+    3: "Tropical and Subtropical Coniferous Forests",
+    4: "Temperate Broadleaf and Mixed Forests",
+    5: "Temperate Coniferous Forests",
+    6: "Boreal Forests/Taiga",
+    7: "Tropical and Subtropical Grasslands, Savannas, and Shrublands",
+    8: "Temperate Grasslands, Savannas, and Shrublands",
+    9: "Flooded Grasslands and Savannas",
+    10: "Montane Grasslands and Shrublands",
+    11: "Tundra",
+    12: "Mediterranean Forests, Woodlands, and Scrub",
+    13: "Deserts and Xeric Shrublands",
+    14: "Mangroves",
+    # 98: "Lake",
+    # 99: "Rock and Ice",
+}
+
+OKABE_ITO_PALETTE = {
+    "orange": "#E69F00",
+    "sky_blue": "#56B4E9",
+    "bluish_green": "#009E73",
+    "yellow": "F0E442",
+    "blue": "#0072B2",
+    "vermillion": "#D55E00",
+    "reddish_purple": "#CC79A7",
+    "black": "#000000",
+}
+
+BIOME_SHORT_MAPPING = {
+    "Tropical and Subtropical Moist Broadleaf Forests": "Trop. moist\nbroadleaf",
+    "Tropical and Subtropical Dry Broadleaf Forests": "Trop. dry\nbroadleaf",
+    "Tropical and Subtropical Coniferous Forests": "Trop.\nconiferous",
+    "Temperate Broadleaf and Mixed Forests": "Temp.\nbroadleaf",
+    "Temperate Coniferous Forests": "Temp.\nconiferous",
+    "Boreal Forests/Taiga": "Boreal",
+    "Tropical and Subtropical Grasslands, Savannas, and Shrublands": "Trop.\ngrassland",
+    "Temperate Grasslands, Savannas, and Shrublands": "Temp.\ngrassland",
+    "Flooded Grasslands and Savannas": "Flooded\ngrassland",
+    "Montane Grasslands and Shrublands": "Montane\ngrassland",
+    "Tundra": "Tundra",
+    "Mediterranean Forests, Woodlands, and Scrub": "Mediterranean\nforest",
+    "Deserts and Xeric Shrublands": "Deserts",
+    "Mangroves": "Mangroves",
+}

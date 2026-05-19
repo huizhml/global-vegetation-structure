@@ -1,0 +1,98 @@
+plot:
+  # Skip Tundra due to insufficient data
+  skip_biomes: [11]
+  # Figure widths are in points (default LaTeX unit)
+  coverage:
+    fig_width_pt: 372
+    fig_height_pt: 230
+  avg_width:
+    fig_width_pt: 372
+    fig_height_pt: 230
+eval:
+  # Path to the calibration data combined in one table, can be generated with
+  # `scripts/cp/combine_parquets.py`
+  data_path: ../data/calibration-data.parquet
+  # Can also be specified by providing a path to a directory containing parquet
+  # files, where after collecting all files, they will be combined into one
+  # table and preprocessed in the same way as the combined parquet file:
+  # data_root: ../data/calibration-data/
+cp:
+  alpha: 0.1
+  cqr_methods:
+  - CQR
+  - SE-CQR
+  # Other available methods:
+  # - CQR-r
+  # - CQR-m
+  # - SE-CQR-r
+  # - SE-CQR-m
+  # Path and data_root option as in the case of eval configuration
+  cal_data_path: ../data/calibration-data.parquet
+data:
+  # Specifies column names in the data table, where names need to be the same
+  # for calibration and evaluation data, as the same configuration is used for
+  # both.
+  biome_col: BIOME
+  rh_cols:
+    0:
+      ground_truth: rh0
+      q_hi: RH0_Q0
+      q_lo: RH0_Q2
+      q_med: RH0_Q1
+    10:
+      ground_truth: rh10
+      q_hi: RH10_Q0
+      q_lo: RH10_Q2
+      q_med: RH10_Q1
+    25:
+      ground_truth: rh25
+      q_hi: RH25_Q0
+      q_lo: RH25_Q2
+      q_med: RH25_Q1
+    50:
+      ground_truth: rh50
+      q_hi: RH50_Q0
+      q_lo: RH50_Q2
+      q_med: RH50_Q1
+    75:
+      ground_truth: rh75
+      q_hi: RH75_Q0
+      q_lo: RH75_Q2
+      q_med: RH75_Q1
+    95:
+      ground_truth: rh95
+      q_hi: RH95_Q0
+      q_lo: RH95_Q2
+      q_med: RH95_Q1
+    98:
+      ground_truth: rh98
+      q_hi: RH98_Q0
+      q_lo: RH98_Q2
+      q_med: RH98_Q1
+    100:
+      ground_truth: rh100
+      q_hi: RH100_Q0
+      q_lo: RH100_Q2
+      q_med: RH100_Q1
+  other_cols:
+  - lc
+  - slope
+  - BIOME
+  - ECO_ID
+  - lat
+  - lon
+  - geometry
+  - shot_number
+  - digital_elevation_model
+  - solar_elevation
+  - sensitivity
+  - urban_proportion
+  - elevation_bias_flag
+  - surface_flag
+  - num_detectedmodes
+  - selected_mode
+  - selected_mode_flag
+  - energy_total
+  - elev_highestreturn
+  - elev_lowestmode
+  - beam
