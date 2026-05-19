@@ -44,11 +44,17 @@ def evaluate_vsm_on_gedi(
     save_dir = Path(f'{save_dir}').expanduser()
     save_dir.mkdir(parents=True, exist_ok=True)
     files = list(ref_and_ours_dir.glob('*.parquet'))#[:10]
-    ddf = dgp.read_parquet(files, gather_spatial_partitions=False)
-    if slope_lt20:
-        ddf = ddf[ddf['slope'] < 20]
     ours_rh_cols = [f'RH{i}_Q1' for i in range(101)]
     gedi_rh_cols = [f'rh{i}' for i in range(101)]
+    # Read ONLY the columns the residuals need. dgp.read_parquet would decode
+    # the WKB geometry into a shapely object per row (millions, unused here)
+    # and load every column; plain dd + column projection avoids both. With
+    # one 2.8 GB file, split_row_groups gives parallel partitions for compute.
+    needed_cols = ours_rh_cols + gedi_rh_cols + (['slope'] if slope_lt20 else [])
+    ddf = dd.read_parquet(files, columns=needed_cols, split_row_groups=True,
+                          dataset={"partitioning": None})
+    if slope_lt20:
+        ddf = ddf[ddf['slope'] < 20]
     rename_map = dict(zip(ours_rh_cols, gedi_rh_cols)) # dataframe substract matches the columns, need to rename the columns
     residuals = ddf[ours_rh_cols].rename(columns=rename_map) - ddf[gedi_rh_cols]
     residuals = residuals.compute()
