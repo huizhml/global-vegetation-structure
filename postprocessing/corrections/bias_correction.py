@@ -23,7 +23,9 @@ import xarray as xr
 import numpy as np
 import dask.dataframe as dd
 from rasterio.crs import CRS
-from const import VSM_NODATA
+from const import VSM_NODATA, FONT_SIZES, set_plot_fonts
+
+set_plot_fonts()
 
 
 def sample_locs_for_all_rhs(tile_id: str, stac_collection_dir: str = None, gedi_ref_df: pd.DataFrame = None, rh_size: int = 101, chunks: int = 1024):
@@ -535,7 +537,7 @@ def correction_performance_distribution(correction_result_dir: str, year: int):
                              xy=(max_value, 0),
                              xytext=(max_value, y_position),  # Offset x position for better readability
                              arrowprops=dict(facecolor=color, shrink=0.1),  # Use the same color as the histogram
-                             fontsize=10, color='black')
+                             fontsize=FONT_SIZES['annot'], color='black')
             plt.title(
                 f'Distribution of tile-level {metric} ({rh_idx}) for raw, linear_corrected, and bias_corrected predictions')
             plt.xlabel(f'{metric} ({rh_idx})')

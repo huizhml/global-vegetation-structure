@@ -6,16 +6,19 @@ import geopandas as gpd
 import dask_geopandas as dgp
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
+from matplotlib.ticker import MaxNLocator
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import rasterio
 from rasterio.crs import CRS
 from rasterio.transform import rowcol
 from rasterio.warp import transform as warp_transform
 from rasterio.windows import Window
-from scipy.stats import pearsonr, spearmanr
+from scipy.stats import pearsonr, spearmanr, linregress
 from tqdm import tqdm
 
-from const import BIOMES
+from const import BIOMES, FONT_SIZES, set_plot_fonts
+
+set_plot_fonts()
 
 # Band order of the diversity raster (used as df columns / file slugs).
 DIVERSITY_BANDS = ['fhd', 'enl1d', 'enl2d', 'cr']
@@ -125,59 +128,97 @@ def _scale(v: np.ndarray, how: str) -> np.ndarray:
     raise ValueError(f"unknown scale '{how}' (use 'zscore', 'minmax', 'none')")
 
 
-def correlation_plot(df: pd.DataFrame, x_name: str, y_name: str,
-                     metrics: dict, save_path: Path, title: str,
-                     scale: str = 'zscore',
-                     x_label: str = None, y_label: str = None,
-                     pclip: float = 1.0) -> None:
-    '''Log-scaled density scatter of the two products with a 1:1 reference.
 
-    Axes are standardized per `scale` ('zscore'|'minmax'|'none') so the two
-    products are visually comparable despite different value ranges, and the
-    view is clipped to a shared [`pclip`, 100-`pclip`] percentile box so a
-    long tail in one product can't blow out the panel. The clip is *display
-    only* — the Pearson/Spearman/R² annotation is computed on the raw values
-    upstream over all points and is unaffected by this rescaling/clipping.
-    '''
-    x = _scale(df[x_name].to_numpy(), scale)
-    y = _scale(df[y_name].to_numpy(), scale)
-    unit = {'zscore': ' (z-score)', 'minmax': ' (min-max)'}.get(scale, '')
-
-    # Shared limits at the [pclip, 100-pclip] percentile of each axis, so
-    # neither axis clips its own bulk and the box stays square / 1:1 valid.
-    lo = float(min(np.percentile(x, pclip), np.percentile(y, pclip)))
-    hi = float(max(np.percentile(x, 100 - pclip),
-                   np.percentile(y, 100 - pclip)))
-
+def hexbin_regression_plot(
+    df: pd.DataFrame,
+    x_name: str,
+    y_name: str,
+    metrics: dict,
+    save_path: Path,
+    title: str,
+    x_label: str = None,
+    y_label: str = None,
+    gridsize: int = 40,
+    cmap: str = 'Greens',
+    show_colorbar: bool = True
+) -> None:
+    """Hexbin density scatter with a linear regression line.
+ 
+    Parameters
+    ----------
+    df          : DataFrame containing the two columns.
+    x_name      : Column name for the x-axis variable.
+    y_name      : Column name for the y-axis variable.
+    metrics     : dict with keys 'pearson_r', 'spearman_rho', 'r2', 'n'.
+    save_path   : Output file path (.png / .pdf / …).
+    title       : Plot title.
+    x_label     : Custom x-axis label (defaults to x_name).
+    y_label     : Custom y-axis label (defaults to y_name).
+    gridsize    : Number of hexagons across the x-axis.
+    cmap        : Matplotlib colormap name.
+    """
+    x = df[x_name].to_numpy()
+    y = df[y_name].to_numpy()
+ 
+    xmin, xmax = float(np.min(x)), float(np.max(x))
+    ymin, ymax = float(np.min(y)), float(np.max(y))
+    slope, intercept, _, _, _ = linregress(x, y)
+    x_fit = np.linspace(xmin, xmax, 100)
+    y_fit = slope * x_fit + intercept
+ 
+    # ── Plot ──────────────────────────────────────────────────────
     fig, ax = plt.subplots(1, 1, figsize=(7, 7))
-    hb = ax.hist2d(x, y, bins=60, cmap='viridis', norm=LogNorm(vmin=1),
-                   range=[[lo, hi], [lo, hi]])
-    ax.plot([lo, hi], [lo, hi], color='black', linestyle='dashed', linewidth=1)
+ 
+    hb = ax.hexbin(
+        x, y,
+        gridsize=gridsize,
+        cmap=cmap,
+        mincnt=1,
+        edgecolors='none',
+        norm=LogNorm(vmin=1),
+        extent=[xmin, xmax, ymin, ymax],
+    )
+ 
+    # Regression line
+    ax.plot(x_fit, y_fit, color='black', linewidth=1.5)
+ 
+    # Formatting
+    ax.set_xlim(xmin, xmax)
+    ax.set_ylim(ymin, ymax)
+    ax.xaxis.set_major_locator(MaxNLocator(nbins=4, prune='both'))
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=4, prune='both'))
+    ax.tick_params(axis='both', labelsize=FONT_SIZES['ticks'])
 
-    # Square plot box + colorbar locked to the axes' height.
-    ax.set_xlim(lo, hi)
-    ax.set_ylim(lo, hi)
-    ax.set_aspect('equal')
-    cax = make_axes_locatable(ax).append_axes('right', size='5%', pad=0.1)
-    fig.colorbar(hb[3], cax=cax, label='count')
+    annot_positony = 0.95
+    if show_colorbar:
+        cax = make_axes_locatable(ax).append_axes('right', size='5%', pad=0.1)
+        cb = fig.colorbar(hb, cax=cax)
+        cb.set_label('count', fontsize=FONT_SIZES['colorbar'])
+        cb.ax.tick_params(labelsize=FONT_SIZES['ticks'])
+        annot_positony = 0.2
 
-    ax.set_xlabel((x_label or x_name) + unit)
-    ax.set_ylabel((y_label or y_name) + unit)
-    ax.set_title(title)
-    ax.text(0.05, 0.95,
-            f"Pearson r = {metrics['pearson_r']:.3f}\n"
-            f"Spearman ρ = {metrics['spearman_rho']:.3f}\n"
-            f"R² = {metrics['r2']:.3f}\n"
-            f"N = {metrics['n']}",
-            ha='left', va='top', transform=ax.transAxes, fontsize=12,
-            bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
-    fig.savefig(save_path, bbox_inches='tight')
+    ax.set_xlabel(x_label or x_name, fontsize=FONT_SIZES['label'])
+    ax.set_ylabel(y_label or y_name, fontsize=FONT_SIZES['label'])
+    # ax.set_title(title, fontsize=FONT_SIZES['title'])
+ 
+    # Stats annotation
+    ax.text(
+        0.05, annot_positony,
+        f"Pearson $r$ = {metrics['pearson_r']:.3f}\n"
+        # f"Spearman $\\rho$ = {metrics['spearman_rho']:.3f}\n"
+        f"$R^2$ = {metrics['r2']:.3f}\n"
+        f"N = {metrics['n']}",
+        ha='left', va='top',
+        transform=ax.transAxes, fontsize=FONT_SIZES['annot'],
+        bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8),
+    )
+ 
+    fig.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close(fig)
 
 
 def _correlate(df: pd.DataFrame, wsci_name: str, index_name: str,
-               save_dir: Path, group_by: str, min_points: int,
-               scale: str = 'zscore', pclip: int=1) -> list[dict]:
+               save_dir: Path, group_by: str, min_points: int) -> list[dict]:
     '''Correlate WSCI against one diversity index, overall and per group.'''
     rows = []
     label = DIVERSITY_LABELS.get(index_name, index_name)
@@ -186,10 +227,9 @@ def _correlate(df: pd.DataFrame, wsci_name: str, index_name: str,
     m = _corr_metrics(sub, wsci_name, index_name)
     rows.append({'diversity_index': label, 'group': 'all',
                  'biome_value': -1, **m})
-    correlation_plot(sub, wsci_name, index_name, m,
+    hexbin_regression_plot(sub, wsci_name, index_name, m,
                      save_dir / f'wsci_vs_{index_name}_scatter_all.pdf',
-                     title=f'{wsci_name} vs {label}',
-                     scale=scale, y_label=label, pclip=pclip)
+                     title=f'{wsci_name} vs {label}', y_label=label, show_colorbar=index_name=='cr')
     print(f'{label} all:', m)
 
     if group_by:
@@ -201,11 +241,10 @@ def _correlate(df: pd.DataFrame, wsci_name: str, index_name: str,
             gm = _corr_metrics(group, wsci_name, index_name)
             rows.append({'diversity_index': label, 'group': name,
                          'biome_value': int(biome_value), **gm})
-            correlation_plot(
+            hexbin_regression_plot(
                 group, wsci_name, index_name, gm,
                 save_dir / f'wsci_vs_{index_name}_scatter_{abbr}.pdf',
-                title=f'{wsci_name} vs {label} ({name})',
-                scale=scale, y_label=label,
+                title=f'{wsci_name} vs {label} ({name})', y_label=label,
             )
             print(f'  {label}/{name}:', gm)
     return rows
@@ -214,7 +253,7 @@ def _correlate(df: pd.DataFrame, wsci_name: str, index_name: str,
 def eval_on_wsci(wsci_file: str, diversity_file: str, test_point_dir: str,
                  save_dir: str = None, wsci_name: str = 'WSCI',
                  diversity_bands: list = None, group_by: str = 'BIOME',
-                 min_points: int = 30, plot_scale: str = 'zscore', pclip:int=1, **kwargs):
+                 min_points: int = 30, **kwargs):
     '''
     Correlation analysis between WSCI and each band of a 4-band diversity
     raster (fhd, enl1d, enl2d, cr) sampled at the test point locations,
@@ -269,7 +308,7 @@ def eval_on_wsci(wsci_file: str, diversity_file: str, test_point_dir: str,
     rows = []
     for band in diversity_bands:
         rows += _correlate(df, wsci_name, band, save_dir, group_by,
-                            min_points, scale=plot_scale, pclip=pclip)
+                            min_points)
     results = pd.DataFrame(rows)
     results.to_csv(save_dir / 'wsci_vs_diversity_correlation.csv', index=False)
     return results

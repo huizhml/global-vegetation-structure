@@ -1,10 +1,13 @@
 import argparse
 
+import yaml
+
 from cp.dl import RHDataCPConfig, collect_data, preprocess_rh_data
 
 
 def main(args):
-    config = RHDataCPConfig(args.config_path)
+    with open(args.config_path, "r") as f:
+        config = RHDataCPConfig(yaml.safe_load(f)["data"])
     data = collect_data(args.data_root, config)
     data = preprocess_rh_data(data, config)
     data.to_parquet(args.save_path)

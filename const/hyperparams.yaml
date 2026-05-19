@@ -95,6 +95,17 @@ palette:
   - '#fcae12'
   - '#f5db4c'
 
+# Central font sizes (points) for every figure in the repo. Edit here to
+# restyle all plots at once. ``const.set_plot_fonts()`` also pushes these into
+# matplotlib rcParams so calls that omit an explicit size inherit them.
+font_sizes:
+  ticks:    12   # x/y tick numbers, colorbar ticks fall back to this
+  label:    14   # axis labels (set_xlabel/set_ylabel)
+  title:    16   # axes titles and figure suptitles
+  annot:    12   # in-axes text / annotate / ax.text default
+  legend:   12   # legend entries
+  colorbar: 12   # colorbar label
+
 # Colormap ranges for VSM thumbnails (diversity indices + per-RH bands).
 # cmin/cmax for rh*_q1 entries are in METERS — convert to decimeters (×10)
 # when the underlying raster is stored in decimeters (see create_pdf_thumb).

@@ -4,6 +4,10 @@ from postprocessing.core.s2_tiling import find_intersecting_s2_tiles
 from pathlib import Path
 import matplotlib.pyplot as plt
 import pandas as pd
+
+from const import set_plot_fonts
+
+set_plot_fonts()
 import numpy as np
 from matplotlib.backends.backend_pdf import PdfPages
 from download.products.sentinel2.inference import query_growing_season_images_by_api, get_top_20_images

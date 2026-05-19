@@ -8,7 +8,9 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
 from .utils import check_if_log
-from const import BIOMES_BY_VALUE
+from const import BIOMES_BY_VALUE, FONT_SIZES, set_plot_fonts
+
+set_plot_fonts()
 
     
 def boxplot_from_stats(name, table):
@@ -106,7 +108,7 @@ class BoxplotLogger(Callback):
                 wandb.log({f'Residuals by RH98 intervals/{name}': wandb.Image(fig)})
                 plt.close(fig)
                 fig = boxplot_from_stats(name, table_biome)
-                plt.xticks(rotation=45, ha='right', fontsize=8)
+                plt.xticks(rotation=45, ha='right', fontsize=FONT_SIZES['ticks'])
                 wandb.log({f'Residuals by biome/{name}_biome': wandb.Image(fig)})
                 plt.close(fig)
 

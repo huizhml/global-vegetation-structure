@@ -8,6 +8,10 @@ import pandas as pd
 import geopandas as gpd
 import numpy as np
 import matplotlib.pyplot as plt
+
+from const import FONT_SIZES, set_plot_fonts
+
+set_plot_fonts()
 import warnings
 warnings.filterwarnings(
     "ignore",
@@ -194,7 +198,7 @@ def check_image_statistics(tile_ids, year, plot_type='bar'):
                     row_mean = f"{'Mean':<{5}}" + "".join([f"{m:>{colw}}" for m in means])
                     row_std  = f"{'Std':<{5}}"  + "".join([f"{s:>{colw}}" for s in stds])
                     table_text = "\n".join([row_band, row_mean, row_std])
-                    ax.set_xlabel(table_text,fontsize=12, ha='left', family='monospace')
+                    ax.set_xlabel(table_text,fontsize=FONT_SIZES['label'], ha='left', family='monospace')
                     ax.xaxis.set_label_coords(-0.06, -0.05) 
                     plt.savefig(file_path.parent / f'rgb_{tile_id}_{date}.png')
                     plt.close()
@@ -265,7 +269,7 @@ def check_intermediate_preds(tile_ids, year):
                     fig, ax = plt.subplots(figsize=(8, 8))
                     ax.imshow(data, cmap='magma', vmin=0, vmax=500)
                     ax.set_title(f'{tile_id}_{tif_path.stem.split('_')[1]}')
-                    ax.set_xlabel(f'avg: {avg:.2f}, std: {std:.2f}, min: {min:.2f}, max: {max:.2f}', ha='center', fontsize=12)
+                    ax.set_xlabel(f'avg: {avg:.2f}, std: {std:.2f}, min: {min:.2f}, max: {max:.2f}', ha='center', fontsize=FONT_SIZES['label'])
                     plt.tight_layout()
                     plt.savefig(out_file.parent / f'RH98_{tile_id}_{tif_path.stem.split('_')[1]}.png')
                     plt.close()

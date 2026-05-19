@@ -34,9 +34,8 @@ cs.store(name='base_config', node=RunConfig) # NOTE: name here should match the 
 # =======================================
 @dataclass
 class EvaluateVSMOnGEDIConfig(FunctionConfig):
-    ref_dir: str = '~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_test/original/'
-    ours_dir: str = '~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_test/original_with_sota_chms_biome_and_ours_full/2020'
-    save_dir: str = '~/data/gvs/evaluation/with_gedi_on_diversity_indices/results/'
+    ref_and_ours_dir: str = '/projects/dereeco/data/gvs/gedi/veg_sensitivity_gt0p95/subset_test/version=masked'
+    save_dir: str = '{ref_and_ours_dir}'
     _target_: str = "evaluation.on_gedi.evaluate_vsm_on_gedi"
     
 cs.store(group='run', name='evaluate_vsm_on_gedi', node=EvaluateVSMOnGEDIConfig)
@@ -100,8 +99,6 @@ class EvalOnWSCIConfig(FunctionConfig):
     wsci_name: str = 'WSCI'
     group_by: str = 'BIOME'
     min_points: int = 30
-    plot_scale: str = 'zscore'  # axis standardization for plots: zscore|minmax|none
-    pclip: int = 1
     _target_: str = "evaluation.on_wsci.eval_on_wsci"
 
 cs.store(group='run', name='eval_on_wsci', node=EvalOnWSCIConfig)

@@ -20,7 +20,9 @@ from rasterio.transform import rowcol
 import rasterio
 from concurrent.futures import ThreadPoolExecutor
 
-from const import MAX_HEIGHT_METERS, VSM_NODATA
+from const import MAX_HEIGHT_METERS, VSM_NODATA, set_plot_fonts
+
+set_plot_fonts()
 
 STAC_URL = "https://planetarycomputer.microsoft.com/api/stac/v1"
 

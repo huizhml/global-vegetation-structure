@@ -25,6 +25,9 @@ from matplotlib import gridspec
 import geopandas as gpd
 import pandas as pd
 from visualization._utils import get_epsg_from_tile
+from const import FONT_SIZES, set_plot_fonts
+
+set_plot_fonts()
 
 
 def get_tile_id_by_coords(coords, s2_grid: gpd.GeoDataFrame = None, year: int = 2020):
@@ -431,7 +434,7 @@ def plot_vertical_profile(
 
         for ax in axes[:, 0]:
             ax.plot(coord.x, coord.y, 'ro', markersize=6)
-            ax.text(coord.x, coord.y, str(i), color='black', fontsize=10, va='bottom')
+            ax.text(coord.x, coord.y, str(i), color='black', fontsize=FONT_SIZES['annot'], va='bottom')
         
         axes[0, i+1].plot(ones,vsm_points[:, i])
         axes[0, i+1].set_ylim(min_height, max_height)
@@ -700,7 +703,7 @@ class VisRHS:
             for i, coord in enumerate(points_utm.geometry):
                 for ax in axes[:, 0]:
                     ax.plot(coord.x, coord.y, 'ro', markersize=6)
-                    ax.text(coord.x, coord.y, str(i), color='black', fontsize=10, va='bottom')
+                    ax.text(coord.x, coord.y, str(i), color='black', fontsize=FONT_SIZES['annot'], va='bottom')
 
                 self._make_profile_plot(axes, coord, vsm_patch, average_over=1, min_rh=min_rh, max_rh=max_rh, step=1.0, window=20)
                 # xcoord = round(coord.x)

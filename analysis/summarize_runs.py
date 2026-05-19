@@ -5,7 +5,9 @@ from matplotlib.patches import Patch
 import pandas as pd
 from pathlib import Path
 import numpy as np
-from const import BIOMES_BY_VALUE
+from const import BIOMES_BY_VALUE, set_plot_fonts
+
+set_plot_fonts()
 # Choose a colormap (e.g., 'viridis')
 api = wandb.Api()
 

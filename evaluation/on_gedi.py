@@ -1,21 +1,36 @@
+import re
 import dask
 import dask.dataframe as dd
+from dask.diagnostics import ProgressBar
 import pandas as pd
+import geopandas as gpd
+import dask_geopandas as dgp
 import numpy as np
 from pathlib import Path
 import matplotlib.pyplot as plt
 
-def make_residual_plot(residuals, save_path, slope_lt20=True):
+from const import FONT_SIZES, set_plot_fonts
+
+set_plot_fonts()
+
+# -------------------------------------------------------------
+#  Plot functions
+# -------------------------------------------------------------
+def make_residual_plot(residuals, save_path):
     fig, ax = plt.subplots(figsize=(15, 3))
     residuals.boxplot(ax=ax, showfliers=False)
     plt.xticks(range(1, 102, 5), np.arange(0, 101, 5))
-    plt.xlabel("Relative Height (0-100)", fontsize=14)
-    plt.ylabel("Residuals (m)", fontsize=14)
-    plt.title(f"Residuals of VSM on GEDI (slope < 20)" if slope_lt20 else "Residuals of VSM on GEDI", fontsize=14)
+    plt.xlabel("Relative Height (0-100)", fontsize=FONT_SIZES['label'])
+    plt.ylabel("Residuals (m)", fontsize=FONT_SIZES['label'])
+    plt.title(f"Residuals of VSM on GEDI", fontsize=FONT_SIZES['title'])
     ax.grid(False)  # Remove grid
     plt.tight_layout()
     plt.savefig(save_path)
     plt.close()
+
+# -------------------------------------------------------------
+#  Runable
+# -------------------------------------------------------------
 
 def evaluate_vsm_on_gedi(
         ref_and_ours_dir: str = None,
@@ -29,18 +44,19 @@ def evaluate_vsm_on_gedi(
     save_dir = Path(f'{save_dir}').expanduser()
     save_dir.mkdir(parents=True, exist_ok=True)
     files = list(ref_and_ours_dir.glob('*.parquet'))#[:10]
-    ddf = dd.read_parquet(files)
+    ddf = dgp.read_parquet(files, gather_spatial_partitions=False)
     if slope_lt20:
         ddf = ddf[ddf['slope'] < 20]
-    ours_rh_cols = [f'RH{i}_Q1_raw' for i in range(101)]
+    ours_rh_cols = [f'RH{i}_Q1' for i in range(101)]
     gedi_rh_cols = [f'rh{i}' for i in range(101)]
     rename_map = dict(zip(ours_rh_cols, gedi_rh_cols)) # dataframe substract matches the columns, need to rename the columns
     residuals = ddf[ours_rh_cols].rename(columns=rename_map) - ddf[gedi_rh_cols]
     residuals = residuals.compute()
     std_residuals = residuals.std(axis=0)
-    make_residual_plot(residuals, save_dir / 'residual_plot.pdf', slope_lt20=slope_lt20)
+    suffix = '_slope_lt20' if slope_lt20 else ''
+    make_residual_plot(residuals, save_dir / f'residual_plot{suffix}.pdf')
     residuals = residuals/std_residuals
-    make_residual_plot(residuals, save_dir / 'residual_plot_normalized.pdf', slope_lt20=slope_lt20)
+    make_residual_plot(residuals, save_dir / f'residual_plot_normalized{suffix}.pdf')
     
     
     

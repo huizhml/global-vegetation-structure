@@ -43,8 +43,12 @@ from const import (
     INDICES_NODATA,
     GEDI_META_COLS,
     KEY_RHS_EVAL,
+    FONT_SIZES,
+    set_plot_fonts,
 )
 from evaluation.utils import _short_count
+
+set_plot_fonts()
 
 RH_COLS = [f'rh{rh}' for rh in KEY_RHS_EVAL] + [f'RH{rh}_Q1_raw' for rh in KEY_RHS_EVAL]
 stac_collection_dir = '~/data/gvs/products/gvsm_stac_catalog/vsm_local'
@@ -70,12 +74,14 @@ def scatter_plot(df: pd.DataFrame, var: str, metrics: dict, biome_value: int = N
     ax.set_ylim(0, max_value)
     ax.plot(np.arange(max_value), np.arange(max_value), color='black', linestyle='dashed')
     ax.set_title(plot_title)
-    ax.text(0.05, 0.95, f'R$^2$ = {metrics[f"{var}_r2"]:.2f}', ha='left', va='top', transform=ax.transAxes, fontsize=14)
-    ax.text(0.05, 0.90, f'Corr = {metrics[f"{var}_corr"]:.2f}', ha='left', va='top', transform=ax.transAxes, fontsize=14)
-    ax.text(0.05, 0.85, f'N = {metrics[f"{var}_n"]}', ha='left', va='top', transform=ax.transAxes, fontsize=14)
+    ax.text(0.05, 0.95, f'R$^2$ = {metrics[f"{var}_r2"]:.2f}', ha='left', va='top', transform=ax.transAxes, fontsize=FONT_SIZES['annot'])
+    ax.text(0.05, 0.90, f'Corr = {metrics[f"{var}_corr"]:.2f}', ha='left', va='top', transform=ax.transAxes, fontsize=FONT_SIZES['annot'])
+    ax.text(0.05, 0.85, f'N = {metrics[f"{var}_n"]}', ha='left', va='top', transform=ax.transAxes, fontsize=FONT_SIZES['annot'])
     ax.set_aspect('equal')
     fig.savefig(save_dir / file_name, bbox_inches='tight')
     plt.close(fig)  # explicitly close THIS figure
+
+
 
 def boxplot_with_marginal_histograms(df: pd.DataFrame, var: str, rh_col: str='rh98', bin_width:int=5, max_height:int=50, max_value:int=50, save_dir: Path = None) -> None:
     '''
@@ -131,10 +137,10 @@ def boxplot_with_marginal_histograms(df: pd.DataFrame, var: str, rh_col: str='rh
     for i, b in enumerate(ordered_bin):
         n = counts.get(b, 0)
         ax_main.text(i + 1, ymax + 0.08, f'n={n}',
-                    ha='center', va='bottom', fontsize=7, color='grey')
+                    ha='center', va='bottom', fontsize=FONT_SIZES['annot'], color='grey')
 
-    ax_main.set_xlabel(f'Canopy Top Height (m)', fontsize=12)
-    ax_main.set_ylabel(var, fontsize=12)
+    ax_main.set_xlabel(f'Canopy Top Height (m)', fontsize=FONT_SIZES['label'])
+    ax_main.set_ylabel(var, fontsize=FONT_SIZES['label'])
     ax_main.tick_params(axis='x', rotation=45)
     ax_main.grid(axis='y', alpha=0.3)
 
@@ -147,7 +153,7 @@ def boxplot_with_marginal_histograms(df: pd.DataFrame, var: str, rh_col: str='rh
     ax_marg.fill_betweenx(y_grid, density_var, alpha=0.4, color='#4C72B0')
     ax_marg.plot(density_var, y_grid, color='#4C72B0', linewidth=1.2)
     ax_marg.tick_params(labelleft=False, left=False)
-    ax_marg.set_xlabel('Density', fontsize=10)
+    ax_marg.set_xlabel('Density', fontsize=FONT_SIZES['label'])
     ax_marg.grid(axis='y', alpha=0.3)
     ax_marg.spines['top'].set_visible(False)
     ax_marg.spines['right'].set_visible(False)
@@ -162,7 +168,7 @@ def boxplot_with_marginal_histograms(df: pd.DataFrame, var: str, rh_col: str='rh
     ax_top.fill_between(x_grid, density_rh, alpha=0.4, color='#4C72B0')
     ax_top.plot(x_grid, density_rh, color='#4C72B0', linewidth=1.2)
     ax_top.tick_params(labelbottom=False, bottom=False)
-    ax_top.set_ylabel('Density', fontsize=10)
+    ax_top.set_ylabel('Density', fontsize=FONT_SIZES['label'])
     ax_top.grid(axis='x', alpha=0.3)
     ax_top.spines['top'].set_visible(False)
     ax_top.spines['right'].set_visible(False)
@@ -177,7 +183,7 @@ def boxplot_with_marginal_histograms(df: pd.DataFrame, var: str, rh_col: str='rh
     # Pearson correlation (top-left of main axes)
     r, p = pearsonr(df[rh_col], df[var])
     ax_main.text(0.02, 0.9, f'r = {r:.3f} (p = {p:.1e})',
-                transform=ax_main.transAxes, fontsize=10,
+                transform=ax_main.transAxes, fontsize=FONT_SIZES['annot'],
                 verticalalignment='top', fontstyle='italic',
                 bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
 
@@ -185,9 +191,9 @@ def boxplot_with_marginal_histograms(df: pd.DataFrame, var: str, rh_col: str='rh
     for i, b in enumerate(ordered_bin):
         std = df[df['bin_label'] == b][var].std()
         ax_main.text(i + 1, ax_main.get_ylim()[0] + 0.05, f'σ={std:.2f}',
-                    ha='center', va='bottom', fontsize=6, color='steelblue')
+                    ha='center', va='bottom', fontsize=FONT_SIZES['annot'], color='steelblue')
 
-    fig.suptitle(f'{plot_title}', fontsize=14, y=0.98)
+    fig.suptitle(f'{plot_title}', fontsize=FONT_SIZES['title'], y=0.98)
     fig.savefig(save_dir / file_name, dpi=200, bbox_inches='tight')
     plt.close(fig)
 
@@ -291,14 +297,14 @@ def boxplot_with_marginal_histograms_combined(
     ax_main.set_xticks([i + 1 for i in range(n_bins)])
     ax_main.set_xticklabels(ordered_bins, rotation=45, ha='right')
     ax_main.set_xlim(0.5, n_bins + 0.5)
-    ax_main.set_xlabel('Canopy Top Height (m)', fontsize=12)
-    ax_main.set_ylabel(var, fontsize=12)
+    ax_main.set_xlabel('Canopy Top Height (m)', fontsize=FONT_SIZES['label'])
+    ax_main.set_ylabel(var, fontsize=FONT_SIZES['label'])
     ax_main.grid(axis='y', alpha=0.3)
 
     # Legend
     legend_patches = [mpatches.Patch(facecolor=colors[j], alpha=0.7, edgecolor='black',
                                       label=biome_names[j]) for j in range(n_biomes)]
-    ax_main.legend(handles=legend_patches, fontsize=7, loc='upper left',
+    ax_main.legend(handles=legend_patches, fontsize=FONT_SIZES['legend'], loc='upper left',
                    ncol=max(1, n_biomes // 4), framealpha=0.8)
 
     # --- Right marginal: one KDE per biome ---
@@ -310,7 +316,7 @@ def boxplot_with_marginal_histograms_combined(
         y_grid = np.linspace(df[var].min() - 0.2, df[var].max() + 0.2, 300)
         ax_marg.plot(kde(y_grid), y_grid, color=colors[j], linewidth=1, alpha=0.7)
     ax_marg.tick_params(labelleft=False, left=False)
-    ax_marg.set_xlabel('Density', fontsize=10)
+    ax_marg.set_xlabel('Density', fontsize=FONT_SIZES['label'])
     ax_marg.spines['top'].set_visible(False)
     ax_marg.spines['right'].set_visible(False)
     ax_marg.spines['left'].set_visible(False)
@@ -325,12 +331,12 @@ def boxplot_with_marginal_histograms_combined(
         ax_top.plot(x_grid, kde(x_grid), color=colors[j], linewidth=1, alpha=0.7)
     ax_top.set_xlim(bin_edges[0], bin_edges[-1])
     ax_top.tick_params(labelbottom=False, bottom=False)
-    ax_top.set_ylabel('Density', fontsize=10)
+    ax_top.set_ylabel('Density', fontsize=FONT_SIZES['label'])
     ax_top.spines['top'].set_visible(False)
     ax_top.spines['right'].set_visible(False)
     ax_top.spines['bottom'].set_visible(False)
 
-    fig.suptitle(f'{var} by Canopy Height across Biomes', fontsize=14, y=0.98)
+    fig.suptitle(f'{var} by Canopy Height across Biomes', fontsize=FONT_SIZES['title'], y=0.98)
     file_name = f'boxplot_combined_{var}_{rh_col}.pdf'
     if save_dir:
         fig.savefig(save_dir / file_name, dpi=200, bbox_inches='tight')
@@ -347,9 +353,9 @@ def plot_residuals_rh98_bined(df: pd.DataFrame, save_dir: Path = None, max_heigh
         ('rh25', VSM_VIS_PARAMS['rh25_q1']), ('enl1d', VSM_VIS_PARAMS['enl1d']),  ('fhd', VSM_VIS_PARAMS['fhd']),
         ('rh98', VSM_VIS_PARAMS['rh98_q1']), ('enl2d', VSM_VIS_PARAMS['enl2d']),  ('cr', VSM_VIS_PARAMS['cr']),
     ]
-    label_fontsize=18
-    annot_fontsize = 10
-    ticks_fontsize = 9
+    label_fontsize = FONT_SIZES['label']
+    annot_fontsize = FONT_SIZES['annot']
+    ticks_fontsize = FONT_SIZES['ticks']
 
     # Pre-compute per-group data so we can render separate and/or combined figures.
     grouped_data = []
@@ -946,6 +952,7 @@ def eval_diversity_indices(indices_dir:str=None, bin_width:int=5, group_by=None,
                 ddf, var='fhd_gedi', rh_col='rh98', save_dir=save_dir
             )
         plot_residuals_rh98_bined(ddf, save_dir=save_dir, max_height=50)
+        scatter_plot()
         result = compute_metrics(ddf)
         records = {}
         for var, label in [('fhd', 'FHD'), ('enl1d', 'ENL 1D'), ('enl2d', 'ENL 2D'), ('cr', 'CR')]:

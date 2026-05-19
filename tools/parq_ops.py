@@ -135,6 +135,96 @@ def add_columns_from_dir(target_dir: str, source_dir: str, validate_cols: List[s
     tasks = [dask.delayed(_update)(fn) for fn in filenames]
     with ProgressBar():
         dask.compute(*tasks)
+
+
+def merge_columns_from_dirs(target_dir: str, source_dir: str, save_fp: str,
+                            validate_cols: List[str] = ['geometry', 'shot_number'],
+                            **kwargs) -> pd.DataFrame:
+    '''
+    Merge new columns from ``source_dir`` into the matching files of
+    ``target_dir`` and write everything as ONE combined parquet file.
+
+    Same per-file alignment contract as :func:`add_columns_from_dir` (rows are
+    concatenated side-by-side after asserting the tables line up on
+    ``validate_cols``), but instead of writing each merged table back into
+    ``target_dir`` in place, all tiles are stacked row-wise and saved to a
+    single parquet at ``save_fp``.
+
+    Parquet filenames must match across the two directories. Shared columns are
+    kept from the target; only columns unique to the source are added. A target
+    file with no source counterpart is kept as-is (no extra columns).
+
+    Args:
+        * target_dir: directory of per-tile parquet files (base table)
+        * source_dir: directory of per-tile parquet files (extra columns)
+        * save_fp: path of the single combined parquet file to write
+        * validate_cols: columns asserted to be aligned row-for-row before the
+          merge (``geometry`` is compared with ``geom_equals_exact``)
+    Returns:
+        * the combined (Geo)DataFrame
+    '''
+    target_dir = Path(target_dir).expanduser()
+    source_dir = Path(source_dir).expanduser()
+    save_fp = Path(save_fp).expanduser()
+    save_fp.parent.mkdir(parents=True, exist_ok=True)
+    if isinstance(validate_cols, omegaconf.listconfig.ListConfig):
+        validate_cols = OmegaConf.to_container(validate_cols, resolve=True)
+
+    target_files = sorted(target_dir.glob('*.parquet'))
+    if not target_files:
+        raise ValueError(f'No parquet files in {target_dir}')
+
+    is_geo = is_geoparquet(target_files[0])
+    _read = gpd.read_parquet if is_geo else pd.read_parquet
+
+    def read_fn(path):
+        # partitioning=None: don't let pyarrow parse a `key=value` path segment
+        # (e.g. ".../version=masked/...") into a synthetic Hive-partition
+        # column. Forwarded through to pyarrow.parquet.read_table by both
+        # gpd.read_parquet and pd.read_parquet. Without this the combined
+        # output gains a `version` column absent from every input file.
+        return _read(path, partitioning=None)
+
+    @dask.delayed
+    def _merge(filename: str):
+        target_path = target_dir / filename
+        source_path = source_dir / filename
+        df1 = read_fn(target_path)
+        if not source_path.exists():
+            print(f'{filename}: no source counterpart, kept without extra columns')
+            return df1
+
+        df2 = read_fn(source_path)
+        if is_geo:
+            df1 = df1.to_crs('EPSG:4326')
+            df2 = df2.to_crs('EPSG:4326')
+        assert len(df1) == len(df2), f'Row count mismatch for {filename}'
+
+        for col in validate_cols:
+            if col not in df1.columns or col not in df2.columns:
+                continue
+            if col == 'geometry':
+                assert df1.geometry.geom_equals_exact(df2.geometry, tolerance=1e-10).all(), \
+                    f'geometry not aligned for {filename}'
+            else:
+                assert (df1[col].values == df2[col].values).all(), \
+                    f'{col} not aligned for {filename}'
+
+        new_cols = df2.columns.difference(df1.columns)
+        return pd.concat([df1, df2[new_cols]], axis=1)
+
+    tasks = [_merge(f.name) for f in target_files]
+    with ProgressBar():
+        parts = list(dask.compute(*tasks)) if tasks else []
+
+    combined = pd.concat(parts, ignore_index=True)
+    if is_geo:
+        combined = gpd.GeoDataFrame(combined, geometry='geometry', crs='EPSG:4326')
+
+    combined.to_parquet(str(save_fp) + '.tmp')
+    os.replace(str(save_fp) + '.tmp', save_fp)
+    print(f'Merged {len(parts)} files, {len(combined)} rows -> {save_fp}')
+    return combined
     
 
 

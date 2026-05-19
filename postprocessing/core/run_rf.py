@@ -79,6 +79,8 @@ def run_rf(h5_file: str, naturalness_fp: str, use_full_profile: bool, s2_only: b
     
 def plot_mean_std(h5_file: str, naturalness_fp: str, rhs_only: bool=False, s2_only: bool=False, **kwargs):
     import matplotlib.pyplot as plt
+    from const import set_plot_fonts
+    set_plot_fonts()
     print('plotting mean and std of RH profile for each naturalness class')
     x, y = get_data(h5_file, naturalness_fp, rhs_only=rhs_only, s2_only=s2_only, to_meter=True)
     feature_size = x.shape[1]
