@@ -16,7 +16,9 @@ import dask.array as da
 from rasterio.crs import CRS
 import dask
 import time
-from const import VSM_NODATA
+from const import VSM_NODATA, set_plot_fonts
+
+set_plot_fonts()
 
 @lru_cache(maxsize=16)
 def create_distance_arr(shape: tuple):

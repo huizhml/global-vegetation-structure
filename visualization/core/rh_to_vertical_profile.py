@@ -20,6 +20,10 @@ from matplotlib.lines import Line2D
 import numpy as np
 from scipy.signal import savgol_filter
 
+from const import FONT_SIZES, set_plot_fonts
+
+set_plot_fonts()
+
 
 # ---------------------------------------------------------------------------
 # Data & derived products
@@ -71,7 +75,7 @@ def plot_rh_curve(ax, percentiles, rh, rh_markers, cfg):
 
     ax.set_xlabel('RH0–100', fontsize=cfg['label'])
     ax.set_ylabel('Height (m)', fontsize=cfg['label'])
-    ax.set_title('RH profile', fontsize=cfg['label'], pad=cfg['title_pad'])
+    ax.set_title('RH profile', fontsize=cfg['title'], pad=cfg['title_pad'])
     ax.set_xlim(0, 102)
     ax.set_xticks([0, 25, 50, 75, 100])
     ax.set_yticks(np.arange(-5, 35, 5))
@@ -94,7 +98,7 @@ def plot_vertical_profile(ax, bin_centers, bin_amp_pct, smoothed_pct,
                    linestyle='--', alpha=0.5, zorder=1)
 
     ax.set_xlabel('Energy (%)', fontsize=cfg['label'])
-    ax.set_title('Vertical profile', fontsize=cfg['label'], pad=cfg['title_pad'])
+    ax.set_title('Vertical profile', fontsize=cfg['title'], pad=cfg['title_pad'])
     ax.set_yticks(np.arange(-5, 35, 5))
     plt.setp(ax.get_yticklabels(), visible=False)
     ax.grid(False)
@@ -108,7 +112,7 @@ def plot_vertical_profile(ax, bin_centers, bin_amp_pct, smoothed_pct,
         Line2D([0], [0], color='#D85A30', linewidth=2, alpha=0.85,
                label='Smoothed'),
     ]
-    ax.legend(handles=legend_handles, fontsize=cfg['ticks'], loc='lower left',
+    ax.legend(handles=legend_handles, fontsize=cfg['legend'], loc='lower left',
               framealpha=0.85, edgecolor='#ccc', bbox_to_anchor=(0.6, 0.01))
 
     xmax = max(bin_amp_pct) * 1.15
@@ -167,7 +171,7 @@ def draw_tree(ax, x, canopy_top, crown_rx=1.2, crown_ry=3.0,
 def plot_forest(ax, rh, rh_markers, cfg):
     """Panel 3: stylised forest cross-section."""
     ax.set_xlim(0, 10)
-    ax.set_title('Forest structure', fontsize=cfg['label'], pad=cfg['title_pad'])
+    ax.set_title('Forest structure', fontsize=cfg['title'], pad=cfg['title_pad'])
     ax.set_xticks([])
     plt.setp(ax.get_yticklabels(), visible=False)
     ax.tick_params(left=False, bottom=False)
@@ -227,7 +231,9 @@ def make_figure(rh, out_path):
     percentiles = np.arange(0, len(rh))
 
     # Style config
-    cfg = dict(label=18, ticks=10, annot=11, title_pad=16)
+    cfg = dict(label=FONT_SIZES['label'], ticks=FONT_SIZES['ticks'],
+               annot=FONT_SIZES['annot'], title=FONT_SIZES['title'],
+               legend=FONT_SIZES['legend'], title_pad=16)
 
     # RH percentile markers to highlight
     rh_markers = [
@@ -300,7 +306,9 @@ def make_separate_figures(rh, out_dir, annot_rhs: bool = False):
     out_dir.mkdir(parents=True, exist_ok=True)
 
     percentiles = np.arange(0, len(rh))
-    cfg = dict(label=18, ticks=10, annot=11, title_pad=16)
+    cfg = dict(label=FONT_SIZES['label'], ticks=FONT_SIZES['ticks'],
+               annot=FONT_SIZES['annot'], title=FONT_SIZES['title'],
+               legend=FONT_SIZES['legend'], title_pad=16)
 
     rh_markers = [
         (25,  '#1D9E75', 'RH25'),

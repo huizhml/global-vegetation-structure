@@ -19,7 +19,9 @@ import xgboost as xgb
 import warnings
 from evaluation.utils import load_vsm_naturalness
 from evaluation.on_diversity_indices import _chunk_diversity
-from const import VSM_NODATA, KEY_RHS_EVAL
+from const import VSM_NODATA, KEY_RHS_EVAL, FONT_SIZES, set_plot_fonts
+
+set_plot_fonts()
 warnings.filterwarnings('ignore')
 warnings.filterwarnings(action='ignore', category=DeprecationWarning)
 pd.set_option('display.max_columns', None)
@@ -173,7 +175,7 @@ def plot_bars(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, groups: tupl
                 y_positions.append(desired_y)
             for k, (lx, ly, txt) in enumerate(labels):
                 label_y = y_positions[k]
-                ax.text(lx, label_y, txt, ha='center', va='bottom', fontsize=16)
+                ax.text(lx, label_y, txt, ha='center', va='bottom', fontsize=FONT_SIZES['annot'])
                 if label_y - ly > 0.02:
                     ax.plot([lx, lx], [ly, label_y],
                             color='gray', linewidth=0.5, alpha=0.5)
@@ -183,14 +185,14 @@ def plot_bars(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, groups: tupl
     ax.axvline(sep_x, color='gray', linestyle='--', linewidth=1.5)
 
     ax.set_xticks(x_pos + bar_width * (n_models - 1) / 2)
-    ax.set_xticklabels(class_names, fontsize=18, rotation=45, ha='center')
-    ax.set_ylabel(f'{metric}', fontsize=18)
-    ax.tick_params(axis='y', labelsize=18)
+    ax.set_xticklabels(class_names, fontsize=FONT_SIZES['ticks'], rotation=45, ha='center')
+    ax.set_ylabel(f'{metric}', fontsize=FONT_SIZES['label'])
+    ax.tick_params(axis='y', labelsize=FONT_SIZES['ticks'])
     ax.set_ylim(0, 1.01 )
     if baseline_name == 'full_profile_center':
-        ax.legend(bbox_to_anchor=(0.62, 1), loc='upper left', fontsize=18, ncol=1)
+        ax.legend(bbox_to_anchor=(0.62, 1), loc='upper left', fontsize=FONT_SIZES['legend'], ncol=1)
     else:
-        ax.legend(bbox_to_anchor=(0.09, 1), loc='upper left', fontsize=18, ncol=3)
+        ax.legend(bbox_to_anchor=(0.09, 1), loc='upper left', fontsize=FONT_SIZES['legend'], ncol=3)
     ax.grid(axis='y', alpha=0.3)
     plt.tight_layout()
     plt.savefig(save_dir / f'barplot_{metric}_{avg}_baseline_{baseline_name}.pdf', dpi=150, bbox_inches='tight')
@@ -286,13 +288,13 @@ def plot_dots(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, groups: tupl
     ax.axhline(0.5, color='gray', linestyle='--', linewidth=1.5)
 
     ax.set_yticks(y_base)
-    ax.set_yticklabels(class_names, fontsize=14)
+    ax.set_yticklabels(class_names, fontsize=FONT_SIZES['ticks'])
     ax.invert_yaxis()  # ALL on top
-    ax.set_xlabel(metric, fontsize=16)
+    ax.set_xlabel(metric, fontsize=FONT_SIZES['label'])
     ax.set_xlim(-0.02, 0.86)
-    ax.tick_params(axis='x', labelsize=14)
+    ax.tick_params(axis='x', labelsize=FONT_SIZES['ticks'])
     ax.grid(axis='x', alpha=0.3)
-    ax.legend(bbox_to_anchor=(0.5, 1.02), loc='lower center', ncol=3, fontsize=12)
+    ax.legend(bbox_to_anchor=(0.5, 1.02), loc='lower center', ncol=3, fontsize=FONT_SIZES['legend'])
     plt.tight_layout()
     plt.savefig(save_dir / f'dotplot_{metric}_{avg}.pdf', dpi=150, bbox_inches='tight')
     plt.close()

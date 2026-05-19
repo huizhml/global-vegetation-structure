@@ -6,6 +6,10 @@ from lightning.pytorch.callbacks.callback import Callback
 import wandb
 import matplotlib.pyplot as plt
 import pandas as pd
+
+from const import set_plot_fonts
+
+set_plot_fonts()
 import numpy as np
 from .utils import check_if_log
 

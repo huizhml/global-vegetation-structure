@@ -99,5 +99,33 @@ PALETTE        = list(_HP["palette"])
 # rh*_q1 cmin/cmax are in METERS — see hyperparams.yaml note on dm conversion.
 VSM_VIS_PARAMS = {k: dict(v) for k, v in _HP["vsm_vis_params"].items()}
 
+# Central font sizes (points). Every plot reads these so a single edit in
+# hyperparams.yaml restyles all figures. Keys: ticks, label, title, annot,
+# legend, colorbar.
+FONT_SIZES = {k: int(v) for k, v in _HP["font_sizes"].items()}
+
+
+def set_plot_fonts(**overrides):
+    """Push :data:`FONT_SIZES` into matplotlib rcParams.
+
+    Call once before plotting so figure elements that don't pass an explicit
+    size inherit the central defaults. Pass keyword overrides to bump a single
+    category for the current process, e.g. ``set_plot_fonts(title=20)``.
+    Returns the effective size dict.
+    """
+    import matplotlib as mpl
+
+    fs = {**FONT_SIZES, **overrides}
+    mpl.rcParams.update({
+        "font.size":        fs["annot"],
+        "axes.titlesize":   fs["title"],
+        "axes.labelsize":   fs["label"],
+        "xtick.labelsize":  fs["ticks"],
+        "ytick.labelsize":  fs["ticks"],
+        "legend.fontsize":  fs["legend"],
+        "figure.titlesize": fs["title"],
+    })
+    return fs
+
 
 del _HP, _HP_PATH, _f, Path, yaml

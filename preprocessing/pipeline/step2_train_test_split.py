@@ -16,6 +16,10 @@ from omegaconf import DictConfig
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 
+from const import FONT_SIZES, set_plot_fonts
+
+set_plot_fonts()
+
 from datasets._3_merge_h5s import dst_conf
 
 
@@ -224,8 +228,8 @@ class DataSplitter:
             # Tried size, aspect, fraction, shrink, but none of them worked
             sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=0, vmax=1))
             cbar = fig.colorbar(sm, cax=cax, orientation='horizontal') 
-            cbar.set_label('Percentage', fontsize=15)
-            cbar.ax.tick_params(labelsize=15)
+            cbar.set_label('Percentage', fontsize=FONT_SIZES['colorbar'])
+            cbar.ax.tick_params(labelsize=FONT_SIZES['ticks'])
             # Adjust the aspect ratio to change the length of the colorbar
             # cax.set_aspect(0.005)  # Adjust this value to change the length of the colorbar
             plt.tight_layout()

@@ -17,6 +17,10 @@ from skimage.feature import graycomatrix, graycoprops
 from typing import Dict, List, Tuple, Optional
 import matplotlib.pyplot as plt
 import dask
+
+from const import set_plot_fonts
+
+set_plot_fonts()
 import dask.dataframe as dd
 from dask.diagnostics import ProgressBar
 from sklearn.preprocessing import StandardScaler

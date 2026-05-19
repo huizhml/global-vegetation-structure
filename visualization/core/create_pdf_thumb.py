@@ -23,7 +23,9 @@ from cartopy.mpl.ticker import LongitudeFormatter, LatitudeFormatter
 import seaborn as sns
 
 from postprocessing.core.s2_tiling import find_intersecting_s2_tiles
-from const import VSM_VIS_PARAMS
+from const import VSM_VIS_PARAMS, FONT_SIZES, set_plot_fonts
+
+set_plot_fonts()
 
 os.environ['HYDRA_FULL_ERROR'] = '1'
 BAND_NAMES = {
@@ -192,7 +194,7 @@ def plot_pdf_cover(params: dict, timestamp: str):
     fig_cover.text(
         0.1, 0.85, # Coordinates (X=10% from left, Y=85% from bottom)
         full_text, 
-        fontsize=12, 
+        fontsize=FONT_SIZES['annot'],
         family='monospace', 
         verticalalignment='top',
         linespacing=1.6
@@ -327,7 +329,7 @@ def plot_tiff_image_with_profile(image: xr.DataArray, cmin: int=None, cmax: int=
             ax_prof.plot(row_mean, y_projected, 'k-', linewidth=0.6, label='mean')
             ax_prof.set_ylim(y_map_bot, y_map_top)
 
-            ax_prof.set_xlabel(BAND_NAMES[band_name.lower()], fontsize=10)
+            ax_prof.set_xlabel(BAND_NAMES[band_name.lower()], fontsize=FONT_SIZES['label'])
             n_ticks = 2
             xtick_vals = np.linspace(cmin_, cmax_, n_ticks)
             ax_prof.set_xticks(xtick_vals)
@@ -337,9 +339,9 @@ def plot_tiff_image_with_profile(image: xr.DataArray, cmin: int=None, cmax: int=
             tick_y_proj = [proj.transform_point(0, lat, data_crs)[1] for lat in tick_lats]
             ax_prof.set_yticks(tick_y_proj)
             ax_prof.set_yticklabels([f'{v:.0f}°' for v in tick_lats])
-            ax_prof.set_ylabel('Latitude [°]', fontsize=10)
+            ax_prof.set_ylabel('Latitude [°]', fontsize=FONT_SIZES['label'])
 
-            ax_prof.legend(loc='lower right', fontsize=7, framealpha=0.7)
+            ax_prof.legend(loc='lower right', fontsize=FONT_SIZES['legend'], framealpha=0.7)
 
         # --- Colorbar inside map ---
         if show_profile:
@@ -363,7 +365,7 @@ def plot_tiff_image_with_profile(image: xr.DataArray, cmin: int=None, cmax: int=
             cbar.set_ticklabels([f'{cmin_:.2f}', f'{cmax_:.2f}'])
         else:
             cbar.set_ticklabels([f'{cmin_:.0f}', f'{cmax_:.0f}'])
-        cbar.ax.tick_params(size=0, pad=3, labelsize=9)
+        cbar.ax.tick_params(size=0, pad=3, labelsize=FONT_SIZES['ticks'])
         cbar.outline.set_visible(False)
 
         figs[band_name] = fig

@@ -18,7 +18,9 @@ import glob
 import joblib
 from ffcv.loader import Loader, OrderOption
 from download._const import gedi_attr_dtype
-from const import ESA_WC, BIOMES
+from const import ESA_WC, BIOMES, FONT_SIZES, set_plot_fonts
+
+set_plot_fonts()
 
 
 def aggregate_gedi_data(beton_fps: List[str]):
@@ -358,7 +360,7 @@ class PCAAnalysis:
                 annot[annot >= 101] = annot[annot >= 101] - 101
             elif 'pcs' in name:
                 annot = annot + 1
-            sns.heatmap(value, cmap=cmap, annot=annot, annot_kws={'fontsize': 10}, fmt='d', vmin=vmin, vmax=vmax,
+            sns.heatmap(value, cmap=cmap, annot=annot, annot_kws={'fontsize': FONT_SIZES['annot']}, fmt='d', vmin=vmin, vmax=vmax,
                         xticklabels=labels, yticklabels=labels)
             title = f'{group_method} effect size: most evident values of {name.upper()} across all {group_method.lower()}s'
             plt.title(title)
@@ -482,7 +484,7 @@ class PCAAnalysis:
                 annot[annot >= 101] = annot[annot >= 101] - 101
             elif 'pcs' in name:
                 annot = annot + 1
-            sns.heatmap(value, cmap=cmap, annot=annot, annot_kws={'fontsize': 10}, fmt='d', vmin=vmin, vmax=vmax,
+            sns.heatmap(value, cmap=cmap, annot=annot, annot_kws={'fontsize': FONT_SIZES['annot']}, fmt='d', vmin=vmin, vmax=vmax,
                         xticklabels=[biome['abbr'] for biome in BIOMES], yticklabels=[biome['abbr'] for biome in BIOMES])
             title = f'Biome effect size: most evident values of {name.upper()} across all biomes'
             plt.title(title)

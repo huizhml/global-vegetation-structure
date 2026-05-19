@@ -6,6 +6,10 @@ import seaborn as sns
 from matplotlib.colors import LogNorm
 import matplotlib.pyplot as plt
 
+from const import FONT_SIZES, set_plot_fonts
+
+set_plot_fonts()
+
 
 def extract_valid_pixels(ref_dir: Path, ours_dir: Path, tile_id: str) -> np.ndarray:
     '''
@@ -69,11 +73,11 @@ def scatter_plot(tile_id: str, df: pd.DataFrame, ref_col: str, stats: dict, save
     ax.set_ylim(0, max_height)
     ax.plot(np.arange(max_height), np.arange(max_height), color='black', linestyle='dashed')
     plt.title(f'{ref_col} vs Ours (RH98) - {tile_id}, R^2 = {stats['r2']:.2f}')
-    plt.text(0.05, 0.95, f'R^2 = {stats['r2']:.2f}', ha='left', va='top', transform=ax.transAxes, fontsize=14)
-    plt.text(0.05, 0.90, f'RMSE = {stats['rmse']:.2f}', ha='left', va='top', transform=ax.transAxes, fontsize=14)
-    plt.text(0.05, 0.85, f'ME = {stats['me']:.2f}', ha='left', va='top', transform=ax.transAxes, fontsize=14)
-    plt.text(0.05, 0.80, f'N = {stats['n']}', ha='left', va='top', transform=ax.transAxes, fontsize=14)
-    plt.text(0.05, 0.75, f'Avg Height = {stats['avg_height']:.2f}', ha='left', va='top', transform=ax.transAxes, fontsize=14)
+    plt.text(0.05, 0.95, f'R^2 = {stats['r2']:.2f}', ha='left', va='top', transform=ax.transAxes, fontsize=FONT_SIZES['annot'])
+    plt.text(0.05, 0.90, f'RMSE = {stats['rmse']:.2f}', ha='left', va='top', transform=ax.transAxes, fontsize=FONT_SIZES['annot'])
+    plt.text(0.05, 0.85, f'ME = {stats['me']:.2f}', ha='left', va='top', transform=ax.transAxes, fontsize=FONT_SIZES['annot'])
+    plt.text(0.05, 0.80, f'N = {stats['n']}', ha='left', va='top', transform=ax.transAxes, fontsize=FONT_SIZES['annot'])
+    plt.text(0.05, 0.75, f'Avg Height = {stats['avg_height']:.2f}', ha='left', va='top', transform=ax.transAxes, fontsize=FONT_SIZES['annot'])
     plt.tight_layout()
     plt.savefig(save_dir / f'scatter_plot_{ref_col}_{tile_id}.pdf')
     plt.close()

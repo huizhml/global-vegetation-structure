@@ -16,7 +16,9 @@ from matplotlib.ticker import FormatStrFormatter
 import matplotlib.colors as colors
 import dask.dataframe as dd
 from dask.utils import natural_sort_key
-from const import ESA_WC
+from const import ESA_WC, FONT_SIZES, set_plot_fonts
+
+set_plot_fonts()
 import os
 import json
 os.environ['BOKEH_ALLOW_WS_ORIGIN'] = 'www.lumi.csc.fi'
@@ -101,7 +103,7 @@ class Stats:
                 mgrs_df.plot(column=f'{col}_{year}', vmin=vmin[col], vmax=vmax[col], cmap=cmap, norm=norm, ax=ax)
                 countries_flt.plot(ax=ax, color='none', edgecolor='black', linewidth=0.5)
                 ax.set_xlim(-180, 180)
-                ax.set_title(f'{titles[r]} footprints in {year}', fontsize=16)
+                ax.set_title(f'{titles[r]} footprints in {year}', fontsize=FONT_SIZES['title'])
                 # Create a scalar mappable for the colorbar
                 sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
                 sm.set_array([])  # You can also pass in some data here if needed
@@ -140,16 +142,16 @@ class Stats:
             # Position the text at the center of the bin and slightly above the bar
             x_pos = bin_edge + (bins[1] - bins[0]) / 2  # Center of the bin
             y_pos = count_norm + 0.01  # Slightly above the bar
-            ax.text(x_pos, y_pos, f'{count_norm:.3f}', ha='center', va='bottom', fontsize=9)
+            ax.text(x_pos, y_pos, f'{count_norm:.3f}', ha='center', va='bottom', fontsize=FONT_SIZES['annot'])
 
         # Customize x and y ticks
         ax.set_xticks(bins)  # Set x-ticks at bin edges
         ax.set_yticks(np.arange(0, max(counts_normalized)+0.1, 0.1))
 
         # Add labels and title
-        ax.set_xlabel('Relative height', fontsize=12)
-        ax.set_ylabel('Normalized Counts', fontsize=12)
-        ax.set_title('RH98 distribution', fontsize=14)
+        ax.set_xlabel('Relative height', fontsize=FONT_SIZES['label'])
+        ax.set_ylabel('Normalized Counts', fontsize=FONT_SIZES['label'])
+        ax.set_title('RH98 distribution', fontsize=FONT_SIZES['title'])
         ax.legend()
         plt.savefig(f'output/rh{rh_idx}_distribution_{name}.png', dpi=300, bbox_inches='tight', transparent=False)
 
@@ -175,7 +177,7 @@ class Stats:
                 plt.ylabel('Number of samples')
                 if name == 'ESA World Cover':
                     plt.xticks(rotation=45, ha='right')
-                    plt.tick_params(axis='x', labelsize=8)
+                    plt.tick_params(axis='x', labelsize=FONT_SIZES['ticks'])
                 plt.tight_layout()
                 plt.savefig(split_dir/ f'histogram_{name}_{split}.png')
 
