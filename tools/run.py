@@ -42,9 +42,10 @@ cs.store(group='run', name='add_cols_from_dir', node=AddColsFromDirConfig)
 @dataclass
 class MergeColsFromDirsConfig(FunctionConfig):
     year: int = 2020
-    target_dir: str = '/projects/dereeco/data/gvs/gedi/veg_sensitivity_gt0p95/subset_test/version=masked/{year}'
-    source_dir: str = '/projects/dereeco/data/gvs/gedi/veg_sensitivity_gt0p95/subset_test/original_with_sota_chms_biome/{year}'
-    save_fp: str = '/projects/dereeco/data/gvs/gedi/veg_sensitivity_gt0p95/subset_test/version=masked/original_with_ours_sota_biome_2020.parquet'
+    split: str = 'cal'
+    target_dir: str = '/projects/dereeco/data/gvs/gedi/veg_sensitivity_gt0p95/subset_{split}/version=masked/{year}'
+    source_dir: str = '/projects/dereeco/data/gvs/gedi/veg_sensitivity_gt0p95/subset_{split}/original_with_sota_chms_biome/{year}'
+    save_fp: str = '/projects/dereeco/data/gvs/gedi/veg_sensitivity_gt0p95/subset_{split}/version=masked/original_with_ours_sota_biome_2020.parquet'
     validate_cols: List = field(default_factory=lambda: ['shot_number', 'geometry'])
     _target_: str = 'tools.parq_ops.merge_columns_from_dirs'
 cs.store(group='run', name='merge_cols_from_dirs', node=MergeColsFromDirsConfig)
