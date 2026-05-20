@@ -1085,6 +1085,88 @@ def _per_class_metrics_by_cell(joined: pd.DataFrame, pred_col: str, ref_col: str
     return out
 
 
+def plot_grid_metric_circles(grid_pred: gpd.GeoDataFrame, size_col: str, color_col: str,
+                             save_path: Path, basemap: gpd.GeoDataFrame = None,
+                             world_file: str = None,
+                             size_range: tuple = (4, 80), cmap: str = 'RdBu_r',
+                             color_vlim: tuple = None, **kwargs):
+    '''
+    Scatter per-cell metrics over a world map: each cell rendered as a circle
+    at its centroid, with marker area driven by `size_col` and color by
+    `color_col`.
+    Args:
+        grid_pred: GeoDataFrame with `geometry` (point or polygon, EPSG:4326).
+        size_col / color_col: numeric columns to encode as size / color.
+        save_path: output figure path.
+        world_file: optional basemap polygons (e.g. naturalearth land). If
+            None no background is drawn.
+        size_range: (min, max) marker area in points^2.
+        cmap: colormap; diverging recommended for delta metrics.
+        color_vlim: (vmin, vmax); defaults to symmetric around 0.
+    '''
+    save_path = Path(save_path).expanduser()
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+
+    g = grid_pred.dropna(subset=[size_col, color_col]).copy()
+    if g.geom_type.iloc[0] != 'Point':
+        g = g.set_geometry(g.geometry.centroid)
+
+    s_vals = g[size_col].to_numpy(dtype=float)
+    c_vals = g[color_col].to_numpy(dtype=float)
+    s_lo, s_hi = np.nanmin(s_vals), np.nanmax(s_vals)
+    if s_hi > s_lo:
+        sizes = size_range[0] + (s_vals - s_lo) / (s_hi - s_lo) * (size_range[1] - size_range[0])
+    else:
+        sizes = np.full_like(s_vals, sum(size_range) / 2)
+
+    if color_vlim is None:
+        vmax = float(np.nanmax(np.abs(c_vals)))
+        vmin = -vmax
+    else:
+        vmin, vmax = color_vlim
+
+    fig, ax = plt.subplots(figsize=(16, 8))
+    if basemap is None and world_file:
+        basemap = gpd.read_file(Path(world_file).expanduser())
+    if basemap is not None:
+        bm = basemap
+        if bm.crs and g.crs and bm.crs != g.crs:
+            bm = bm.to_crs(g.crs)
+        bm.plot(ax=ax, color='#e8e8e8', edgecolor='white', linewidth=0.2, zorder=1)
+    ax.set_xlim(-180, 180)
+    ax.set_ylim(-60, 85)
+
+    sc = ax.scatter(g.geometry.x, g.geometry.y, s=sizes, c=c_vals, cmap=cmap,
+                    vmin=vmin, vmax=vmax, edgecolor='black', linewidth=0.3,
+                    alpha=0.9)
+
+    if s_hi > s_lo:
+        legend_vals = np.linspace(s_lo, s_hi, 4)
+        handles = [
+            plt.scatter([], [], c='lightgray', edgecolor='black', linewidth=0.3,
+                        s=size_range[0] + (v - s_lo) / (s_hi - s_lo) * (size_range[1] - size_range[0]),
+                        label=f'{v:.2f}')
+            for v in legend_vals
+        ]
+        ax.legend(handles=handles, title=size_col, loc='lower left',
+                  fontsize=FONT_SIZES['legend'], title_fontsize=FONT_SIZES['legend'],
+                  labelspacing=1.4, frameon=True)
+
+    # Vertical colorbar tucked next to the size legend in the lower-left corner
+    cax = ax.inset_axes([0.16, 0.04, 0.018, 0.28])
+    cbar = fig.colorbar(sc, cax=cax, orientation='vertical')
+    cbar.set_label(color_col, fontsize=FONT_SIZES['label'])
+    cbar.ax.tick_params(labelsize=FONT_SIZES['ticks'])
+
+    ax.set_xlabel('Longitude', fontsize=FONT_SIZES['label'])
+    ax.set_ylabel('Latitude', fontsize=FONT_SIZES['label'])
+    ax.tick_params(labelsize=FONT_SIZES['ticks'])
+    ax.set_aspect('equal')
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.close()
+
+
 def agg_preds_on_grid(preds_file: str, grid_file: str, save_dir: str = None,
                       out_name: str = 'preds_on_world_grid.parquet',
                       model: str='cnn',
@@ -1130,9 +1212,9 @@ def agg_preds_on_grid(preds_file: str, grid_file: str, save_dir: str = None,
     if preds.crs != grid.crs:
         preds = preds.to_crs(grid.crs)
 
-    grid = grid.set_index('cell_id')
     joined = gpd.sjoin(preds, grid[['cell_id', 'geometry']], how='inner', predicate='within')
     joined = joined.drop(columns=['geometry', 'index_right'])
+    grid = grid.set_index('cell_id')
 
     joined['acc'] = joined[f'{model}_{best_cfg}'] == joined[ref_col]
     grid_pred = (
@@ -1154,7 +1236,16 @@ def agg_preds_on_grid(preds_file: str, grid_file: str, save_dir: str = None,
     grid_pred = grid_pred.join(per_class_best, rsuffix=f'_{best_cfg}').join(per_calss_baseline, rsuffix=f'_{baseline_cfg}').join(improve, rsuffix='_improve')
     grid_pred = grid_pred[grid_pred['n_points'] >= min_points_per_cell]
     grid_pred['geometry'] = grid.loc[grid_pred.index, 'geometry']
-    grid_pred = gpd.GeoDataFrame(grid_pred, geometry='geometry')
+    grid_pred = gpd.GeoDataFrame(grid_pred, geometry='geometry', crs=grid.crs)
+
+    plot_grid_metric_circles(
+        grid_pred,
+        size_col=f'f1_macro_{baseline_cfg}',
+        color_col='f1_macro_improve',
+        save_path=save_dir / f'grid_f1_macro_improve_{baseline_cfg}_vs_{best_cfg}.pdf',
+        basemap=grid,
+        world_file=kwargs.get('world_file'),
+    )
 
     
 

@@ -18,6 +18,7 @@ set_plot_fonts()
 # -------------------------------------------------------------
 def make_residual_plot(residuals, save_path):
     fig, ax = plt.subplots(figsize=(15, 3))
+    ax.axhline(0, color='red', linewidth=1)
     residuals.boxplot(ax=ax, showfliers=False)
     plt.xticks(range(1, 102, 5), np.arange(0, 101, 5))
     plt.xlabel("Relative Height (0-100)", fontsize=FONT_SIZES['label'])
