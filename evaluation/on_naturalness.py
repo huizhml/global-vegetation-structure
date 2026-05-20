@@ -1044,6 +1044,129 @@ def agg_preds_from_models(cnn_pred_dir: str, logreg_pred_file: str, save_dir: st
     print(f'wrote {len(out)} rows from {len(parts)} CNN runs to {out_fp}')
     return out
 
+def _per_class_metrics_by_cell(joined: pd.DataFrame, pred_col: str, ref_col: str,
+                               classes: list) -> pd.DataFrame:
+    '''
+    Per-cell, per-class recall / precision / F1 (+ macro F1), aggregated from
+    a row-per-sample frame already tagged with `cell_id`.
+    Args:
+        joined: row-per-sample frame with `cell_id`, `ref_col`, `pred_col`
+        pred_col: hard-prediction column (Land_use_ID codes)
+        ref_col: ground-truth column (Land_use_ID codes)
+        classes: ordered Land_use_ID codes to score
+    Returns:
+        DataFrame indexed by cell_id with columns
+        recall_<c>, precision_<c>, f1_<c> for each c, plus f1_macro.
+        NaN where a class has no support (true or predicted) in a cell.
+    '''
+    yt = joined[ref_col].to_numpy()
+    yp = joined[pred_col].to_numpy()
+    ind = pd.DataFrame({'cell_id': joined['cell_id'].values})
+    for c in classes:
+        ind[f'_t{c}'] = (yt == c)
+        ind[f'_p{c}'] = (yp == c)
+        ind[f'_tp{c}'] = (yt == c) & (yp == c)
+    sums = ind.groupby('cell_id').sum()
+
+    out = pd.DataFrame(index=sums.index)
+    f1_cols = []
+    for c in classes:
+        tp = sums[f'_tp{c}']
+        support = sums[f'_t{c}']
+        pred_pos = sums[f'_p{c}']
+        recall = tp / support.where(support > 0)
+        precision = tp / pred_pos.where(pred_pos > 0)
+        f1 = 2 * precision * recall / (precision + recall)
+        out[f'recall_{c}'] = recall
+        out[f'precision_{c}'] = precision
+        out[f'f1_{c}'] = f1
+        f1_cols.append(f'f1_{c}')
+    out['f1_macro'] = out[f1_cols].mean(axis=1, skipna=True)
+    return out
+
+
+def agg_preds_on_grid(preds_file: str, grid_file: str, save_dir: str = None,
+                      out_name: str = 'preds_on_world_grid.parquet',
+                      model: str='cnn',
+                      baseline_cfg: str = 'rh98',
+                      best_cfg: str = 'full_profile_s2',
+                      ref_col: str = 'Land_use_ID',
+                      min_points_per_cell: int = 10, **kwargs):
+    '''
+    Spatially aggregate per-sample naturalness predictions onto a polygon grid
+    (e.g. the 1°x1° world land grid from tools/make_world_grid.py).
+
+    For each grid cell, computes:
+        - n_points: number of samples falling in the cell
+        - <group>_prob_<c>: mean per-class probability across the cell
+          (one column per CNN run × class)
+        - cnn_<group>, lr_<group>: majority hard prediction (ignoring -1
+          sentinel for "rowid absent from that run")
+        - Land_use_ID: majority ground-truth class (ignoring -1)
+    Any biome / metadata columns already on the grid are preserved.
+
+    Args:
+        preds_file: per-sample predictions written by `agg_preds_from_models`
+            (FlatGeobuf or GeoParquet, point geometry in EPSG:4326).
+        grid_file: polygon grid GeoParquet with a `cell_id` column.
+        save_dir: output dir (defaults to dir of preds_file).
+        out_name: output filename (.parquet writes GeoParquet, .fgb FlatGeobuf).
+        hard_pred_prefixes: column-name prefixes to treat as hard predictions
+            (mode-aggregated, -1 treated as missing).
+        min_points_per_cell: drop cells with fewer than this many samples.
+    Returns:
+        the aggregated GeoDataFrame indexed on grid cells.
+    '''
+    preds_file = Path(preds_file).expanduser()
+    grid_file = Path(grid_file).expanduser()
+    save_dir = Path(save_dir).expanduser() if save_dir else preds_file.parent
+    save_dir.mkdir(parents=True, exist_ok=True)
+
+    if preds_file.suffix == '.parquet':
+        preds = gpd.read_parquet(preds_file)
+    else:
+        preds = gpd.read_file(preds_file)
+    grid = gpd.read_parquet(grid_file)
+    if preds.crs != grid.crs:
+        preds = preds.to_crs(grid.crs)
+
+    grid = grid.set_index('cell_id')
+    joined = gpd.sjoin(preds, grid[['cell_id', 'geometry']], how='inner', predicate='within')
+    joined = joined.drop(columns=['geometry', 'index_right'])
+
+    joined['acc'] = joined[f'{model}_{best_cfg}'] == joined[ref_col]
+    grid_pred = (
+            joined
+            .groupby('cell_id')
+            .agg(n_points=('rowid', 'count'), acc=('acc', 'mean'))
+        )
+    grid_pred['acc'] = joined.groupby('cell_id')[['acc']].sum()
+
+    per_class_best = _per_class_metrics_by_cell(
+        joined, pred_col=f'{model}_{best_cfg}', ref_col=ref_col,
+        classes=sorted(LAND_USE_NAMES.keys()),
+    )
+    per_calss_baseline = _per_class_metrics_by_cell(
+        joined, pred_col=f'{model}_{baseline_cfg}', ref_col=ref_col,
+        classes=sorted(LAND_USE_NAMES.keys()),
+    )
+    improve = per_class_best -  per_calss_baseline
+    grid_pred = grid_pred.join(per_class_best, rsuffix=f'_{best_cfg}').join(per_calss_baseline, rsuffix=f'_{baseline_cfg}').join(improve, rsuffix='_improve')
+    grid_pred = grid_pred[grid_pred['n_points'] >= min_points_per_cell]
+    grid_pred['geometry'] = grid.loc[grid_pred.index, 'geometry']
+    grid_pred = gpd.GeoDataFrame(grid_pred, geometry='geometry')
+
+    
+
+    # out_fp = save_dir / out_name
+    # if out_fp.suffix == '.parquet':
+    #     out.to_parquet(out_fp)
+    # else:
+    #     out.to_file(out_fp, driver='FlatGeobuf')
+    # print(f'wrote {len(out)} cells ({len(preds)} samples -> {joined.shape[0]} joined) to {out_fp}')
+    # return out
+
+
 if __name__ == '__main__':
     # from evaluation.utils import verify_batch_binning
     # verify_batch_binning()

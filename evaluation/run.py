@@ -300,6 +300,19 @@ class AggCNNLogregResults(FunctionConfig):
     
 cs.store(group='run', name='agg_preds_from_models', node=AggCNNLogregResults)
 
+# --- Aggregate per-sample predictions onto the 1°x1° world grid ---
+@dataclass
+class AggPredsOnGridConfig(FunctionConfig):
+    root_dir: str = '~/data/gvs/evaluation/downstream_tasks/naturalness/results_from_vsm_2017'
+    preds_file: str = '{root_dir}/aggregated_predictions_cnn_logreg.fgb'
+    grid_file: str = '~/data/gvs/assets/world_1deg_land_grid.parquet'
+    save_dir: str = '{root_dir}'
+    out_name: str = 'preds_on_world_grid.parquet'
+    min_points_per_cell: int = 10
+    _target_: str = 'evaluation.on_naturalness.agg_preds_on_grid'
+
+cs.store(group='run', name='agg_preds_on_grid', node=AggPredsOnGridConfig)
+
 # =======================================
 #   Compute GLCM texture
 # =======================================
