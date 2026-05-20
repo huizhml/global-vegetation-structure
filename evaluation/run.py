@@ -144,50 +144,26 @@ class ComputeDiversityIndicesConfig(FunctionConfig):
     _target_: str = "evaluation.on_diversity_indices.cal_diversity_indices"
     
 cs.store(group='run', name='compute_diversity_indices', node=ComputeDiversityIndicesConfig)
+# One config for every eval_diversity_indices variant. Pick the figure(s)
+# via the plot_* flags (see the justfile eval-div-* recipes).
 @dataclass
 class EvaluateDiversityIndicesConfig(FunctionConfig):
-    max_height: int = 150
+    year: int = 2020
     bin_width: int = 5
-    indices_dir: str = '~/data/gvs/evaluation/with_gedi_on_diversity_indices/indices_by_tile/max_height_{max_height}m_bin_{bin_width}m'
+    max_height: int = 150
     group_by: Optional[str] = 'BIOME'
     filter_steep_slope: bool = True
-    year: int = 2020
     plot_scatter: bool = False
-    plot_boxplot: bool = True
-    save_dir: str = '~/data/gvs/evaluation/with_gedi_on_diversity_indices/results/'
-    _target_: str = "evaluation.on_diversity_indices.eval_diversity_indices"
-    
-cs.store(group='run', name='evaluate_diversity_indices', node=EvaluateDiversityIndicesConfig)
-
-@dataclass
-class PlotBiomeCombinedBoxplotConfig(FunctionConfig):
-    max_height: int = 150
-    bin_width: int = 5
-    indices_dir: str = '~/data/gvs/evaluation/with_gedi_on_diversity_indices/indices_by_tile/max_height_{max_height}m_bin_{bin_width}m'
-    group_by: Optional[str] = None
-    filter_steep_slope: bool = True
-    year: int = 2020
-    plot_biome_combined_boxplot: bool = True
-    save_dir: str = '~/data/gvs/evaluation/with_gedi_on_diversity_indices/results/'
-    _target_: str = "evaluation.on_diversity_indices.eval_diversity_indices"
-   
-cs.store(group='run', name='plot_biome_combined_boxplot', node=PlotBiomeCombinedBoxplotConfig) 
-
-
-@dataclass
-class PlotResidualsRh98BinedConfig(FunctionConfig):
-    bin_width: int = 5
-    max_height: int = 150
-    group_by: Optional[str] = None
-    filter_steep_slope: bool = True
-    year: int = 2020
+    plot_hexbin: bool = False
+    plot_boxplot: bool = False
     plot_biome_combined_boxplot: bool = False
+    plot_residuals: bool = False
     root_dir: str = '~/data/gvs/evaluation/with_gedi_on_diversity_indices'
     indices_dir: str = '{root_dir}/indices_by_tile/max_height_{max_height}m_bin_{bin_width}m'
     save_dir: str = '{root_dir}/results/steep_slope_filtered_bin_{bin_width}m_max_height_{max_height}m'
     _target_: str = "evaluation.on_diversity_indices.eval_diversity_indices"
-   
-cs.store(group='run', name='plot_residuals_rh98_bined', node=PlotResidualsRh98BinedConfig) 
+
+cs.store(group='run', name='evaluate_diversity_indices', node=EvaluateDiversityIndicesConfig)
 @dataclass
 class CalS2PatchStatsConfig(FunctionConfig):
     year: int = 2017

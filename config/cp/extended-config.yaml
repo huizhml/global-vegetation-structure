@@ -27,7 +27,7 @@ cp:
   # - SE-CQR-r
   # - SE-CQR-m
   # Path and data_root option as in the case of eval configuration
-  cal_data_path: ../data/calibration-data.parquet
+  cal_data_path: /projects/dereeco/data/gvs/gedi/veg_sensitivity_gt0p95/subset_cal/version=masked/original_with_ours_sota_biome_2020.parquet
 data:
   # Specifies column names in the data table, where names need to be the same
   # for calibration and evaluation data, as the same configuration is used for

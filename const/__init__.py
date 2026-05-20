@@ -110,22 +110,32 @@ def set_plot_fonts(**overrides):
 
     Call once before plotting so figure elements that don't pass an explicit
     size inherit the central defaults. Pass keyword overrides to bump a single
-    category for the current process, e.g. ``set_plot_fonts(title=20)``.
-    Returns the effective size dict.
+    category for the current process, e.g. ``set_plot_fonts(title=20)``. The
+    overrides are written back into :data:`FONT_SIZES` in place, so code that
+    reads ``FONT_SIZES['annot']`` directly (e.g. an explicit ``fontsize=``
+    argument) picks them up too — not just elements that fall back to rcParams.
+    Returns the effective size dict. Raises ``KeyError`` on an unknown category.
     """
     import matplotlib as mpl
 
-    fs = {**FONT_SIZES, **overrides}
+    unknown = set(overrides) - set(FONT_SIZES)
+    if unknown:
+        raise KeyError(
+            f"unknown font category {sorted(unknown)}; "
+            f"valid keys: {sorted(FONT_SIZES)}"
+        )
+
+    FONT_SIZES.update(overrides)  # mutate in place so direct reads see overrides
     mpl.rcParams.update({
-        "font.size":        fs["annot"],
-        "axes.titlesize":   fs["title"],
-        "axes.labelsize":   fs["label"],
-        "xtick.labelsize":  fs["ticks"],
-        "ytick.labelsize":  fs["ticks"],
-        "legend.fontsize":  fs["legend"],
-        "figure.titlesize": fs["title"],
+        "font.size":        FONT_SIZES["annot"],
+        "axes.titlesize":   FONT_SIZES["title"],
+        "axes.labelsize":   FONT_SIZES["label"],
+        "xtick.labelsize":  FONT_SIZES["ticks"],
+        "ytick.labelsize":  FONT_SIZES["ticks"],
+        "legend.fontsize":  FONT_SIZES["legend"],
+        "figure.titlesize": FONT_SIZES["title"],
     })
-    return fs
+    return dict(FONT_SIZES)
 
 
 del _HP, _HP_PATH, _f, Path, yaml

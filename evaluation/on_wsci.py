@@ -129,6 +129,24 @@ def _scale(v: np.ndarray, how: str) -> np.ndarray:
 
 
 
+def _sci(n) -> str:
+    '''Format a number in mathtext scientific notation, e.g. 1.23e6 ->
+    "1.23 \\times 10^{6}" (matches the $r$ / $R^2$ mathtext annotations).'''
+    s = f'{n:.2e}'           # intermediate, e.g. '1.23e+06' -> '1.23x10^6'
+    mant, exp = s.split('e')
+    return f'{mant} \\times 10^{{{int(exp)}}}'
+
+
+def _fewer_ticks(ax, nbins: int = 3, prune='both') -> None:
+    '''Thin both axes to ~nbins nice major ticks for a cleaner look. The
+    locator is recomputed from the live axis limits at draw time, so the
+    ticks still track the axis if its limits are changed later.
+    prune='both' drops the end ticks; prune=None keeps them (so a square
+    scatter shows ~3 ticks instead of collapsing to 2).'''
+    ax.xaxis.set_major_locator(MaxNLocator(nbins=nbins, prune=prune))
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=nbins, prune=prune))
+
+
 def hexbin_regression_plot(
     df: pd.DataFrame,
     x_name: str,
@@ -180,18 +198,18 @@ def hexbin_regression_plot(
     )
  
     # Regression line
-    ax.plot(x_fit, y_fit, color='black', linewidth=1.5)
+    ax.plot(x_fit, y_fit, color='black', linewidth=1.5, linestyle='--')
  
     # Formatting
     ax.set_xlim(xmin, xmax)
     ax.set_ylim(ymin, ymax)
-    ax.xaxis.set_major_locator(MaxNLocator(nbins=4, prune='both'))
-    ax.yaxis.set_major_locator(MaxNLocator(nbins=4, prune='both'))
+    _fewer_ticks(ax, nbins=3, prune=None)  # ~3 nice ticks, tracks live limits
     ax.tick_params(axis='both', labelsize=FONT_SIZES['ticks'])
 
     annot_positony = 0.95
     if show_colorbar:
-        cax = make_axes_locatable(ax).append_axes('right', size='5%', pad=0.1)
+        divider = make_axes_locatable(ax)
+        cax = divider.append_axes("right", size="5%", pad=0.1)
         cb = fig.colorbar(hb, cax=cax)
         cb.set_label('count', fontsize=FONT_SIZES['colorbar'])
         cb.ax.tick_params(labelsize=FONT_SIZES['ticks'])
@@ -206,8 +224,8 @@ def hexbin_regression_plot(
         0.05, annot_positony,
         f"Pearson $r$ = {metrics['pearson_r']:.3f}\n"
         # f"Spearman $\\rho$ = {metrics['spearman_rho']:.3f}\n"
-        f"$R^2$ = {metrics['r2']:.3f}\n"
-        f"N = {metrics['n']}",
+        f"$R^2$ = {metrics['r2']:.3f}\n",
+        # f"N = ${_sci(metrics['n'])}$",
         ha='left', va='top',
         transform=ax.transAxes, fontsize=FONT_SIZES['annot'],
         bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8),
