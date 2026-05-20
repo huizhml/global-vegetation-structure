@@ -348,20 +348,39 @@ eval-compute-entropy *args:
 eval-compute-diversity-indices *args:
     {{evalp}} run=compute_diversity_indices {{args}}
 
-# Evaluate diversity indices
+# Diversity indices — one config (run=evaluate_diversity_indices), one recipe
+# per figure variant via plot_* overrides. Append more overrides through *args,
+# e.g.  just eval-div-residuals run.bin_width=10 run.max_height=50
+
+# Per-biome metrics CSV + all-tiles metrics CSV (no figures)
 [group('evaluation')]
-eval-evaluate-diversity-indices *args:
+eval-div-metrics *args:
     {{evalp}} run=evaluate_diversity_indices {{args}}
 
-# Plot biome combined boxplot
+# Per-biome metrics + per-biome marginal-histogram boxplots
 [group('evaluation')]
-eval-plot-biome-combined-boxplot *args:
-    {{evalp}} run=plot_biome_combined_boxplot {{args}}
+eval-div-per-biome *args:
+    {{evalp}} run=evaluate_diversity_indices run.plot_boxplot=true {{args}}
 
-# Plot residuals RH98 binned
+# RH98-binned residual boxplots (all data)
 [group('evaluation')]
-eval-plot-residuals-rh98-bined *args:
-    {{evalp}} run=plot_residuals_rh98_bined {{args}}
+eval-div-residuals *args:
+    {{evalp}} run=evaluate_diversity_indices run.group_by=null run.plot_residuals=true {{args}}
+
+# Single biome-combined boxplot (all data)
+[group('evaluation')]
+eval-div-combined-boxplot *args:
+    {{evalp}} run=evaluate_diversity_indices run.group_by=null run.plot_biome_combined_boxplot=true {{args}}
+
+# GEDI-vs-ours hexbin density scatter (per biome + all data)
+[group('evaluation')]
+eval-div-hexbin *args:
+    {{evalp}} run=evaluate_diversity_indices run.plot_hexbin=true {{args}}
+
+# WSCI-vs-ours hexbin density scatter (per biome + all data)
+[group('evaluation')]
+eval-wsci-hexbin *args:
+    {{evalp}} run=eval_on_wsci {{args}}
 
 # Calc S2 patch stats
 [group('evaluation')]

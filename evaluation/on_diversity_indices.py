@@ -31,6 +31,7 @@ import re
 from sklearn.metrics import r2_score
 import seaborn as sns
 from matplotlib.colors import LogNorm
+from matplotlib.ticker import MaxNLocator
 import colorsys
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import matplotlib.gridspec as gridspec
@@ -48,7 +49,7 @@ from const import (
 )
 from evaluation.utils import _short_count
 
-set_plot_fonts()
+
 
 RH_COLS = [f'rh{rh}' for rh in KEY_RHS_EVAL] + [f'RH{rh}_Q1_raw' for rh in KEY_RHS_EVAL]
 stac_collection_dir = '~/data/gvs/products/gvsm_stac_catalog/vsm_local'
@@ -56,31 +57,133 @@ stac_collection_dir = '~/data/gvs/products/gvsm_stac_catalog/vsm_local'
 # ------------------------------------------------------------------------------------------------
 # Plotting functions
 # ------------------------------------------------------------------------------------------------
-def scatter_plot(df: pd.DataFrame, var: str, metrics: dict, biome_value: int = None, save_dir: Path = None, max_value: int = 3) -> None:
-    if biome_value == 98:
-        biome_value = 15
-    elif biome_value == 99:
-        biome_value = 16
-    biome_value = int(biome_value) - 1
-    plot_title = f'{BIOMES[biome_value]["name"]}' if biome_value is not None else 'All Biomes'
-    file_name = f'scatter_plot_gedi_vs_ours_{var}_{BIOMES[biome_value]["abbr"].replace(".", "")}.pdf'
+def _sci(n) -> str:
+    '''Mathtext scientific notation, e.g. 1234567 -> "1.23 \\times 10^{6}"
+    (mirrors the helper in on_wsci.py).'''
+    mant, exp = f'{n:.2e}'.split('e')
+    return f'{mant} \\times 10^{{{int(exp)}}}'
+
+
+def _fewer_ticks(ax, nbins: int = 3, axis: str = 'both', prune='both') -> None:
+    '''Thin axes to ~nbins nice major ticks for a cleaner look. The locator
+    is recomputed from the live axis limits at draw time, so the ticks still
+    track the axis if its limits are changed later. prune='both' drops the
+    end ticks (good for stacked panels); prune=None keeps them (so a square
+    0..max scatter shows ~3 ticks instead of collapsing to 2).
+    axis='y' leaves the x-axis alone (for categorical / bin-edge x ticks).'''
+    if axis in ('x', 'both'):
+        ax.xaxis.set_major_locator(MaxNLocator(nbins=nbins, prune=prune))
+    if axis in ('y', 'both'):
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=nbins, prune=prune))
+
+
+def _annotate_stats(ax, r2, corr, n, corner='upper left') -> None:
+    '''Boxed R^2 / Corr / N annotation in the on_wsci.py style: one rounded
+    white box, mathtext R^2 and scientific N. `corner` is 'upper left'
+    (default) or 'lower right' — position and text alignment move together
+    so the box stays inside the axes either way. Wraps what used to be three
+    separate ax.text() calls.'''
+    x, y, ha, va = {
+        'upper left':  (0.05, 0.95, 'left',  'top'),
+        'lower right': (0.95, 0.05, 'right', 'bottom'),
+    }[corner]
+    ax.text(
+        x, y,
+        f"$R^2$ = {r2:.3f}\n"
+        f"Corr = {corr:.3f}",
+        # f"N = ${_sci(n)}$",
+        ha=ha, va=va, transform=ax.transAxes,
+        fontsize=FONT_SIZES['annot'],
+        bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8),
+    )
+
+
+def scatter_plot(df: pd.DataFrame, var: str, metrics: dict, biome_value: int = None, save_dir: Path = None, max_value: int = 3, show_colorbar: bool = True, show_ylabel: bool = True) -> None:
+    if biome_value is None:
+        plot_title, biome_slug = None, 'all'  # no title for the all-data plot
+    else:
+        if biome_value == 98:
+            biome_value = 15
+        elif biome_value == 99:
+            biome_value = 16
+        biome_value = int(biome_value) - 1
+        plot_title = BIOMES[biome_value]['name']
+        biome_slug = BIOMES[biome_value]['abbr'].replace('.', '')
+    file_name = f'scatter_plot_gedi_vs_ours_{var}_{biome_slug}.pdf'
     fig, ax = plt.subplots(1, 1, figsize=(7, 6))
-    sns.histplot(df, x=f'{var}_gedi', y = f'{var}_ours', bins=50, cbar=False, cmap='viridis', ax=ax)
+    sns.histplot(df, x=f'{var}_gedi', y = f'{var}_ours', bins=50, cbar=False, cmap='Greens', ax=ax)
     ax.collections[0].set_norm(LogNorm(vmin=1, vmax=1000))
-    divider = make_axes_locatable(ax)
-    cax = divider.append_axes("right", size="5%", pad=0.1)
-    fig.colorbar(ax.collections[0], cax=cax)
+    if show_colorbar:
+        divider = make_axes_locatable(ax)
+        cax = divider.append_axes("right", size="5%", pad=0.1)
+        fig.colorbar(ax.collections[0], cax=cax)
     ax.set_xlim(0, max_value)
     ax.set_ylim(0, max_value)
     ax.plot(np.arange(max_value), np.arange(max_value), color='black', linestyle='dashed')
-    ax.set_title(plot_title)
-    ax.text(0.05, 0.95, f'R$^2$ = {metrics[f"{var}_r2"]:.2f}', ha='left', va='top', transform=ax.transAxes, fontsize=FONT_SIZES['annot'])
-    ax.text(0.05, 0.90, f'Corr = {metrics[f"{var}_corr"]:.2f}', ha='left', va='top', transform=ax.transAxes, fontsize=FONT_SIZES['annot'])
-    ax.text(0.05, 0.85, f'N = {metrics[f"{var}_n"]}', ha='left', va='top', transform=ax.transAxes, fontsize=FONT_SIZES['annot'])
+    label = _DIV_VARS.get(var, var.upper())
+    ax.set_xlabel(f'GEDI {label}', fontsize=FONT_SIZES['label'])
+    if show_ylabel:
+        ax.set_ylabel(f'Ours {label}', fontsize=FONT_SIZES['label'])
+    if plot_title is not None:
+        ax.set_title(plot_title)
+    _annotate_stats(ax, metrics[f'{var}_r2'], metrics[f'{var}_corr'], metrics[f'{var}_n'],
+                    corner='lower right' if var == 'cr' else 'upper left')
+    _fewer_ticks(ax, nbins=3, prune=None)  # ~3 nice ticks, tracks live limits
     ax.set_aspect('equal')
     fig.savefig(save_dir / file_name, bbox_inches='tight')
     plt.close(fig)  # explicitly close THIS figure
 
+
+def hexbin_scatter_plot(df: pd.DataFrame, var: str, metrics: dict, biome_value: int = None,
+                        save_dir: Path = None, max_value: int = 3, gridsize: int = 50,
+                        cmap: str = 'Greens', show_colorbar: bool=True, show_ylabel: bool=True) -> None:
+    '''Hexbin-density version of `scatter_plot`: GEDI (x) vs ours (y) with a
+    1:1 reference line. Same biome handling, annotations and stats as
+    `scatter_plot`, only the density layer differs (hexbin vs histplot).'''
+    if biome_value is None:
+        plot_title, biome_slug = None, 'all'  # no title for the all-data plot
+    else:
+        if biome_value == 98:
+            biome_value = 15
+        elif biome_value == 99:
+            biome_value = 16
+        biome_value = int(biome_value) - 1
+        plot_title = BIOMES[biome_value]['name']
+        biome_slug = BIOMES[biome_value]['abbr'].replace('.', '')
+    file_name = f'hexbin_scatter_gedi_vs_ours_{var}_{biome_slug}.pdf'
+
+    x = df[f'{var}_gedi'].to_numpy()
+    y = df[f'{var}_ours'].to_numpy()
+
+    fig, ax = plt.subplots(1, 1, figsize=(7, 6))
+    hb = ax.hexbin(
+        x, y,
+        gridsize=gridsize,
+        cmap=cmap,
+        mincnt=1,
+        edgecolors='none',
+        norm=LogNorm(vmin=1, vmax=100000),
+        extent=[0, max_value, 0, max_value],
+    )
+    if show_colorbar:
+        divider = make_axes_locatable(ax)
+        cax = divider.append_axes("right", size="5%", pad=0.1)
+        fig.colorbar(hb, cax=cax)
+
+    ax.set_xlim(0, max_value)
+    ax.set_ylim(0, max_value)
+    ax.plot([0, max_value], [0, max_value], color='black', linestyle='dashed')
+    label = _DIV_VARS.get(var, var.upper())
+    ax.set_xlabel(f'GEDI', fontsize=FONT_SIZES['label'])
+    if show_ylabel:
+        ax.set_ylabel(f'Ours', fontsize=FONT_SIZES['label'])
+    ax.set_title(label)
+    _annotate_stats(ax, metrics[f'{var}_r2'], metrics[f'{var}_corr'], metrics[f'{var}_n'],
+                    corner='lower right' if var == 'cr' else 'upper left')
+    _fewer_ticks(ax, nbins=3, prune=None)  # ~3 nice ticks, tracks live limits
+    ax.set_aspect('equal')
+    fig.savefig(save_dir / file_name, bbox_inches='tight')
+    plt.close(fig)  # explicitly close THIS figure
 
 
 def boxplot_with_marginal_histograms(df: pd.DataFrame, var: str, rh_col: str='rh98', bin_width:int=5, max_height:int=50, max_value:int=50, save_dir: Path = None) -> None:
@@ -143,6 +246,7 @@ def boxplot_with_marginal_histograms(df: pd.DataFrame, var: str, rh_col: str='rh
     ax_main.set_ylabel(var, fontsize=FONT_SIZES['label'])
     ax_main.tick_params(axis='x', rotation=45)
     ax_main.grid(axis='y', alpha=0.3)
+    _fewer_ticks(ax_main, axis='y')
 
     # --- Right marginal KDE (distribution of var) ---
     vals_var = df[var].dropna().values
@@ -300,6 +404,7 @@ def boxplot_with_marginal_histograms_combined(
     ax_main.set_xlabel('Canopy Top Height (m)', fontsize=FONT_SIZES['label'])
     ax_main.set_ylabel(var, fontsize=FONT_SIZES['label'])
     ax_main.grid(axis='y', alpha=0.3)
+    _fewer_ticks(ax_main, axis='y')
 
     # Legend
     legend_patches = [mpatches.Patch(facecolor=colors[j], alpha=0.7, edgecolor='black',
@@ -345,8 +450,10 @@ def boxplot_with_marginal_histograms_combined(
 
 def plot_residuals_rh98_bined(df: pd.DataFrame, save_dir: Path = None, max_height: int = 50, rh98_interval: int = 5, save_separate: bool = False, **kwargs):
     from matplotlib.ticker import ScalarFormatter
+    set_plot_fonts(annot=10)
 
-    df['rh98_bins'] = pd.cut(df['rh98'], bins=np.arange(0, max_height + rh98_interval, rh98_interval), right=False)
+    bin_edges = np.arange(0, max_height + rh98_interval, rh98_interval)
+    df['rh98_bins'] = pd.cut(df['rh98'], bins=bin_edges, right=False)
     for rh_idx in [25, 98]:
         df[f'rh{rh_idx}_diff'] = df[f'RH{rh_idx}_Q1_raw'] - df[f'rh{rh_idx}']
     groups = [
@@ -362,19 +469,24 @@ def plot_residuals_rh98_bined(df: pd.DataFrame, save_dir: Path = None, max_heigh
     global_max_count = 0
     for var, cfg in groups:
         grouped = df.groupby('rh98_bins', observed=True)[f'{var}_diff']
-        labels = [str(k) for k in grouped.groups.keys()]
+        # Box centers in real RH98 coords so each box sits inside its
+        # [left, right) interval; ticks are drawn at the bin edges below.
+        centers = [(iv.left + iv.right) / 2 for iv in grouped.groups.keys()]
         data = [g.dropna().values for _, g in grouped]
         counts = [len(d) for d in data]
-        grouped_data.append((var, cfg, labels, data, counts))
+        grouped_data.append((var, cfg, centers, data, counts))
         if counts:
             global_max_count = max(global_max_count, max(counts))
 
-    def _draw(ax, cfg, labels, data, counts, count_ymax, show_xlabel=True, show_ylabel=True, show_count_label=True,
+    def _draw(ax, cfg, centers, data, counts, count_ymax, show_xlabel=True, show_ylabel=True, show_count_label=True,
               show_count_ticks=True, title_full=True):
+
+        bar_w = rh98_interval * 0.6
+        box_w = rh98_interval * 0.5
 
         # --- background count bars on secondary axis ---
         ax_bar = ax.twinx()
-        ax_bar.bar(range(1, len(counts) + 1), counts, color='#B0C4DE', alpha=0.4, width=0.6, zorder=1)
+        ax_bar.bar(centers, counts, color='#B0C4DE', alpha=0.4, width=bar_w, zorder=1)
         if show_count_label:
             ax_bar.set_ylabel('Count', color='grey')
         ax_bar.tick_params(axis='y', labelcolor='grey', labelright=show_count_ticks)
@@ -385,23 +497,23 @@ def plot_residuals_rh98_bined(df: pd.DataFrame, save_dir: Path = None, max_heigh
         ax_bar.yaxis.set_major_formatter(fmt)
 
         # count labels: format large numbers with comma separator
-        for i, n in enumerate(counts, start=1):
-            # ax_bar.text(i, n + count_ymax * 0.02 / 3, f'{n:,}', ha='center', va='bottom',
+        for c, n in zip(centers, counts):
+            # ax_bar.text(c, n + count_ymax * 0.02 / 3, f'{n:,}', ha='center', va='bottom',
             #             fontsize=annot_fontsize, color='grey', fontweight='light')
-            ax_bar.text(i, n + count_ymax * 0.02 / 3, _short_count(n), ha='center', va='bottom',
+            ax_bar.text(c, n + count_ymax * 0.02 / 3, _short_count(n), ha='center', va='bottom',
                          fontsize=annot_fontsize, color='grey', fontweight='light')
 
         # --- dashed zero line (behind boxes, in front of bars) ---
         ax.axhline(y=0, color='dimgrey', linestyle='--', linewidth=0.8, zorder=2)
 
         # --- boxplot on top ---
-        # Set xticks explicitly so this works under sharex=True (where the
-        # shared locator would otherwise accumulate positions across subplots
-        # and mismatch the label count).
-        positions = list(range(1, len(labels) + 1))
-        # ax.boxplot(data, positions=positions, showfliers=False, zorder=3, manage_ticks=False)
+        # Boxes are positioned at the real RH98 bin centers and ticks are set
+        # explicitly at the bin edges (lower bounds). Explicit ticks are also
+        # required under sharex=True, where the shared locator would otherwise
+        # accumulate positions across subplots.
+        # ax.boxplot(data, positions=centers, showfliers=False, zorder=3, manage_ticks=False)
         bp = ax.boxplot(
-            data, positions=positions, showfliers=False, zorder=3, manage_ticks=False,
+            data, positions=centers, widths=box_w, showfliers=False, zorder=3, manage_ticks=False,
             patch_artist=True,
             # Option 1:
             boxprops=dict(facecolor='#4C72B0', alpha=0.6, edgecolor='#2d4a7a', linewidth=0.8),
@@ -421,23 +533,31 @@ def plot_residuals_rh98_bined(df: pd.DataFrame, save_dir: Path = None, max_heigh
             # capprops=dict(color='#c1624e', linewidth=1.0),
             showmeans=True,
         )
-        ax.set_xticks(positions)
-        ax.set_xticklabels(labels, rotation=45, ha='right', fontsize=ticks_fontsize)
+        ax.set_xticks(bin_edges)
+        ax.set_xticklabels([f'{int(e)}' for e in bin_edges], rotation=45, ha='right', fontsize=ticks_fontsize)
+        ax.set_xlim(bin_edges[0], bin_edges[-1])
         if show_xlabel:
             ax.set_xlabel('RH98(m)', fontsize=label_fontsize)
         if show_ylabel:
             ax.set_ylabel(f'Residual', fontsize=label_fontsize)
         ax.set_title(cfg['name'], fontsize=label_fontsize)
 
+        # Expand the residual y-range (more at the bottom, a little on top)
+        # so the whiskers clear the count bars/labels along the bottom.
+        y0, y1 = ax.get_ylim()
+        yr = y1 - y0
+        ax.set_ylim(y0 - 0.3 * yr, y1 + 0.10 * yr)
+
         # keep boxplot axis in front
         ax.set_zorder(ax_bar.get_zorder() + 1)
         ax.patch.set_visible(False)
+        _fewer_ticks(ax, axis='y')  # keep the explicit bin-edge x-ticks
         return ax_bar
 
     if save_separate:
-        for var, cfg, labels, data, counts in grouped_data:
+        for var, cfg, centers, data, counts in grouped_data:
             fig, ax = plt.subplots(figsize=(10, 6))
-            _draw(ax, cfg, labels, data, counts, count_ymax=max(counts) * 3)
+            _draw(ax, cfg, centers, data, counts, count_ymax=max(counts) * 3)
             fig.tight_layout()
             for ext in ('pdf', 'png'):
                 fig.savefig(save_dir / f'residuals_{var}_rh98_binned.{ext}', dpi=300, bbox_inches='tight')
@@ -445,14 +565,14 @@ def plot_residuals_rh98_bined(df: pd.DataFrame, save_dir: Path = None, max_heigh
             plt.close(fig)
 
     # Combined figure: 2x3 grid sharing x-axis and the right (count) y-axis.
-    fig, axes = plt.subplots(2, 3, figsize=(18, 10), sharex=True)
+    fig, axes = plt.subplots(2, 3, figsize=(18, 7), sharex=True)
     bar_axes = []
     count_ymax = global_max_count * 3 if global_max_count else 1
-    for idx, (var, cfg, labels, data, counts) in enumerate(grouped_data):
+    for idx, (var, cfg, centers, data, counts) in enumerate(grouped_data):
         row, col = divmod(idx, 3)
         ax = axes[row, col]
         ax_bar = _draw(
-            ax, cfg, labels, data, counts,
+            ax, cfg, centers, data, counts,
             count_ymax=count_ymax,
             show_xlabel=(row == 1),
             show_ylabel=(col == 0),
@@ -868,105 +988,124 @@ def cal_diversity_indices(save_dir, gedi_ours_dir, bin_width=5, max_height=MAX_H
         dask.compute(*tasks)
 
 
-def eval_diversity_indices(indices_dir:str=None, bin_width:int=5, group_by=None, year=2020, save_dir=None, filter_steep_slope=False, plot_scatter=False, plot_boxplot=False, max_height=50, **kwargs):
-    # Extract bin_width from indices_dir string (looks for "bin_width_" followed by digits)
+# Diversity-index variables and their human-readable labels (column order).
+_DIV_VARS = {'fhd': 'FHD', 'enl1d': '1D ENL', 'enl2d': '2D ENL', 'cr': 'CR'}
 
+
+def eval_diversity_indices(
+    indices_dir: str = None,
+    save_dir: str = None,
+    bin_width: int = 5,
+    max_height: int = 150,
+    year: int = 2020,
+    group_by: str = 'BIOME',
+    filter_steep_slope: bool = True,
+    plot_scatter: bool = False,
+    plot_hexbin: bool = False,
+    plot_boxplot: bool = False,
+    plot_biome_combined_boxplot: bool = False,
+    plot_residuals: bool = False,
+    **kwargs,
+):
+    '''
+    Evaluate GEDI-vs-ours diversity indices (fhd / enl1d / enl2d / cr).
+
+    Always writes the all-tiles metrics CSV. If ``group_by`` is set (e.g.
+    'BIOME') it also writes a per-group metrics CSV and per-group figures.
+    Every figure is an independent opt-in toggle, so one Hydra config drives
+    all variants:
+
+      - plot_scatter / plot_hexbin      GEDI-vs-ours density scatter
+      - plot_boxplot                    per-group marginal-histogram boxplot
+      - plot_biome_combined_boxplot     single biome-combined boxplot
+      - plot_residuals                  RH98-binned residual boxplots
+    '''
     indices_dir = Path(indices_dir).expanduser()
     save_dir = Path(save_dir).expanduser()
     save_dir.mkdir(parents=True, exist_ok=True)
-    indices_files = sorted(indices_dir.glob('*.parquet'))
-    # indices_files = indices_files[100:110] # for testing
-    ddf = dd.read_parquet(indices_files)
+
+    ddf = dd.read_parquet(sorted(indices_dir.glob('*.parquet')))
     if filter_steep_slope:
         ddf = ddf[ddf['slope'] <= 20]
-        # save_dir = save_dir.parent / f'steep_slope_filtered_bin_{bin_width}m'
-        # save_dir.mkdir(parents=True, exist_ok=True)
-    ddf['fhd_diff'] = ddf['fhd_ours'] - ddf['fhd_gedi']
-    ddf['enl1d_diff'] = ddf['enl1d_ours'] - ddf['enl1d_gedi']
-    ddf['enl2d_diff'] = ddf['enl2d_ours'] - ddf['enl2d_gedi']
-    ddf['cr_diff'] = ddf['cr_ours'] - ddf['cr_gedi']
+    for var in _DIV_VARS:
+        ddf[f'{var}_diff'] = ddf[f'{var}_ours'] - ddf[f'{var}_gedi']
+    df = ddf.compute()
 
-    n_bins = int(100/bin_width)
-    max_metrics = {
-        'fhd': np.log(n_bins),
-        'enl1d': n_bins,
-        'enl2d': n_bins,
-        'cr': 5.0,
-    }
-    # Group and compute metrics
-    def compute_metrics(group):
+    # Fixed reference scale for the error metrics. NOTE: the 100 here is a
+    # historical constant (NOT max_height); kept as-is so reported RMSE/MAE/ME
+    # stay comparable with previously generated CSVs.
+    max_metrics = {'fhd': 3, 'enl1d': 18,
+                   'enl2d': 18, 'cr': 1.06}
+
+    def compute_metrics(group) -> pd.Series:
+        '''Pure: per-var corr / r2 / rmse / mae / me / n (no side effects).'''
         metrics = {}
-        for var in ['fhd', 'enl1d', 'enl2d', 'cr']:
-            gedi = group[f'{var}_gedi']
-            ours = group[f'{var}_ours']
+        for var in _DIV_VARS:
+            gedi, ours = group[f'{var}_gedi'], group[f'{var}_ours']
             diff = group[f'{var}_diff'] / max_metrics[var]
             metrics[f'{var}_corr'] = np.corrcoef(gedi, ours)[0, 1]
-            metrics[f'{var}_r2'] =  r2_score(gedi, ours)
-            metrics[f'{var}_rmse'] = np.sqrt(np.mean(diff**2))
+            metrics[f'{var}_r2'] = r2_score(gedi, ours)
+            metrics[f'{var}_rmse'] = np.sqrt(np.mean(diff ** 2))
             metrics[f'{var}_mae'] = np.mean(np.abs(diff))
             metrics[f'{var}_me'] = np.mean(diff)
             metrics[f'{var}_n'] = len(gedi)
-            if plot_scatter:
-                scatter_plot(group, var, metrics, biome_value=group['BIOME'].iloc[0], save_dir=save_dir, max_value=max_metrics[var])
-            if plot_boxplot:
-                boxplot_with_marginal_histograms(group, f'{var}_gedi', rh_col=f'rh98', save_dir=save_dir, max_height=max_height)
-                boxplot_with_marginal_histograms(group, f'{var}_ours', rh_col=f'RH98_Q1_raw', save_dir=save_dir, max_height=max_height)
         return pd.Series(metrics)
+
+    def scatter_hexbin(group, metrics, biome_value):
+        '''Density scatter figures; biome_value=None -> "All Biomes".
+
+        For the all-biomes row (one figure per metric) only the first metric
+        keeps its y-label and only the last keeps its colorbar, so the panels
+        tile cleanly. Per-biome figures are standalone -> keep both.'''
+        all_biomes = biome_value is None
+        first_var, last_var = next(iter(_DIV_VARS)), next(reversed(_DIV_VARS))
+        for var in _DIV_VARS:
+            show_ylabel = (not all_biomes) or var == first_var
+            show_colorbar = (not all_biomes) or var == last_var
+            if plot_scatter:
+                scatter_plot(group, var, metrics, biome_value=biome_value, save_dir=save_dir, max_value=max_metrics[var],
+                             show_colorbar=show_colorbar, show_ylabel=show_ylabel)
+            if plot_hexbin:
+                hexbin_scatter_plot(group, var, metrics, biome_value=biome_value, save_dir=save_dir, max_value=max_metrics[var],
+                                    show_colorbar=show_colorbar, show_ylabel=show_ylabel)
+
+    suffix = f'bin_width_{bin_width}m_{year}'
+
+    # Per-group breakdown: per-group metrics CSV + per-group figures.
     if group_by is not None:
-        meta = pd.DataFrame({
-            "fhd_corr": pd.Series(dtype="float32"),
-            "fhd_r2": pd.Series(dtype="float32"),
-            "fhd_rmse": pd.Series(dtype="float32"),
-            "fhd_mae": pd.Series(dtype="float32"),
-            "fhd_me": pd.Series(dtype="float32"),
-            "fhd_n": pd.Series(dtype="int32"),
-            
-            "enl1d_corr": pd.Series(dtype="float32"),
-            "enl1d_r2": pd.Series(dtype="float32"),
-            "enl1d_rmse": pd.Series(dtype="float32"),
-            "enl1d_mae": pd.Series(dtype="float32"),
-            "enl1d_me": pd.Series(dtype="float32"),
-            "enl1d_n": pd.Series(dtype="int32"),
-            "enl2d_corr": pd.Series(dtype="float32"),
-            "enl2d_r2": pd.Series(dtype="float32"),
-            "enl2d_rmse": pd.Series(dtype="float32"),
-            "enl2d_mae": pd.Series(dtype="float32"),
-            "enl2d_me": pd.Series(dtype="float32"),
-            "enl2d_n": pd.Series(dtype="int32"),
-            "cr_corr": pd.Series(dtype="float32"),
-            "cr_r2": pd.Series(dtype="float32"),
-            "cr_rmse": pd.Series(dtype="float32"),
-            "cr_mae": pd.Series(dtype="float32"),
-            "cr_me": pd.Series(dtype="float32"),
-            "cr_n": pd.Series(dtype="int32"),
-        })
-        # ddf = ddf.compute()
-        # ddf.groupby('BIOME').apply(compute_metrics)
-        result = ddf.groupby(group_by).apply(compute_metrics, meta=meta).compute()
-        result.to_csv(save_dir / f'diversity_indices_evaluation_by_biomes_bin_width_{bin_width}m_{year}.csv')
-    else:
-        ddf = ddf.compute()
-        plot_biome_combined_boxplot = kwargs.get('plot_biome_combined_boxplot', False)
-        if plot_biome_combined_boxplot:
-            boxplot_with_marginal_histograms_combined(
-                ddf, var='fhd_gedi', rh_col='rh98', save_dir=save_dir
-            )
-        plot_residuals_rh98_bined(ddf, save_dir=save_dir, max_height=50)
-        scatter_plot()
-        result = compute_metrics(ddf)
-        records = {}
-        for var, label in [('fhd', 'FHD'), ('enl1d', 'ENL 1D'), ('enl2d', 'ENL 2D'), ('cr', 'CR')]:
-            records[label] = {
-                'R2': result[f'{var}_r2'],
-                'Corr': result[f'{var}_corr'],
-                'RMSE': result[f'{var}_rmse'],
-                'MAE': result[f'{var}_mae'],
-                'ME': result[f'{var}_me'],
-            }
-        result_df = pd.DataFrame(records).T
-        result_df.to_csv(save_dir / f'diversity_indices_evaluation_all_tiles_bin_width_{bin_width}m_{year}.csv')
-  
-def diversity_indices_distribution(indices_dir, save_dir, group_by=None, filter_steep_slope=False, year=2020, **kwargs):      
+        rows = {}
+        for key, g in df.groupby(group_by, observed=True):
+            m = compute_metrics(g)
+            rows[key] = m
+            scatter_hexbin(g, m, biome_value=key)
+            if plot_boxplot:
+                for var in _DIV_VARS:
+                    boxplot_with_marginal_histograms(g, f'{var}_gedi', rh_col='rh98', save_dir=save_dir, max_height=max_height)
+                    boxplot_with_marginal_histograms(g, f'{var}_ours', rh_col='RH98_Q1_raw', save_dir=save_dir, max_height=max_height)
+        per = pd.DataFrame(rows).T
+        per.index.name = group_by
+        per.to_csv(save_dir / f'diversity_indices_evaluation_by_biomes_{suffix}.csv')
+
+    # Whole-dataset figures (independent of grouping).
+    if plot_biome_combined_boxplot:
+        boxplot_with_marginal_histograms_combined(df, var='fhd_gedi', rh_col='rh98', save_dir=save_dir)
+    if plot_residuals:
+        plot_residuals_rh98_bined(df, save_dir=save_dir, max_height=50)
+
+    # All-tiles metrics CSV + all-data density scatter.
+    result = compute_metrics(df)
+    scatter_hexbin(df, result, biome_value=None)
+    records = {
+        label: {'R2': result[f'{var}_r2'], 'Corr': result[f'{var}_corr'],
+                'RMSE': result[f'{var}_rmse'], 'MAE': result[f'{var}_mae'],
+                'ME': result[f'{var}_me']}
+        for var, label in _DIV_VARS.items()
+    }
+    pd.DataFrame(records).T.to_csv(
+        save_dir / f'diversity_indices_evaluation_all_tiles_{suffix}.csv')
+
+
+def diversity_indices_distribution(indices_dir, save_dir, group_by=None, filter_steep_slope=False, year=2020, **kwargs):
     indices_dir = Path(indices_dir).expanduser()
     save_dir = Path(save_dir).expanduser()
     save_dir.mkdir(parents=True, exist_ok=True)

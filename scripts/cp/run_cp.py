@@ -190,6 +190,7 @@ def plot(config: GVSCPConfig, eval_stats_df: pd.DataFrame, save_root: Path):
 def main(args: argparse.Namespace):
     config = GVSCPConfig(args.config_path)
     save_root = Path(args.config_path).parent
+    print(save_root)
     # Skip CP and evaluation if only plotting
     if args.plot_only:
         eval_res_df = pd.read_parquet(
