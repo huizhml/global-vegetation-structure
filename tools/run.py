@@ -40,6 +40,18 @@ cs.store(group='run', name='add_cols_from_dir', node=AddColsFromDirConfig)
 
 
 @dataclass
+class MakeWorldGridConfig(FunctionConfig):
+    out_file: str = '~/data/gvs/assets/world_1deg_land_grid.parquet'
+    resolution: float = 1.0
+    land_source: str = 'naturalearth.land'
+    clip_to_land: bool = False
+    biome_file: Optional[str] = '~/data/GEDI/ecoregions/wwf_terr_ecos.shp'
+    biome_cols: Optional[List[str]] = None
+    _target_: str = 'tools.make_world_grid.make_world_land_grid'
+cs.store(group='run', name='make_world_grid', node=MakeWorldGridConfig)
+
+
+@dataclass
 class MergeColsFromDirsConfig(FunctionConfig):
     year: int = 2020
     split: str = 'cal'

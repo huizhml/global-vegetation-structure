@@ -179,6 +179,18 @@ biomes:
   - {value: 98, abbr: biome_98,            name: 'Biome 98'}
   - {value: 99, abbr: biome_99,            name: 'Biome 99'}
 
+# ---------------------------------------------------------------------------
+# Naturalness
+# ---------------------------------------------------------------------------
+
+naturalness:
+  - {idx: 0, raw: 0,  full: 'No forest',                                                           short: 'No Forest'}
+  - {idx: 1, raw: 11, full: 'Naturally regenerating forest without any signs of human activities', short: 'Natural Forest'}
+  - {idx: 2, raw: 20, full: 'Naturally regenerating forest with signs of human activities',        short: 'Natural Forest (Secondary)'}
+  - {idx: 3, raw: 31, full: 'Planted forest',                                                      short: 'Planted Forest'}
+  - {idx: 4, raw: 32, full: 'Short rotation plantations for timber',                               short: 'Short Rotation Plantation'}
+  - {idx: 5, raw: 40, full: 'Oil palm plantations',                                                short: 'Oil Palm'}
+  - {idx: 6, raw: 53, full: 'Agroforestry',                                                        short: 'Agroforestry'}
 
 # ---------------------------------------------------------------------------
 # External project IDs

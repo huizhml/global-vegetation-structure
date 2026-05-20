@@ -66,6 +66,14 @@ viz-global-mosaic-pdf-rh98 *args:
         run.tif_filename_pattern='*RH98*.tif' \
         run.cmap=mako run.cmax=30 run.cmin=0 {{args}}
 
+# Global mosaic PDF for RH25 prediction intervals (the documented example)
+[group('visualization')]
+viz-global-mosaic-pdf-rh25 *args:
+    {{viz}} run=create_global_mosaic_pdf \
+        run.product=prediction_intervals \
+        run.tif_filename_pattern='*RH25*.tif' \
+        run.cmap=mako run.cmax=20 run.cmin=0 {{args}}
+
 # 3-D datacube render (override run.bg_color=black for dark background)
 [group('visualization')]
 viz-datacube *args:

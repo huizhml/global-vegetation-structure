@@ -49,7 +49,7 @@ from const import (
 )
 from evaluation.utils import _short_count
 
-
+set_plot_fonts(label=20, title=20, annot=20)
 
 RH_COLS = [f'rh{rh}' for rh in KEY_RHS_EVAL] + [f'RH{rh}_Q1_raw' for rh in KEY_RHS_EVAL]
 stac_collection_dir = '~/data/gvs/products/gvsm_stac_catalog/vsm_local'
@@ -77,8 +77,8 @@ def _fewer_ticks(ax, nbins: int = 3, axis: str = 'both', prune='both') -> None:
         ax.yaxis.set_major_locator(MaxNLocator(nbins=nbins, prune=prune))
 
 
-def _annotate_stats(ax, r2, corr, n, corner='upper left') -> None:
-    '''Boxed R^2 / Corr / N annotation in the on_wsci.py style: one rounded
+def _annotate_stats(ax, r2, pvalue, n, corner='upper left') -> None:
+    '''Boxed R^2 / p-value / N annotation in the on_wsci.py style: one rounded
     white box, mathtext R^2 and scientific N. `corner` is 'upper left'
     (default) or 'lower right' — position and text alignment move together
     so the box stays inside the axes either way. Wraps what used to be three
@@ -89,8 +89,8 @@ def _annotate_stats(ax, r2, corr, n, corner='upper left') -> None:
     }[corner]
     ax.text(
         x, y,
-        f"$R^2$ = {r2:.3f}\n"
-        f"Corr = {corr:.3f}",
+        f"$R^2$ = {r2:.3f}",
+        # f"p = {pvalue:.2e}",
         # f"N = ${_sci(n)}$",
         ha=ha, va=va, transform=ax.transAxes,
         fontsize=FONT_SIZES['annot'],
@@ -116,7 +116,10 @@ def scatter_plot(df: pd.DataFrame, var: str, metrics: dict, biome_value: int = N
     if show_colorbar:
         divider = make_axes_locatable(ax)
         cax = divider.append_axes("right", size="5%", pad=0.1)
-        fig.colorbar(ax.collections[0], cax=cax)
+        cb = fig.colorbar(ax.collections[0], cax=cax)
+        cb.set_label('Sample count', fontsize=FONT_SIZES['colorbar'])
+        cb.ax.tick_params(labelsize=FONT_SIZES['ticks'])
+
     ax.set_xlim(0, max_value)
     ax.set_ylim(0, max_value)
     ax.plot(np.arange(max_value), np.arange(max_value), color='black', linestyle='dashed')
@@ -126,7 +129,7 @@ def scatter_plot(df: pd.DataFrame, var: str, metrics: dict, biome_value: int = N
         ax.set_ylabel(f'Ours {label}', fontsize=FONT_SIZES['label'])
     if plot_title is not None:
         ax.set_title(plot_title)
-    _annotate_stats(ax, metrics[f'{var}_r2'], metrics[f'{var}_corr'], metrics[f'{var}_n'],
+    _annotate_stats(ax, metrics[f'{var}_r2'], metrics[f'{var}_pvalue'], metrics[f'{var}_n'],
                     corner='lower right' if var == 'cr' else 'upper left')
     _fewer_ticks(ax, nbins=3, prune=None)  # ~3 nice ticks, tracks live limits
     ax.set_aspect('equal')
@@ -168,7 +171,9 @@ def hexbin_scatter_plot(df: pd.DataFrame, var: str, metrics: dict, biome_value: 
     if show_colorbar:
         divider = make_axes_locatable(ax)
         cax = divider.append_axes("right", size="5%", pad=0.1)
-        fig.colorbar(hb, cax=cax)
+        cb = fig.colorbar(ax.collections[0], cax=cax)
+        cb.set_label('Sample count', fontsize=FONT_SIZES['colorbar'])
+        cb.ax.tick_params(labelsize=FONT_SIZES['ticks'])
 
     ax.set_xlim(0, max_value)
     ax.set_ylim(0, max_value)
@@ -178,7 +183,7 @@ def hexbin_scatter_plot(df: pd.DataFrame, var: str, metrics: dict, biome_value: 
     if show_ylabel:
         ax.set_ylabel(f'Ours', fontsize=FONT_SIZES['label'])
     ax.set_title(label)
-    _annotate_stats(ax, metrics[f'{var}_r2'], metrics[f'{var}_corr'], metrics[f'{var}_n'],
+    _annotate_stats(ax, metrics[f'{var}_r2'], metrics[f'{var}_pvalue'], metrics[f'{var}_n'],
                     corner='lower right' if var == 'cr' else 'upper left')
     _fewer_ticks(ax, nbins=3, prune=None)  # ~3 nice ticks, tracks live limits
     ax.set_aspect('equal')
@@ -1043,7 +1048,9 @@ def eval_diversity_indices(
         for var in _DIV_VARS:
             gedi, ours = group[f'{var}_gedi'], group[f'{var}_ours']
             diff = group[f'{var}_diff'] / max_metrics[var]
-            metrics[f'{var}_corr'] = np.corrcoef(gedi, ours)[0, 1]
+            corr, pvalue = pearsonr(gedi, ours)
+            metrics[f'{var}_corr'] = corr
+            metrics[f'{var}_pvalue'] = pvalue
             metrics[f'{var}_r2'] = r2_score(gedi, ours)
             metrics[f'{var}_rmse'] = np.sqrt(np.mean(diff ** 2))
             metrics[f'{var}_mae'] = np.mean(np.abs(diff))

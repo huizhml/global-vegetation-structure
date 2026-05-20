@@ -335,7 +335,7 @@ def plot_tiff_image_with_profile(image: xr.DataArray, cmin: int=None, cmax: int=
             ax_prof.set_xticks(xtick_vals)
             ax_prof.set_xticklabels([f'{v:.0f}' for v in xtick_vals])
 
-            tick_lats = np.arange(-60, 90, 20)
+            tick_lats = np.arange(-60, 90, 30)
             tick_y_proj = [proj.transform_point(0, lat, data_crs)[1] for lat in tick_lats]
             ax_prof.set_yticks(tick_y_proj)
             ax_prof.set_yticklabels([f'{v:.0f}°' for v in tick_lats])
@@ -362,7 +362,7 @@ def plot_tiff_image_with_profile(image: xr.DataArray, cmin: int=None, cmax: int=
         cbar = fig.colorbar(im, cax=cax, orientation='vertical')
         cbar.set_ticks([cmin_, cmax_])
         if band_name.lower() == 'cr':
-            cbar.set_ticklabels([f'{cmin_:.2f}', f'{cmax_:.2f}'])
+            cbar.set_ticklabels([f'{cmin_:.2f}', f'{cmax_:.1f}'])
         else:
             cbar.set_ticklabels([f'{cmin_:.0f}', f'{cmax_:.0f}'])
         cbar.ax.tick_params(size=0, pad=3, labelsize=FONT_SIZES['ticks'])
@@ -501,6 +501,7 @@ def make_global_mosaic_pdf(mosaic_dir: str, tif_filename_pattern: str = 'global_
     '''
     Make a PDF file where each page renders a global mosaic of a TIFF image
     '''
+    set_plot_fonts(legend=9, label=16)
     timestamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
     mosaic_dir = Path(mosaic_dir).expanduser()
     tif_files = list(mosaic_dir.glob(tif_filename_pattern))

@@ -18,7 +18,7 @@ from tqdm import tqdm
 
 from const import BIOMES, FONT_SIZES, set_plot_fonts
 
-set_plot_fonts()
+set_plot_fonts(label=20, title=20, annot=20)
 
 # Band order of the diversity raster (used as df columns / file slugs).
 DIVERSITY_BANDS = ['fhd', 'enl1d', 'enl2d', 'cr']
@@ -211,7 +211,7 @@ def hexbin_regression_plot(
         divider = make_axes_locatable(ax)
         cax = divider.append_axes("right", size="5%", pad=0.1)
         cb = fig.colorbar(hb, cax=cax)
-        cb.set_label('count', fontsize=FONT_SIZES['colorbar'])
+        cb.set_label('Sample count', fontsize=FONT_SIZES['colorbar'])
         cb.ax.tick_params(labelsize=FONT_SIZES['ticks'])
         annot_positony = 0.2
 
@@ -222,9 +222,10 @@ def hexbin_regression_plot(
     # Stats annotation
     ax.text(
         0.05, annot_positony,
-        f"Pearson $r$ = {metrics['pearson_r']:.3f}\n"
+        f"$R^2$ = {metrics['r2']:.3f}",
+        # f"p = {metrics['pearson_p']:.2e}",
+        # f"Corr $r$ = {metrics['pearson_r']:.3f}\n"
         # f"Spearman $\\rho$ = {metrics['spearman_rho']:.3f}\n"
-        f"$R^2$ = {metrics['r2']:.3f}\n",
         # f"N = ${_sci(metrics['n'])}$",
         ha='left', va='top',
         transform=ax.transAxes, fontsize=FONT_SIZES['annot'],
