@@ -23,7 +23,7 @@ tile_id=$(sed -n "${SLURM_ARRAY_TASK_ID}p" $tile_id_file)
 echo "Processing tile ID: $tile_id"
 
 output_dir=${HOME}/data/gvs/products/profile_entropy/2020/tiles/geotiff
-# python -m evaluation.run run=compute_entropy run.output_dir=$output_dir run.tile_id=$tile_id run.year=2020
+# python -m evaluation.on_diversity_indices run=compute_entropy run.output_dir=$output_dir run.tile_id=$tile_id run.year=2020
 
 ;;
 
@@ -80,7 +80,7 @@ echo "Calculating VSM patch statistics"
 split=${2:-val}
 vsm_patches_dir=${HOME}/data/gvs/downstream_tasks/naturalness/vsm_patches_ps11_${split}
 save_dir=${HOME}/data/gvs/downstream_tasks/naturalness/vsm_patch_stats_ps11_${split}
-python -m evaluation.run run=cal_vsm_patch_stats run.vsm_patches_dir=${vsm_patches_dir} run.save_dir=${save_dir}  || exit $?
+python -m evaluation.on_naturalness run=cal_vsm_patch_stats run.vsm_patches_dir=${vsm_patches_dir} run.save_dir=${save_dir}  || exit $?
 # run_sanity_check check_two_datasets ${gedi_ref_dir} ${save_dir} || exit $?
 ;;
 

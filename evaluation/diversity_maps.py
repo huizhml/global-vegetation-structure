@@ -265,11 +265,27 @@ def to_cog(gtif_path: Path, cog_path: Path=None):
     
 
 
+# ============================================================================
+# Hydra entrypoint
+# ============================================================================
+import hydra
+from config.loader import register
+from config.runner import run_cli
+
+register(
+    Path(__file__).resolve().parents[1] / 'config' / 'eval' / 'config.yaml',
+    section='diversity_maps',
+    default_run='create_global_diversity_maps',
+)
+
+
+@hydra.main(config_name='no_log', version_base='1.2', config_path='../config/base')
+def main(cfg):
+    run_cli(cfg)
+
+
 if __name__ == '__main__':
-    save_dir = '~/data/gvs/products/diversity_indices/2020/masked/mosaic'
-    tif_dir = '~/data/gvs/products/diversity_indices/2020/masked/mosaic/cog'
-    bin_width = 1
-    create_global_diversity_maps(save_dir=save_dir, tif_dir=tif_dir, bin_width=bin_width)
+    main()
 
     
     

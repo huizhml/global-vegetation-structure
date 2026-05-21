@@ -23,7 +23,7 @@ from cartopy.mpl.ticker import LongitudeFormatter, LatitudeFormatter
 import seaborn as sns
 
 from postprocessing.core.s2_tiling import find_intersecting_s2_tiles
-from const import VSM_VIS_PARAMS, FONT_SIZES, set_plot_fonts
+from const import VSM_VIS_PARAMS, FONT_SIZES, FIGURE_SIZES, set_plot_fonts
 
 set_plot_fonts()
 
@@ -107,7 +107,7 @@ def get_vis_params(tif_file: Path):
         return vis['cmin'], vis['cmax'], 'inferno'
 
 # --------- Plotting Functions ---------
-def plot_xr_rgb(image: xr.DataArray, *, title: str = None):
+def plot_xr_rgb(image: xr.DataArray, *, title: str = None, **kwargs):
     """
     Plot the RGB image using xarray's plot.imshow(), without a colorbar. The image should already be clipped and normalized.
 
@@ -121,7 +121,7 @@ def plot_xr_rgb(image: xr.DataArray, *, title: str = None):
     Returns:
         None. The function creates and displays a matplotlib Figure with the plotted RGB image.
     """
-    fig = plt.figure(figsize=(12, 10))
+    fig = plt.figure(figsize=kwargs.get('figsize', FIGURE_SIZES['large']))
     image.plot.imshow(ax=fig.gca(), x='x', y='y', rgb='band')
     fig.gca().set_title(title)
     fig.gca().set_xticks([])
@@ -130,7 +130,7 @@ def plot_xr_rgb(image: xr.DataArray, *, title: str = None):
     fig.gca().set_ylabel('')
     fig.gca().set_aspect('equal')
 
-def plot_xr_image(image: xr.DataArray, *, title: str = None, cmap: Colormap=None, vmin: float = 0, vmax: float = 500):
+def plot_xr_image(image: xr.DataArray, *, title: str = None, cmap: Colormap=None, vmin: float = 0, vmax: float = 500, **kwargs):
     """
     Plot a single-band xarray.DataArray (such as the RH98 (Q1) metric), with a colorbar.
 
@@ -144,7 +144,7 @@ def plot_xr_image(image: xr.DataArray, *, title: str = None, cmap: Colormap=None
     Returns:
         matplotlib.figure.Figure: The resulting figure object displaying the image.
     """
-    fig = plt.figure(figsize=(12, 10))
+    fig = plt.figure(figsize=kwargs.get('figsize', FIGURE_SIZES['large']))
     image.plot.imshow(ax=fig.gca(), cmap=cmap, vmin=vmin, vmax=vmax, add_colorbar=True)
     fig.gca().set_title(title)
     fig.gca().set_xticks([])
@@ -155,8 +155,8 @@ def plot_xr_image(image: xr.DataArray, *, title: str = None, cmap: Colormap=None
     fig.tight_layout()
     return fig
 
-def plot_rh_pair(rh_top, rh_low, *, tile: str, top_rh: int, low_rh: int, cmap: Colormap=None):
-    fig, axes = plt.subplots(1, 2, figsize=(11, 5))
+def plot_rh_pair(rh_top, rh_low, *, tile: str, top_rh: int, low_rh: int, cmap: Colormap=None, **kwargs):
+    fig, axes = plt.subplots(1, 2, figsize=kwargs.get('figsize', FIGURE_SIZES['wide']))
     rh_top.plot.imshow(ax=axes[0], cmap=cmap, vmin=0, vmax=500, add_colorbar=True)
     rh_low.plot.imshow(ax=axes[1], cmap=cmap, vmin=0, vmax=120, add_colorbar=True)
     for ax, rh_idx in zip(axes, [top_rh, low_rh]):
@@ -168,8 +168,8 @@ def plot_rh_pair(rh_top, rh_low, *, tile: str, top_rh: int, low_rh: int, cmap: C
     fig.tight_layout()
     return fig
 
-def plot_pdf_cover(params: dict, timestamp: str):
-    fig_cover = plt.figure(figsize=(11, 6))
+def plot_pdf_cover(params: dict, timestamp: str, **kwargs):
+    fig_cover = plt.figure(figsize=kwargs.get('figsize', FIGURE_SIZES['medium']))
     
     header = "Processing Parameters\n"
     divider = "-" * 25 + "\n\n"
@@ -203,7 +203,7 @@ def plot_pdf_cover(params: dict, timestamp: str):
     return fig_cover
 
 
-def plot_tiff_image(image: xr.DataArray, cmin: int=None, cmax: int=None, cmap: str = None):
+def plot_tiff_image(image: xr.DataArray, cmin: int=None, cmax: int=None, cmap: str = None, **kwargs):
     '''
     Plot as single-band image with a colorbar.
     Args:
@@ -230,7 +230,7 @@ def plot_tiff_image(image: xr.DataArray, cmin: int=None, cmax: int=None, cmap: s
         cmin = cmin or vis['cmin']
         cmax = cmax or vis['cmax']
 
-        fig = plt.figure(figsize=(6, 5))
+        fig = plt.figure(figsize=kwargs.get('figsize', FIGURE_SIZES['small']))
         ax = plt.gca()
         data = image.sel(band=band)
         if cmin is None or cmax is None:
@@ -255,7 +255,7 @@ def plot_tiff_image(image: xr.DataArray, cmin: int=None, cmax: int=None, cmap: s
     return figs
 
 
-def plot_tiff_image_with_profile(image: xr.DataArray, cmin: int=None, cmax: int=None, cmap: str = None, show_profile: bool = False):
+def plot_tiff_image_with_profile(image: xr.DataArray, cmin: int=None, cmax: int=None, cmap: str = None, show_profile: bool = False, **kwargs):
     """
     Plot single-band image on Equal Earth projection with an optional latitudinal mean±sd profile on the left.
     """
@@ -282,7 +282,7 @@ def plot_tiff_image_with_profile(image: xr.DataArray, cmin: int=None, cmax: int=
         proj = ccrs.EqualEarth()
         data_crs = ccrs.PlateCarree()
 
-        fig = plt.figure(figsize=(9, 4))
+        fig = plt.figure(figsize=kwargs.get('figsize', FIGURE_SIZES['small']))
 
         if show_profile:
             ax_img = fig.add_axes([0.25, 0.05, 0.72, 0.9], projection=proj)

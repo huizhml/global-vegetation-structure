@@ -52,3 +52,26 @@ def evaluate_chm_with_sota(ours_dir: str, save_dir: str, data_name: str =None, s
     df = pd.concat([df_rmse, df_mae, df_me], keys=['RMSE', 'MAE', 'ME'], axis=1)
     df.to_csv(out_file)
     df.to_latex(out_file.with_suffix('.tex'), float_format=f"%.2f", na_rep='')
+
+
+# ============================================================================
+# Hydra entrypoint
+# ============================================================================
+import hydra
+from config.loader import register
+from config.runner import run_cli
+
+register(
+    Path(__file__).resolve().parents[1] / 'config' / 'eval' / 'config.yaml',
+    section='on_sota_chm',
+    default_run='evaluate_chm_with_sota',
+)
+
+
+@hydra.main(config_name='no_log', version_base='1.2', config_path='../config/base')
+def main(cfg):
+    run_cli(cfg)
+
+
+if __name__ == '__main__':
+    main()

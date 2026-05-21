@@ -20,7 +20,7 @@ from matplotlib.lines import Line2D
 import numpy as np
 from scipy.signal import savgol_filter
 
-from const import FONT_SIZES, set_plot_fonts
+from const import FONT_SIZES, FIGURE_SIZES, set_plot_fonts
 
 set_plot_fonts()
 
@@ -225,7 +225,7 @@ def _strip_labels(ax):
 # Main
 # ---------------------------------------------------------------------------
 
-def make_figure(rh, out_path):
+def make_figure(rh, out_path, **kwargs):
     """Compose and save the three-panel GEDI illustration."""
 
     percentiles = np.arange(0, len(rh))
@@ -261,7 +261,7 @@ def make_figure(rh, out_path):
         rh, bin_size=bin_size, h_min=h_min, h_max=h_max)
 
     # Layout
-    fig = plt.figure(figsize=(14, 4))
+    fig = plt.figure(figsize=kwargs.get('figsize', FIGURE_SIZES['wide']))
     gs = fig.add_gridspec(1, 3, width_ratios=[3.5, 3.5, 1.6])
     gs.update(wspace=0.15)
     fig.subplots_adjust(right=0.78)
@@ -299,7 +299,7 @@ def make_figure(rh, out_path):
     print(f"Saved → {out_path.with_suffix('.pdf')}")
 
 
-def make_separate_figures(rh, out_dir, annot_rhs: bool = False):
+def make_separate_figures(rh, out_dir, annot_rhs: bool = False, **kwargs):
     """Export each panel as a separate figure with transparent background."""
 
     out_dir = Path(out_dir).expanduser()
@@ -335,7 +335,7 @@ def make_separate_figures(rh, out_dir, annot_rhs: bool = False):
     save_kw = dict(dpi=300, bbox_inches='tight', transparent=True)
 
     # --- Panel 1: RH curve ---
-    fig1, ax1 = plt.subplots(figsize=(4, 4))
+    fig1, ax1 = plt.subplots(figsize=kwargs.get('figsize', FIGURE_SIZES['mini']))
     ax1.set_ylim(h_min, h_max)
     plot_rh_curve(ax1, percentiles, rh, rh_markers, cfg)
     # ax1.axhline(y=0, color='#8B7355', linewidth=0.8, linestyle='--', alpha=0.5)
@@ -345,7 +345,7 @@ def make_separate_figures(rh, out_dir, annot_rhs: bool = False):
     plt.close(fig1)
 
     # --- Panel 2: Vertical profile ---
-    fig2, ax2 = plt.subplots(figsize=(4, 4))
+    fig2, ax2 = plt.subplots(figsize=kwargs.get('figsize', FIGURE_SIZES['mini']))
     ax2.set_ylim(h_min, h_max)
     xmax = plot_vertical_profile(ax2, bin_centers, bin_amp_pct, smoothed_pct,
                                  bin_size, rh, rh_markers, cfg)
@@ -358,7 +358,7 @@ def make_separate_figures(rh, out_dir, annot_rhs: bool = False):
     plt.close(fig2)
 
     # --- Panel 3: Forest structure ---
-    fig3, ax3 = plt.subplots(figsize=(3, 4))
+    fig3, ax3 = plt.subplots(figsize=kwargs.get('figsize', FIGURE_SIZES['mini']))
     ax3.set_ylim(h_min, h_max)
     plot_forest(ax3, rh, rh_markers, cfg)
     # ax3.axhline(y=0, color='#8B7355', linewidth=0.8, linestyle='--', alpha=0.5)

@@ -5,7 +5,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import pandas as pd
 
-from const import set_plot_fonts
+from const import FIGURE_SIZES, set_plot_fonts, fewer_ticks
 
 set_plot_fonts()
 import numpy as np
@@ -34,7 +34,7 @@ def get_cloud_cover_from_api(tile_id: str, s2_grid: gpd.GeoDataFrame, year: int 
     df = get_top_20_images(df)
     return df['eo:cloud_cover'].values
 
-def plot_cloud_cover_box(cloud_cover_dict, *, tile: str):
+def plot_cloud_cover_box(cloud_cover_dict, *, tile: str, **kwargs):
     '''
     Plot the cloud cover in boxplot for the input images for the given tile
     Args:
@@ -43,7 +43,7 @@ def plot_cloud_cover_box(cloud_cover_dict, *, tile: str):
     Returns:
         fig: matplotlib.figure.Figure, the figure object
     '''
-    fig, ax = plt.subplots(figsize=(12, 6))
+    fig, ax = plt.subplots(figsize=kwargs.get('figsize', FIGURE_SIZES['medium']))
     data = list(cloud_cover_dict.values())
     labels = list(cloud_cover_dict.keys())
     colors = plt.cm.tab10.colors  # or plt.cm.Set3.colors
@@ -68,6 +68,7 @@ def plot_cloud_cover_box(cloud_cover_dict, *, tile: str):
     ax.set_xticklabels(labels, rotation=45)
     ax.set_ylabel('Cloud Cover (%)')
     ax.grid(axis='y', linestyle='--', alpha=0.7)
+    fewer_ticks(ax, axis='y')
     plt.tight_layout()
     return fig
 

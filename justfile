@@ -21,9 +21,19 @@
 viz   := "python -m visualization.run"
 dl    := "python -m download.run"
 post  := "python -m postprocessing.run"
-evalp := "python -m evaluation.run"
 tools := "python -m tools.run"
 preproc := "python -m preprocessing.run"
+
+# evaluation/ — per-module entrypoints (one file per evaluation/<module>.py)
+eval-on-gedi             := "python -m evaluation.on_gedi"
+eval-on-sota-chm         := "python -m evaluation.on_sota_chm"
+eval-on-als              := "python -m evaluation.on_als"
+eval-diversity-maps      := "python -m evaluation.diversity_maps"
+eval-on-wsci             := "python -m evaluation.on_wsci"
+eval-utils               := "python -m evaluation.utils"
+eval-on-div-indices      := "python -m evaluation.on_diversity_indices"
+eval-on-naturalness      := "python -m evaluation.on_naturalness"
+eval-on-glcm-texture     := "python -m evaluation.on_glcm_texture"
 
 # Show all available recipes, grouped
 default:
@@ -207,6 +217,11 @@ post-create-updated-stac-collection *args:
 post-make-parq-subcolumns *args:
     {{post}} run=make_parq_subcolumns {{args}}
 
+# Merge columns from two per-tile parquet dirs into one combined parquet
+[group('postprocessing')]
+post-merge-columns-from-dirs *args:
+    {{tools}} run=merge_cols_from_dirs {{args}}
+
 # Get tiles to reblend
 [group('postprocessing')]
 post-get-tiles-reblend *args:
@@ -313,48 +328,48 @@ post-sample-forest-temp *args:
     {{post}} run=sample_forest_temp {{args}}
 
 # ─────────────────────────────────────────────────────────────────────────
-# evaluation  (python -m evaluation.run)
+# evaluation  (per-module entrypoints — see vars at top of file)
 # ─────────────────────────────────────────────────────────────────────────
 
 # Evaluate VSM on GEDI
 [group('evaluation')]
 eval-vsm-on-gedi *args:
-    {{evalp}} run=evaluate_vsm_on_gedi {{args}}
+    {{eval-on-gedi}} run=evaluate_vsm_on_gedi {{args}}
 
 # Evaluate CHM with SOTA
 [group('evaluation')]
 eval-chm-with-sota *args:
-    {{evalp}} run=evaluate_chm_with_sota {{args}}
+    {{eval-on-sota-chm}} run=evaluate_chm_with_sota {{args}}
 
 # Evaluate CHM with ALS and LVIS
 [group('evaluation')]
 eval-chm-with-als-and-lvis *args:
-    {{evalp}} run=evaluate_chm_with_als_and_lvis {{args}}
+    {{eval-on-als}} run=evaluate_chm_with_als_and_lvis {{args}}
 
 # Generate diversity-indices map
 [group('evaluation')]
 eval-generate-diversity-indices-map *args:
-    {{evalp}} run=generate_diversity_indices_map {{args}}
+    {{eval-diversity-maps}} run=generate_diversity_indices_map {{args}}
 
 # Sample points by biome
 [group('evaluation')]
 eval-sample-points-by-biome *args:
-    {{evalp}} run=sample_points_by_biome {{args}}
+    {{eval-utils}} run=sample_points_by_biome {{args}}
 
 # Partition points by tile
 [group('evaluation')]
 eval-partition-points-by-tile *args:
-    {{evalp}} run=partition_points_by_tile {{args}}
+    {{eval-utils}} run=partition_points_by_tile {{args}}
 
 # Compute entropy
 [group('evaluation')]
 eval-compute-entropy *args:
-    {{evalp}} run=compute_entropy {{args}}
+    {{eval-on-div-indices}} run=compute_entropy {{args}}
 
 # Compute diversity indices
 [group('evaluation')]
 eval-compute-diversity-indices *args:
-    {{evalp}} run=compute_diversity_indices {{args}}
+    {{eval-on-div-indices}} run=compute_diversity_indices {{args}}
 
 # Diversity indices — one config (run=evaluate_diversity_indices), one recipe
 # per figure variant via plot_* overrides. Append more overrides through *args,
@@ -363,77 +378,78 @@ eval-compute-diversity-indices *args:
 # Per-biome metrics CSV + all-tiles metrics CSV (no figures)
 [group('evaluation')]
 eval-div-metrics *args:
-    {{evalp}} run=evaluate_diversity_indices {{args}}
+    {{eval-on-div-indices}} run=evaluate_diversity_indices {{args}}
 
 # Per-biome metrics + per-biome marginal-histogram boxplots
 [group('evaluation')]
 eval-div-per-biome *args:
-    {{evalp}} run=evaluate_diversity_indices run.plot_boxplot=true {{args}}
+    {{eval-on-div-indices}} run=evaluate_diversity_indices run.plot_boxplot=true {{args}}
 
 # RH98-binned residual boxplots (all data)
 [group('evaluation')]
 eval-div-residuals *args:
-    {{evalp}} run=evaluate_diversity_indices run.group_by=null run.plot_residuals=true {{args}}
+    {{eval-on-div-indices}} run=evaluate_diversity_indices run.group_by=null run.plot_residuals=true {{args}}
 
 # Single biome-combined boxplot (all data)
 [group('evaluation')]
 eval-div-combined-boxplot *args:
-    {{evalp}} run=evaluate_diversity_indices run.group_by=null run.plot_biome_combined_boxplot=true {{args}}
+    {{eval-on-div-indices}} run=evaluate_diversity_indices run.group_by=null run.plot_biome_combined_boxplot=true {{args}}
 
 # GEDI-vs-ours hexbin density scatter (per biome + all data)
 [group('evaluation')]
 eval-div-hexbin *args:
-    {{evalp}} run=evaluate_diversity_indices run.plot_hexbin=true {{args}}
+    {{eval-on-div-indices}} run=evaluate_diversity_indices run.plot_hexbin=true {{args}}
 
 # WSCI-vs-ours hexbin density scatter (per biome + all data)
 [group('evaluation')]
 eval-wsci-hexbin *args:
-    {{evalp}} run=eval_on_wsci {{args}}
+    {{eval-on-wsci}} run=eval_on_wsci {{args}}
 
 # Calc S2 patch stats
 [group('evaluation')]
 eval-cal-s2-patch-stats *args:
-    {{evalp}} run=cal_s2_patch_stats {{args}}
+    {{eval-on-naturalness}} run=cal_s2_patch_stats {{args}}
 
 # Calc alpha-EM patch stats
 [group('evaluation')]
 eval-cal-alpha-em-patch-stats *args:
-    {{evalp}} run=cal_alpha_em_patch_stats {{args}}
+    {{eval-on-naturalness}} run=cal_alpha_em_patch_stats {{args}}
 
 # Calc VSM-17 patch stats
 [group('evaluation')]
 eval-cal-vsm-17-patch-stats *args:
-    {{evalp}} run=cal_vsm_17_patch_stats {{args}}
+    {{eval-on-naturalness}} run=cal_vsm_17_patch_stats {{args}}
 
 # Calc VSM patch stats
 [group('evaluation')]
 eval-cal-vsm-patch-stats *args:
-    {{evalp}} run=cal_vsm_patch_stats {{args}}
+    {{eval-on-naturalness}} run=cal_vsm_patch_stats {{args}}
 
-# Merge patch stats
+# Merge patch stats (cross-package: targets tools.parq_ops, registered under
+# on_naturalness for now — will move to tools entrypoint in the tools sweep)
 [group('evaluation')]
 eval-merge-patch-stats *args:
-    {{evalp}} run=merge_patch_stats {{args}}
+    {{eval-on-naturalness}} run=merge_patch_stats {{args}}
 
 # Run naturalness classification
 [group('evaluation')]
 eval-run-naturalness-classification *args:
-    {{evalp}} run=run_naturalness_classification {{args}}
+    {{eval-on-naturalness}} run=run_naturalness_classification {{args}}
 
 # Plot bars (spatial context)
 [group('evaluation')]
 eval-plot-bars-spatial-context *args:
-    {{evalp}} run=plot_bars_spatial_context {{args}}
+    {{eval-on-naturalness}} run=plot_bars_spatial_context {{args}}
 
 # Plot bars (center pixel)
 [group('evaluation')]
 eval-plot-bars-center-pixel *args:
-    {{evalp}} run=plot_bars_center_pixel {{args}}
+    {{eval-on-naturalness}} run=plot_bars_center_pixel {{args}}
 
 # Compute GLCM texture
 [group('evaluation')]
 eval-compute-glcm-texture *args:
-    {{evalp}} run=compute_glcm_texture {{args}}
+    {{eval-on-glcm-texture}} run=compute_glcm_texture {{args}}
 
 # ─────────────────────────────────────────────────────────────────────────
 # tools  (python -m tools.run)

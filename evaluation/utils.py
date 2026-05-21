@@ -20,7 +20,7 @@ from rasterio.transform import rowcol
 import rasterio
 from concurrent.futures import ThreadPoolExecutor
 
-from const import MAX_HEIGHT_METERS, VSM_NODATA, set_plot_fonts
+from const import MAX_HEIGHT_METERS, VSM_NODATA, FIGURE_SIZES, set_plot_fonts, fewer_ticks
 
 set_plot_fonts()
 
@@ -381,7 +381,7 @@ def verify_diversity_indices_torch(n=256, bin_width=5, max_height=MAX_HEIGHT_MET
     return ok
 
 
-def plot_biome_samples(gdf_dissolved, points_gdf, save_path=None, figsize=(16, 10)):
+def plot_biome_samples(gdf_dissolved, points_gdf, save_path=None, figsize=FIGURE_SIZES['panel']):
     """Plot biome polygons with sampled points overlaid, no explicit loops."""
     fig, ax = plt.subplots(1, 1, figsize=figsize)
 
@@ -401,6 +401,7 @@ def plot_biome_samples(gdf_dissolved, points_gdf, save_path=None, figsize=(16, 1
     ax.set_xlabel("Longitude")
     ax.set_ylabel("Latitude")
     ax.set_aspect("equal")
+    fewer_ticks(ax)
     plt.tight_layout()
     if save_path:
         plt.savefig(save_path, dpi=200, bbox_inches="tight")
@@ -591,15 +592,24 @@ def _short_count(n):
     return str(n)
 
 
-if __name__ == "__main__":
-    sample_points_by_biome(
-        biome_file='/projects/dereeco/data/GEDI/ecoregions/wwf_terr_ecos.shp',
-        n_samples=100000,
-        save_dir='/projects/dereeco/data/gvs/analysis/biome_anlaysis/random_sample_100000_points_per_biome',
-        plot_points=True
-    )
-    # partition_points_by_tile(
-    #     gdf_file='/projects/dereeco/data/gvs/analysis/biome_anlaysis/random_sample_100000_points_per_biome.parquet',
-    #     s2_tile_file='~/data/gvs/state/s2_tiles_with_growing_months.parquet',
-    #     save_dir='/projects/dereeco/data/gvs/analysis/biome_anlaysis/random_sample_100000_points_per_biome_by_tile'
-    # )
+# ============================================================================
+# Hydra entrypoint
+# ============================================================================
+import hydra
+from config.loader import register
+from config.runner import run_cli
+
+register(
+    Path(__file__).resolve().parents[1] / 'config' / 'eval' / 'config.yaml',
+    section='utils',
+    default_run='sample_points_by_biome',
+)
+
+
+@hydra.main(config_name='no_log', version_base='1.2', config_path='../config/base')
+def main(cfg):
+    run_cli(cfg)
+
+
+if __name__ == '__main__':
+    main()

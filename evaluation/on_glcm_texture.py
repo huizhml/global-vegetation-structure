@@ -18,7 +18,7 @@ from typing import Dict, List, Tuple, Optional
 import matplotlib.pyplot as plt
 import dask
 
-from const import set_plot_fonts
+from const import FIGURE_SIZES, set_plot_fonts, fewer_ticks
 
 set_plot_fonts()
 import dask.dataframe as dd
@@ -486,7 +486,7 @@ def check_distribution(vsm_patch_stats_dir: str, save_dir: str, feature_cols: li
     save_dir.mkdir(parents=True, exist_ok=True)
     ddf, y = _load_patch_stats(vsm_patch_stats_dir, **kwargs)
     for col in feature_cols:
-        fig, ax = plt.subplots(figsize=(10, 5))
+        fig, ax = plt.subplots(figsize=kwargs.get('figsize', FIGURE_SIZES['medium']))
         groups = ddf.groupby('naturalness')[col]
         labels = sorted(ddf['naturalness'].unique())
         data = [groups.get_group(l).dropna().values for l in labels]
@@ -497,6 +497,7 @@ def check_distribution(vsm_patch_stats_dir: str, save_dir: str, feature_cols: li
         ax.set_xlabel('Forest Type')
         ax.set_ylabel(col)
         ax.set_title(f'Distribution of {col} by Forest Type')
+        fewer_ticks(ax, axis='y')
         plt.tight_layout()
         plt.savefig(save_dir / f'violin_{col}.png', dpi=150, bbox_inches='tight')
         plt.close()
@@ -646,43 +647,24 @@ def run_classification(vsm_patch_stats_dir: str, vsm_patch_stats_dir_val: str, s
 
 # ── Example usage ────────────────────────────────────────────────────────────
 
-if __name__ == "__main__":
-    # verify_batch_glcm_features()
-    vsm_patches_dir = '/projects/dereeco/data/gvs/downstream_tasks/naturalness/results_from_vsm_2020/vsm_patches_ps11_train'
-    vsm_patch_stats_dir = '/projects/dereeco/data/gvs/downstream_tasks/naturalness/results_from_vsm_2020/glcm_texture_train'
-    vsm_patch_stats_dir_val = '/projects/dereeco/data/gvs/downstream_tasks/naturalness/results_from_vsm_2020/glcm_texture_val'
-    
-    # save_dir = '/projects/dereeco/data/gvs/downstream_tasks/naturalness/results_from_vsm_2020/glcm_texture_train'
-    # cal_vsm_patch_texture(vsm_patches_dir, save_dir, n_levels=100)
-    height_bins = [f'{i*5}_{(i+1)*5}m' for i in range(20)]
-    metrics = ['contrast', 'homogeneity', 'dissimilarity', 'ASM', 'energy', 'correlation', 'mean', 'variance', 'entropy']
-    feature_cols = [f'{m}_{h}' for m in metrics for h in height_bins]
-    # check_distribution(vsm_patch_stats_dir, save_dir, feature_cols)
-    
-    save_dir = '/projects/dereeco/data/gvs/downstream_tasks/naturalness/results_from_vsm_2020/glcm_texture_classification'
-    run_classification(vsm_patch_stats_dir, vsm_patch_stats_dir_val, save_dir)
+# ============================================================================
+# Hydra entrypoint
+# ============================================================================
+import hydra
+from config.loader import register
+from config.runner import run_cli
 
-    # print(f"Computing GLCM features for {n_points} points...")
-    # print(f"Strata: {STRATA}")
-    # print(f"Voxel shape per point: {voxel_data.shape[1:]}")
-    # print()
+register(
+    Path(__file__).resolve().parents[1] / 'config' / 'eval' / 'config.yaml',
+    section='on_glcm_texture',
+    default_run='compute_glcm_texture',
+)
 
-    # feature_names, features = process_all_points(voxel_data)
 
-    # print(f"\nFeatures computed: {feature_names}")
-    # print(f"Feature array shape: {features.shape}")
-    # print(f"\nFirst point features:")
-    # for name, val in zip(feature_names, features[0]):
-    #     print(f"  {name}: {val:.4f}")
+@hydra.main(config_name='no_log', version_base='1.2', config_path='../config/base')
+def main(cfg):
+    run_cli(cfg)
 
-    # ─── Combine with your existing features and analyze ───
-    # You'd then do something like:
-    #
-    # import pandas as pd
-    # df = pd.DataFrame(features, columns=feature_names)
-    # df["land_use"] = fake_labels
-    # df["avg_fhd"] = your_avg_fhd
-    # df["std_fhd"] = your_std_fhd
-    # ... etc
-    #
-    # Then feed into PCA / violin plots / Random Forest as before
+
+if __name__ == '__main__':
+    main()

@@ -61,7 +61,7 @@ echo "Calculating diversity indices"
 bin_width=${2:-1}
 gedi_ours_dir=${HOME}/data/gvs/gedi/veg_sensitivity_gt0p95/subset_test/original_with_sota_chms_biome_and_ours_full/2020
 save_dir=${HOME}/data/gvs/evaluation/with_gedi_on_diversity_indices/indices_by_tile/
-python -m evaluation.run run=compute_diversity_indices run.gedi_ours_dir=${gedi_ours_dir} run.save_dir=${save_dir} run.bin_width=${bin_width} || exit $?
+python -m evaluation.on_diversity_indices run=compute_diversity_indices run.gedi_ours_dir=${gedi_ours_dir} run.save_dir=${save_dir} run.bin_width=${bin_width} || exit $?
 run_sanity_check check_two_datasets $gedi_ours_dir $save_dir/bin_width_${bin_width}m/2020 || exit $?
 make_manifest $save_dir gedi_test_2020_diversity_indices_bin_width_${bin_width}m ''
 ;;
@@ -73,8 +73,8 @@ make_manifest $save_dir gedi_test_2020_diversity_indices_bin_width_${bin_width}m
 echo "Evaluating diversity indices"
 indices_dir=${HOME}/data/gvs/evaluation/with_gedi_on_diversity_indices/indices_by_tile
 for bin_width in 1 2 3 4 5 6 7 8 9 10; do
-    python -m evaluation.run run=evaluate_diversity_indices run.indices_dir=${indices_dir}/bin_width_${bin_width}m/2020 || exit $?
-    python -m evaluation.run run=evaluate_diversity_indices run.indices_dir=${indices_dir}/bin_width_${bin_width}m/2020 run.group_by=null || exit $?
+    python -m evaluation.on_diversity_indices run=evaluate_diversity_indices run.indices_dir=${indices_dir}/bin_width_${bin_width}m/2020 || exit $?
+    python -m evaluation.on_diversity_indices run=evaluate_diversity_indices run.indices_dir=${indices_dir}/bin_width_${bin_width}m/2020 run.group_by=null || exit $?
 done
 ;;
 

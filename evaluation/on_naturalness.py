@@ -19,7 +19,7 @@ import xgboost as xgb
 import warnings
 from evaluation.utils import load_vsm_naturalness
 from evaluation.on_diversity_indices import _chunk_diversity
-from const import VSM_NODATA, KEY_RHS_EVAL, FONT_SIZES, set_plot_fonts
+from const import VSM_NODATA, KEY_RHS_EVAL, FONT_SIZES, FIGURE_SIZES, set_plot_fonts, fewer_ticks
 
 set_plot_fonts()
 warnings.filterwarnings('ignore')
@@ -136,7 +136,7 @@ def plot_bars(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, groups: tupl
     x_pos = np.arange(len(class_names)) * (n_models * bar_width + group_spacing)
     x_pos[1:] = x_pos[1:] + all_gap
 
-    fig, ax = plt.subplots(figsize=(16, 8))
+    fig, ax = plt.subplots(figsize=kwargs.get('figsize', FIGURE_SIZES['panel']))
     if baseline_name == 'full_profile_center':
         MODEL_NAMES['full_profile']['name'] = 'Full profile (w/ spatial context)'
     # First pass: draw bars, collect annotations
@@ -189,6 +189,7 @@ def plot_bars(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, groups: tupl
     ax.set_ylabel(f'{metric}', fontsize=FONT_SIZES['label'])
     ax.tick_params(axis='y', labelsize=FONT_SIZES['ticks'])
     ax.set_ylim(0, 1.01 )
+    fewer_ticks(ax, axis='y')
     if baseline_name == 'full_profile_center':
         ax.legend(bbox_to_anchor=(0.62, 1), loc='upper left', fontsize=FONT_SIZES['legend'], ncol=1)
     else:
@@ -253,7 +254,7 @@ def plot_dots(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, groups: tupl
         '^': 1.15, 'v': 1.15, '<': 1.15, '>': 1.15, '*': 2,
     }
  
-    fig, ax = plt.subplots(figsize=(11, 8))
+    fig, ax = plt.subplots(figsize=kwargs.get('figsize', FIGURE_SIZES['large']))
 
     # Treat missing/NaN scores as 0 so every group is always drawn
     plot_vals = {m: np.nan_to_num(np.array(values_dict[m], dtype=float), nan=0.0)
@@ -293,6 +294,7 @@ def plot_dots(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, groups: tupl
     ax.set_xlabel(metric, fontsize=FONT_SIZES['label'])
     ax.set_xlim(-0.02, 0.86)
     ax.tick_params(axis='x', labelsize=FONT_SIZES['ticks'])
+    fewer_ticks(ax, axis='x')
     ax.grid(axis='x', alpha=0.3)
     ax.legend(bbox_to_anchor=(0.5, 1.02), loc='lower center', ncol=3, fontsize=FONT_SIZES['legend'])
     plt.tight_layout()
@@ -342,7 +344,7 @@ def plot_improve_heatmap(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, m
     heat_df = pd.DataFrame(heat_data, index=model_names, columns=columns)
 
     # Plot
-    fig, ax = plt.subplots(figsize=(12, max(3, len(model_names) * 0.6 + 1)))
+    fig, ax = plt.subplots(figsize=kwargs.get('figsize', (FIGURE_SIZES['medium'][0], max(3, len(model_names) * 0.6 + 1))))
     vmax = heat_df.abs().values.max()
     cmap = 'RdBu_r' if show_improve else 'YlOrRd_r'
     sns.heatmap(
@@ -934,7 +936,7 @@ def check_distribution(vsm_patch_stats_dir: str, save_dir: str, feature_cols: li
     save_dir.mkdir(parents=True, exist_ok=True)
     ddf, y = _load_patch_stats(vsm_patch_stats_dir, **kwargs)
     for col in feature_cols:
-        fig, ax = plt.subplots(figsize=(10, 5))
+        fig, ax = plt.subplots(figsize=kwargs.get('figsize', FIGURE_SIZES['medium']))
         groups = ddf.groupby('land_use_id')[col]
         labels = sorted(ddf['land_use_id'].unique())
         data = [groups.get_group(l).dropna().values for l in labels]
@@ -945,6 +947,7 @@ def check_distribution(vsm_patch_stats_dir: str, save_dir: str, feature_cols: li
         ax.set_xlabel('Forest Type')
         ax.set_ylabel(col)
         ax.set_title(f'Distribution of {col} by Forest Type')
+        fewer_ticks(ax, axis='y')
         plt.tight_layout()
         plt.savefig(save_dir / f'violin_{col}.png', dpi=150, bbox_inches='tight')
         plt.close()
@@ -1125,7 +1128,7 @@ def plot_grid_metric_circles(grid_pred: gpd.GeoDataFrame, size_col: str, color_c
     else:
         vmin, vmax = color_vlim
 
-    fig, ax = plt.subplots(figsize=(16, 8))
+    fig, ax = plt.subplots(figsize=kwargs.get('figsize', FIGURE_SIZES['panel']))
     if basemap is None and world_file:
         basemap = gpd.read_file(Path(world_file).expanduser())
     if basemap is not None:
@@ -1164,6 +1167,7 @@ def plot_grid_metric_circles(grid_pred: gpd.GeoDataFrame, size_col: str, color_c
     ax.set_xlabel('Longitude', fontsize=FONT_SIZES['label'])
     ax.set_ylabel('Latitude', fontsize=FONT_SIZES['label'])
     ax.tick_params(labelsize=FONT_SIZES['ticks'])
+    fewer_ticks(ax)
     ax.set_aspect('equal')
     plt.tight_layout()
     plt.savefig(save_path, dpi=150, bbox_inches='tight')
@@ -1262,27 +1266,24 @@ def agg_preds_on_grid(preds_file: str, grid_file: str, save_dir: str = None,
     # return out
 
 
+# ============================================================================
+# Hydra entrypoint
+# ============================================================================
+import hydra
+from config.loader import register
+from config.runner import run_cli
+
+register(
+    Path(__file__).resolve().parents[1] / 'config' / 'eval' / 'config.yaml',
+    section='on_naturalness',
+    default_run='cal_s2_patch_stats',
+)
+
+
+@hydra.main(config_name='no_log', version_base='1.2', config_path='../config/base')
+def main(cfg):
+    run_cli(cfg)
+
+
 if __name__ == '__main__':
-    # from evaluation.utils import verify_batch_binning
-    # verify_batch_binning()
-    # split = 'train'
-    # vsm_patches_dir = f'~/data/gvs/evaluation/downstream_tasks/naturalness/vsm_patches_ps11_{split}/'
-    # vsm_patch_stats_dir = f'/projects/dereeco/data/gvs/downstream_tasks/naturalness/results_from_vsm_2020/vsm_s2_alpha_patch_stats_ps11_{split}/'
-    # vsm_patch_stats_dir_val = f'/projects/dereeco/data/gvs/downstream_tasks/naturalness/results_from_vsm_2020/vsm_s2_alpha_patch_stats_ps11_val/'
-    save_dir = f'/projects/dereeco/data/gvs/downstream_tasks/naturalness/results_from_vsm_2020/logistic_regression_ps11/'
-    # s2_patch_file = '~/data/gvs/evaluation/downstream_tasks/naturalness/s2_2017_ps31.h5'
-    # # cal_vsm_patch_stats(vsm_patches_dir, vsm_patch_stats_dir, s2_patch_file=s2_patch_file)
-    # # all_summary_df, all_per_class_df, all_cms = run_classification(vsm_patch_stats_dir, vsm_patch_stats_dir_val, save_dir, debug=True)
-    save_dir = Path(save_dir).expanduser()
-    all_summary_df = pd.read_csv(save_dir / 'logistic_regression_summary_reports.csv', index_col=0)
-    all_per_class_df = pd.read_csv(save_dir / 'logistic_regression_per_class_reports.csv', index_col=0)
-    all_cms = np.load(save_dir / 'logistic_regression_confusion_matrices.npz')
-    plot_bars(all_summary_df, all_per_class_df, metric='Recall', avg='macro', save_dir=save_dir)
-    plot_bars(all_summary_df, all_per_class_df, metric='Precision', avg='macro', save_dir=save_dir)
-    plot_bars(all_summary_df, all_per_class_df, metric='F1', avg='macro', save_dir=save_dir)
-    # plot_improve_heatmap(all_summary_df, all_per_class_df, metric='Recall', avg='macro', save_dir=save_dir)
-    # plot_improve_heatmap(all_summary_df, all_per_class_df, metric='Precision', avg='macro', save_dir=save_dir)
-    # plot_improve_heatmap(all_summary_df, all_per_class_df, metric='F1', avg='macro', save_dir=save_dir)
-    # plot_confusion_matrix(all_cms, save_dir)
-    # feature_cols = ['std_vsm_band98', 'avg_vsm_band98'] + [f'std_fhd', 'avg_fhd'] + [f'std_enl1d', 'avg_enl1d'] + [f'std_enl2d', 'avg_enl2d'] + [f'std_cr', 'avg_cr']
-    # check_distribution(vsm_patch_stats_dir, save_dir, feature_cols)
+    main()

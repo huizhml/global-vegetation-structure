@@ -1,6 +1,6 @@
 import re
 from typing import List
-import dask
+from concurrent.futures import ThreadPoolExecutor
 import dask.dataframe as dd
 from dask.diagnostics import ProgressBar
 from dask.distributed import Client
@@ -10,40 +10,151 @@ import dask_geopandas as dgp
 import numpy as np
 from pathlib import Path
 import matplotlib.pyplot as plt
+import seaborn as sns
 
-from const import FONT_SIZES, set_plot_fonts
+from const import FONT_SIZES, FIGURE_SIZES, set_plot_fonts, fewer_ticks
 
 set_plot_fonts()
 
 # -------------------------------------------------------------
 #  Plot functions
 # -------------------------------------------------------------
-def compute_bxp_stats(ddf_residuals):
-    # Fuse quantile + std into a single parallel traversal of the data.
-    q_lazy = ddf_residuals.quantile([0.25, 0.5, 0.75])
-    std_lazy = ddf_residuals.std(axis=0)
-    q, std = dask.compute(q_lazy, std_lazy)
-    stats = []
-    for col in ddf_residuals.columns:
-        q1 = q[col].loc[0.25]
-        med = q[col].loc[0.5]
-        q3 = q[col].loc[0.75]
+def compute_group_stats(ddf, ours_cols, gedi_cols, group_size=5,
+                        n_violin_samples=1_000_000, n_workers=4, seed=0):
+    """Per group of `group_size` consecutive RH columns, pool the residuals
+    and return exact boxplot stats + a random subsample of raw ours/GEDI
+    values for the violin plot.
+
+    Memory: each group materializes 2*group_size columns to pandas. With
+    50M rows and group_size=5 that's ~4 GB / group; n_workers caps concurrency.
+    Violin KDE is O(n*m); n_violin_samples bounds it to something tractable.
+    """
+    n = len(ours_cols)
+    starts = list(range(0, n, group_size))
+    # If the final bin would have fewer than group_size cols (e.g. just RH100
+    # when n=101 and group_size=5), merge it into the previous group instead.
+    if len(starts) > 1 and n - starts[-1] < group_size:
+        starts.pop()
+    groups = []
+    for j, start in enumerate(starts):
+        end = starts[j + 1] if j + 1 < len(starts) else n
+        groups.append((
+            ours_cols[start:end],
+            gedi_cols[start:end],
+            f'{start}-{end - 1}',
+        ))
+
+    rng = np.random.default_rng(seed)
+
+    def _one_group(g):
+        ours_g, gedi_g, label = g
+        ours_arr = ddf[ours_g].compute().to_numpy().ravel()
+        gedi_arr = ddf[gedi_g].compute().to_numpy().ravel()
+        residuals = ours_arr - gedi_arr
+        mask = np.isfinite(residuals)
+        residuals = residuals[mask]
+        ours_arr = ours_arr[mask]
+        gedi_arr = gedi_arr[mask]
+        # Exact quartiles on the full per-group data — used to define the
+        # 1.5*IQR fence for the inlier filter.
+        q1, q3 = np.percentile(residuals, [25, 75])
         iqr = q3 - q1
-        stats.append(dict(med=med, q1=q1, q3=q3,
-                          whislo=q1 - 1.5 * iqr, whishi=q3 + 1.5 * iqr,
-                          fliers=[]))
-    return stats, std
+        fence_lo = q1 - 1.5 * iqr
+        fence_hi = q3 + 1.5 * iqr
+        std = residuals.std()
+        # Drop rows whose residual is outside the fence so both seaborn's
+        # boxplot whiskers and the violin reflect the same inlier set.
+        # inlier = (residuals >= fence_lo) & (residuals <= fence_hi)
+        # ours_arr = ours_arr[inlier]
+        # gedi_arr = gedi_arr[inlier]
+        # residuals = residuals[inlier]
+        n_total = len(residuals)
+        if n_violin_samples and n_total > n_violin_samples:
+            idx = rng.choice(n_total, n_violin_samples, replace=False)
+            ours_arr = ours_arr[idx]
+            gedi_arr = gedi_arr[idx]
+            residuals = residuals[idx]
+        return dict(
+            label=label,
+            std=std,
+            ours_sample=ours_arr,
+            gedi_sample=gedi_arr,
+            residual_sample=residuals,
+        )
+
+    with ThreadPoolExecutor(max_workers=n_workers) as ex:
+        results = list(ex.map(_one_group, groups))
+    return results
 
 
-def make_residual_plot(stats, save_path):
-    fig, ax = plt.subplots(figsize=(15, 3))
+def make_residual_plot(group_results, save_path, normalize=False, **kwargs):
+    labels = [r['label'] for r in group_results]
+    residual_arrs = [r['residual_sample'] for r in group_results]
+    if normalize:
+        residual_arrs = [a / r['std'] for a, r in zip(residual_arrs, group_results)]
+    df = pd.DataFrame({
+        'rh_group': np.concatenate(
+            [np.repeat(l, len(a)) for l, a in zip(labels, residual_arrs)]),
+        'residual': np.concatenate(residual_arrs),
+    })
+    figsize = kwargs.get('figsize', FIGURE_SIZES['strip'])
+    fig, ax = plt.subplots(figsize=figsize)
     ax.axhline(0, color='red', linewidth=1)
-    ax.bxp(stats, showfliers=False, positions=range(1, 102))
-    plt.xticks(range(1, 102, 5), np.arange(0, 101, 5))
-    plt.xlabel("Relative Height (0-100)", fontsize=FONT_SIZES['label'])
-    plt.ylabel("Residuals (m)", fontsize=FONT_SIZES['label'])
-    plt.title(f"Residuals of VSM on GEDI", fontsize=FONT_SIZES['title'])
+    # showfliers=False is moot — residual_sample has already been clipped to
+    # the 1.5*IQR fence — but it suppresses any seaborn-recomputed fliers if
+    # the sample's empirical IQR drifts slightly from the exact one.
+    sns.boxplot(data=df, x='rh_group', y='residual', order=labels,
+                showfliers=False, showmeans=True,
+                width=0.5, linewidth=2,
+                boxprops=dict(facecolor='C0', edgecolor='black'),
+                medianprops=dict(color='black'),
+                whiskerprops=dict(color='black'),
+                capprops=dict(color='black'),
+                meanprops=dict(marker='o', markerfacecolor='white', markeredgecolor='black'),
+                ax=ax)
+    ax.set_xlabel("Relative Height (0-100)", fontsize=FONT_SIZES['label'])
+    ax.set_ylabel("Residuals / σ" if normalize else "Residuals (m)",
+                  fontsize=FONT_SIZES['label'])
+    ax.set_title("Residuals of VSM on GEDI", fontsize=FONT_SIZES['title'])
     ax.grid(False)
+    fewer_ticks(ax, axis='y')
+    plt.setp(ax.get_xticklabels(), rotation=45, ha='right')
+    plt.tight_layout()
+    plt.savefig(save_path)
+    plt.close()
+
+
+def make_violin_plot(group_results, save_path, **kwargs):
+    # Long-format frame so seaborn can do a true split violin
+    # (left = VSM, right = GEDI per RH bin).
+    ours_arrs = [r['ours_sample'] for r in group_results]
+    gedi_arrs = [r['gedi_sample'] for r in group_results]
+    n_ours = sum(map(len, ours_arrs))
+    n_gedi = sum(map(len, gedi_arrs))
+    df = pd.DataFrame({
+        'rh_group': np.concatenate(
+            [np.repeat(r['label'], len(a)) for r, a in zip(group_results, ours_arrs)]
+            + [np.repeat(r['label'], len(a)) for r, a in zip(group_results, gedi_arrs)]
+        ),
+        'height': np.concatenate(ours_arrs + gedi_arrs),
+        'source': np.concatenate([np.full(n_ours, 'VSM'), np.full(n_gedi, 'GEDI')]),
+    })
+    order = [r['label'] for r in group_results]
+    figsize = kwargs.get('figsize', FIGURE_SIZES['wide'])
+    fig, ax = plt.subplots(figsize=figsize)
+    sns.violinplot(data=df, x='rh_group', y='height', hue='source',
+                   split=True, inner='quartile', order=order,
+                   palette={'VSM': 'C0', 'GEDI': 'C1'}, ax=ax)
+    # symlog (not log) because heights can dip slightly negative; linthresh=1
+    # keeps the near-zero region linear so the bulk of the distribution stays
+    # readable.
+    ax.set_yscale('symlog', linthresh=1)
+    ax.set_xlabel("Relative Height (0-100)", fontsize=FONT_SIZES['label'])
+    ax.set_ylabel("Height (m)", fontsize=FONT_SIZES['label'])
+    ax.set_title("RH distributions: VSM vs GEDI", fontsize=FONT_SIZES['title'])
+    ax.grid(False)
+    ax.get_legend().set_title('')
+    plt.setp(ax.get_xticklabels(), ha='center'), #rotation=45,
     plt.tight_layout()
     plt.savefig(save_path)
     plt.close()
@@ -53,19 +164,15 @@ def make_residual_plot(stats, save_path):
 # -------------------------------------------------------------
 
 def evaluate_vsm_on_gedi(
-        ref_dir: str = None,
-        ours_dir: str = None,
+        ref_and_ours_dir: str = None,
         save_dir: str = None,
-        align_cols: List[str] = ('geometry', 'shot_number'),
         slope_lt20: bool = True,
+        group_size: int=5,
         **kwargs):
     '''
     Evaluate the VSM performance on GEDI
     '''
-    ref_dir = Path(ref_dir).expanduser()
-    ours_dir = Path(ours_dir).expanduser()
-
-
+    ref_and_ours_dir = Path(ref_and_ours_dir).expanduser()
     files = list(ref_and_ours_dir.glob('*.parquet'))#[:10]
     ours_rh_cols = [f'RH{i}_Q1' for i in range(101)]
     gedi_rh_cols = [f'rh{i}' for i in range(101)]
@@ -84,32 +191,41 @@ def evaluate_vsm_on_gedi(
                               split_row_groups=True, filters=filters,
                               dataset={"partitioning": None})
         print(f'npartitions: {ddf.npartitions}')
-        rename_map = dict(zip(ours_rh_cols, gedi_rh_cols)) # dataframe substract matches the columns, need to rename the columns
-        residuals = ddf[ours_rh_cols].rename(columns=rename_map) - ddf[gedi_rh_cols]
-        # One parallel pass yields quantiles + std; the normalized plot is
-        # then derived arithmetically, so the full residuals frame never has
-        # to land in memory.
-        stats, std_residuals = compute_bxp_stats(residuals)
+        # Pool RHs into groups of 5 inside compute_group_stats; it also
+        # subsamples ours/GEDI for the paired violin plot.
+        group_results = compute_group_stats(ddf, ours_rh_cols, gedi_rh_cols,
+                                            group_size=group_size)
     suffix = '_slope_lt20' if slope_lt20 else ''
-    
+
     save_dir = Path(f'{save_dir}').expanduser()
     save_dir.mkdir(parents=True, exist_ok=True)
-    make_residual_plot(stats, save_dir / f'residual_plot{suffix}.pdf')
-    norm_stats = [
-        {'med': s['med'] / std_residuals.iloc[i],
-         'q1': s['q1'] / std_residuals.iloc[i],
-         'q3': s['q3'] / std_residuals.iloc[i],
-         'whislo': s['whislo'] / std_residuals.iloc[i],
-         'whishi': s['whishi'] / std_residuals.iloc[i],
-         'fliers': []}
-        for i, s in enumerate(stats)
-    ]
-    make_residual_plot(norm_stats, save_dir / f'residual_plot_normalized{suffix}.pdf')
+    make_residual_plot(group_results, save_dir / f'residual_plot_group{group_size}{suffix}.pdf', **kwargs)
+    make_residual_plot(group_results, save_dir / f'residual_plot_group{group_size}_normalized{suffix}.pdf',
+                       normalize=True, **kwargs)
+    make_violin_plot(group_results, save_dir / f'violin_plot_group{group_size}{suffix}.pdf', **kwargs)
+    print('plots saved to:', save_dir)
     
     
     
+# ============================================================================
+# Hydra entrypoint
+# ============================================================================
+from pathlib import Path
+import hydra
+from config.loader import register
+from config.runner import run_cli
+
+register(
+    Path(__file__).resolve().parents[1] / 'config' / 'eval' / 'config.yaml',
+    section='on_gedi',
+    default_run='evaluate_vsm_on_gedi',
+)
+
+
+@hydra.main(config_name='no_log', version_base='1.2', config_path='../config/base')
+def main(cfg):
+    run_cli(cfg)
+
+
 if __name__ == '__main__':
-    ref_and_ours_dir = '/projects/dereeco/data/gvs/gedi/veg_sensitivity_gt0p95/subset_test/original_with_sota_chms_biome_and_ours_full/2020'
-    save_dir = '/projects/dereeco/data/gvs/evaluation/with_gedi'
-    evaluate_vsm_on_gedi(ref_and_ours_dir=ref_and_ours_dir,
-                         save_dir=save_dir)
+    main()

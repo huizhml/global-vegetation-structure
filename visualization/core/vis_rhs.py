@@ -25,7 +25,7 @@ from matplotlib import gridspec
 import geopandas as gpd
 import pandas as pd
 from visualization._utils import get_epsg_from_tile
-from const import FONT_SIZES, set_plot_fonts
+from const import FONT_SIZES, FIGURE_SIZES, set_plot_fonts
 
 set_plot_fonts()
 
@@ -279,7 +279,7 @@ def plot_rhs_2d(rh_patch: np.ndarray,
                 nodata: int = None, 
                 cmin: float=None, 
                 cmax: float=None, 
-                figsize: tuple[int, int]=(8, 4),
+                figsize: tuple[int, int]=FIGURE_SIZES['small'],
                 shrink: int=1, 
                 aspect: int=20):
     '''
@@ -308,7 +308,7 @@ def plot_rhs_2d(rh_patch: np.ndarray,
     cbar.set_ticklabels([f'{int(tick/10)}' for tick in np.linspace(cmin, cmax, 6)])
     return fig
 
-def plot_rgb(s2_patch: xr.DataArray, max_val: int = 2000):
+def plot_rgb(s2_patch: xr.DataArray, max_val: int = 2000, **kwargs):
     '''
     Plot the RGB image of the S2 patch
     Args:
@@ -318,7 +318,7 @@ def plot_rgb(s2_patch: xr.DataArray, max_val: int = 2000):
         fig: matplotlib figure
     '''
     s2_patch = s2_patch.clip(0, max_val) / max_val
-    fig = plt.figure(figsize=(8, 4))
+    fig = plt.figure(figsize=kwargs.get('figsize', FIGURE_SIZES['small']))
     img = s2_patch.plot.imshow(x='x', y='y', rgb='band')
     img.axes.set_aspect('equal')
     plt.xticks([])
@@ -334,7 +334,7 @@ def plot_s2_rh_subplots(s2_patch: xr.DataArray,
                         rh_patch: xr.DataArray, 
                         rh_idxs: list[int], 
                         rgb_max_val: int = 2000, 
-                        figsize: tuple[int, int]=(12, 4), 
+                        figsize: tuple[int, int]=FIGURE_SIZES['wide'],
                         rh_vis_param: dict = None):
     '''
     Plot the S2 and RHs for given tiles
@@ -410,7 +410,7 @@ def plot_vertical_profile(
             min_height: int=None, 
             max_height: int=None,
             step: float=1.0,
-            fig_kwargs: dict = None
+            **kwargs,
             ):
     
     rgb = rgb.clip(0, 2000) / 2000
@@ -421,7 +421,7 @@ def plot_vertical_profile(
         float(rh98_patch.y.min()),
         float(rh98_patch.y.max())
     ]
-    fig, axes = plt.subplots(2, len(points_utm)+1, figsize=(18, 9), gridspec_kw={'width_ratios': [2] + [1] * len(points_utm)})
+    fig, axes = plt.subplots(2, len(points_utm)+1, figsize=kwargs.get('figsize', FIGURE_SIZES['panel']), gridspec_kw={'width_ratios': [2] + [1] * len(points_utm)})
     axes[0, 0].imshow(rgb, extent=extent, origin='upper')
     axes[0, 0].set(title='Sentinel-2 RGB', xticks=[], yticks=[], aspect='equal', xlabel='', ylabel='')
     
@@ -602,6 +602,7 @@ class VisRHS:
                                    window: int = 3,
                                    min_height: int = 0,
                                    max_height: int = 50,
+                                   **kwargs,
                                    ):
         '''
         Make vertical profile plot for given tile and time index
@@ -693,7 +694,7 @@ class VisRHS:
                 float(vsm_patch.y.min()),
                 float(vsm_patch.y.max())
             ]
-            fig, axes = plt.subplots(2, len(points_utm)+1, figsize=(18, 9), gridspec_kw={'width_ratios': [2] + [1] * len(points_utm)})
+            fig, axes = plt.subplots(2, len(points_utm)+1, figsize=kwargs.get('figsize', FIGURE_SIZES['panel']), gridspec_kw={'width_ratios': [2] + [1] * len(points_utm)})
             axes[0, 0].imshow(rgb, extent=extent, origin='upper')
             axes[0, 0].set(title='Sentinel-2 RGB', xticks=[], yticks=[], aspect='equal', xlabel='', ylabel='')
             
