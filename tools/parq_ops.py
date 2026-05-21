@@ -139,6 +139,7 @@ def add_columns_from_dir(target_dir: str, source_dir: str, validate_cols: List[s
 
 def merge_columns_from_dirs(target_dir: str, source_dir: str, save_fp: str,
                             validate_cols: List[str] = ['geometry', 'shot_number'],
+                            row_group_size: int = 500_000,
                             **kwargs) -> pd.DataFrame:
     '''
     Merge new columns from ``source_dir`` into the matching files of
@@ -148,7 +149,8 @@ def merge_columns_from_dirs(target_dir: str, source_dir: str, save_fp: str,
     concatenated side-by-side after asserting the tables line up on
     ``validate_cols``), but instead of writing each merged table back into
     ``target_dir`` in place, all tiles are stacked row-wise and saved to a
-    single parquet at ``save_fp``.
+    single parquet at ``save_fp``. A ``tile_id`` column (filename stem) is
+    added so downstream code can recover which tile each row came from.
 
     Parquet filenames must match across the two directories. Shared columns are
     kept from the target; only columns unique to the source are added. A target
@@ -160,6 +162,9 @@ def merge_columns_from_dirs(target_dir: str, source_dir: str, save_fp: str,
         * save_fp: path of the single combined parquet file to write
         * validate_cols: columns asserted to be aligned row-for-row before the
           merge (``geometry`` is compared with ``geom_equals_exact``)
+        * row_group_size: rows per parquet row group in the output file.
+          Lowers peak RAM during write and enables parallel/column-projected
+          reads later. Forwarded to ``to_parquet``.
     Returns:
         * the combined (Geo)DataFrame
     '''
@@ -189,7 +194,9 @@ def merge_columns_from_dirs(target_dir: str, source_dir: str, save_fp: str,
     def _merge(filename: str):
         target_path = target_dir / filename
         source_path = source_dir / filename
+        tile_id = Path(filename).stem
         df1 = read_fn(target_path)
+        df1['tile_id'] = tile_id
         if not source_path.exists():
             print(f'{filename}: no source counterpart, kept without extra columns')
             return df1
@@ -221,7 +228,7 @@ def merge_columns_from_dirs(target_dir: str, source_dir: str, save_fp: str,
     if is_geo:
         combined = gpd.GeoDataFrame(combined, geometry='geometry', crs='EPSG:4326')
 
-    combined.to_parquet(str(save_fp) + '.tmp')
+    combined.to_parquet(str(save_fp) + '.tmp', row_group_size=row_group_size)
     os.replace(str(save_fp) + '.tmp', save_fp)
     print(f'Merged {len(parts)} files, {len(combined)} rows -> {save_fp}')
     return combined
