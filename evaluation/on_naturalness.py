@@ -1140,6 +1140,13 @@ def plot_grid_metric_circles(grid_pred: gpd.GeoDataFrame, size_col: str, color_c
                     vmin=vmin, vmax=vmax, edgecolor='black', linewidth=0.3,
                     alpha=0.9)
 
+    # Horizontal colorbar pinned to the lower-left corner of the axes.
+    cax = ax.inset_axes([0.02, 0.06, 0.22, 0.025])
+    cbar = fig.colorbar(sc, cax=cax, orientation='horizontal')
+    cax.xaxis.set_label_position('top')
+    cbar.set_label(color_col, fontsize=FONT_SIZES['label'])
+    cbar.ax.tick_params(labelsize=FONT_SIZES['ticks'])
+
     if s_hi > s_lo:
         legend_vals = np.linspace(s_lo, s_hi, 4)
         handles = [
@@ -1149,14 +1156,10 @@ def plot_grid_metric_circles(grid_pred: gpd.GeoDataFrame, size_col: str, color_c
             for v in legend_vals
         ]
         ax.legend(handles=handles, title=size_col, loc='lower left',
+                  bbox_to_anchor=(0.02, 0.16), bbox_transform=ax.transAxes,
                   fontsize=FONT_SIZES['legend'], title_fontsize=FONT_SIZES['legend'],
-                  labelspacing=1.4, frameon=True)
-
-    # Vertical colorbar tucked next to the size legend in the lower-left corner
-    cax = ax.inset_axes([0.16, 0.04, 0.018, 0.28])
-    cbar = fig.colorbar(sc, cax=cax, orientation='vertical')
-    cbar.set_label(color_col, fontsize=FONT_SIZES['label'])
-    cbar.ax.tick_params(labelsize=FONT_SIZES['ticks'])
+                  ncol=4, columnspacing=1.4, handletextpad=0.4,
+                  frameon=False)
 
     ax.set_xlabel('Longitude', fontsize=FONT_SIZES['label'])
     ax.set_ylabel('Latitude', fontsize=FONT_SIZES['label'])
@@ -1173,6 +1176,7 @@ def agg_preds_on_grid(preds_file: str, grid_file: str, save_dir: str = None,
                       baseline_cfg: str = 'rh98',
                       best_cfg: str = 'full_profile_s2',
                       ref_col: str = 'Land_use_ID',
+                      metric: str = 'f1',
                       min_points_per_cell: int = 10, **kwargs):
     '''
     Spatially aggregate per-sample naturalness predictions onto a polygon grid
