@@ -104,6 +104,11 @@ VSM_VIS_PARAMS = {k: dict(v) for k, v in _HP["vsm_vis_params"].items()}
 # legend, colorbar.
 FONT_SIZES = {k: int(v) for k, v in _HP["font_sizes"].items()}
 
+# Central figure sizes (inches, (width, height)). Same idea as FONT_SIZES:
+# every plot picks a preset so a single edit restyles all figures. Keys:
+# mini, small, square, medium, wide, large, panel, strip.
+FIGURE_SIZES = {k: tuple(v) for k, v in _HP["figure_sizes"].items()}
+
 
 def set_plot_fonts(**overrides):
     """Push :data:`FONT_SIZES` into matplotlib rcParams.
@@ -136,6 +141,23 @@ def set_plot_fonts(**overrides):
         "figure.titlesize": FONT_SIZES["title"],
     })
     return dict(FONT_SIZES)
+
+
+def fewer_ticks(ax, axis: str = 'both', nbins: int = 3, prune=None) -> None:
+    """Thin matplotlib Axes major ticks to ~``nbins`` per axis.
+
+    Defaults thin both axes for plain numeric plots. For categorical /
+    grouped axes (boxplot/violin/bar x-axis, heatmap rows/cols), pass
+    ``axis='x'`` or ``axis='y'`` to thin only the *other* axis and leave
+    the grouped one's explicit ticks intact.
+    """
+    from matplotlib.ticker import MaxNLocator
+    if axis not in ('x', 'y', 'both'):
+        raise ValueError(f"axis must be 'x', 'y', or 'both' (got {axis!r})")
+    if axis in ('x', 'both'):
+        ax.xaxis.set_major_locator(MaxNLocator(nbins=nbins, prune=prune))
+    if axis in ('y', 'both'):
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=nbins, prune=prune))
 
 
 del _HP, _HP_PATH, _f, Path, yaml

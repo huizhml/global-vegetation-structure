@@ -139,7 +139,7 @@ def add_columns_from_dir(target_dir: str, source_dir: str, validate_cols: List[s
 
 def merge_columns_from_dirs(target_dir: str, source_dir: str, save_fp: str,
                             validate_cols: List[str] = ['geometry', 'shot_number'],
-                            row_group_size: int = 500_000,
+                            row_group_size: int = 100_000,
                             **kwargs) -> pd.DataFrame:
     '''
     Merge new columns from ``source_dir`` into the matching files of

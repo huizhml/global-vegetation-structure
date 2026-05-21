@@ -6,7 +6,6 @@ import geopandas as gpd
 import dask_geopandas as dgp
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
-from matplotlib.ticker import MaxNLocator
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import rasterio
 from rasterio.crs import CRS
@@ -16,7 +15,7 @@ from rasterio.windows import Window
 from scipy.stats import pearsonr, spearmanr, linregress
 from tqdm import tqdm
 
-from const import BIOMES, FONT_SIZES, set_plot_fonts
+from const import BIOMES, FONT_SIZES, FIGURE_SIZES, set_plot_fonts, fewer_ticks
 
 set_plot_fonts(label=20, title=20, annot=20)
 
@@ -137,16 +136,6 @@ def _sci(n) -> str:
     return f'{mant} \\times 10^{{{int(exp)}}}'
 
 
-def _fewer_ticks(ax, nbins: int = 3, prune='both') -> None:
-    '''Thin both axes to ~nbins nice major ticks for a cleaner look. The
-    locator is recomputed from the live axis limits at draw time, so the
-    ticks still track the axis if its limits are changed later.
-    prune='both' drops the end ticks; prune=None keeps them (so a square
-    scatter shows ~3 ticks instead of collapsing to 2).'''
-    ax.xaxis.set_major_locator(MaxNLocator(nbins=nbins, prune=prune))
-    ax.yaxis.set_major_locator(MaxNLocator(nbins=nbins, prune=prune))
-
-
 def hexbin_regression_plot(
     df: pd.DataFrame,
     x_name: str,
@@ -158,7 +147,8 @@ def hexbin_regression_plot(
     y_label: str = None,
     gridsize: int = 40,
     cmap: str = 'Greens',
-    show_colorbar: bool = True
+    show_colorbar: bool = True,
+    **kwargs,
 ) -> None:
     """Hexbin density scatter with a linear regression line.
  
@@ -185,7 +175,7 @@ def hexbin_regression_plot(
     y_fit = slope * x_fit + intercept
  
     # ── Plot ──────────────────────────────────────────────────────
-    fig, ax = plt.subplots(1, 1, figsize=(7, 7))
+    fig, ax = plt.subplots(1, 1, figsize=kwargs.get('figsize', FIGURE_SIZES['square']))
  
     hb = ax.hexbin(
         x, y,
@@ -203,7 +193,7 @@ def hexbin_regression_plot(
     # Formatting
     ax.set_xlim(xmin, xmax)
     ax.set_ylim(ymin, ymax)
-    _fewer_ticks(ax, nbins=3, prune=None)  # ~3 nice ticks, tracks live limits
+    fewer_ticks(ax, nbins=3)  # ~3 nice ticks, tracks live limits
     ax.tick_params(axis='both', labelsize=FONT_SIZES['ticks'])
 
     annot_positony = 0.95
@@ -333,12 +323,24 @@ def eval_on_wsci(wsci_file: str, diversity_file: str, test_point_dir: str,
     return results
 
 
+# ============================================================================
+# Hydra entrypoint
+# ============================================================================
+import hydra
+from config.loader import register
+from config.runner import run_cli
+
+register(
+    Path(__file__).resolve().parents[1] / 'config' / 'eval' / 'config.yaml',
+    section='on_wsci',
+    default_run='eval_on_wsci',
+)
+
+
+@hydra.main(config_name='no_log', version_base='1.2', config_path='../config/base')
+def main(cfg):
+    run_cli(cfg)
+
+
 if __name__ == '__main__':
-    wsci_file = '~/data/gvs/products/wsci/wsci.tif'
-    diversity_file = '~/data/gvs/products/diversity/diversity.tif'
-    test_point_dir = '~/data/gvs/evaluation/test_points'
-    save_dir = '~/data/gvs/evaluation/on_wsci'
-    eval_on_wsci(wsci_file=wsci_file,
-                 diversity_file=diversity_file,
-                 test_point_dir=test_point_dir,
-                 save_dir=save_dir)
+    main()

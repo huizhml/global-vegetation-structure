@@ -31,7 +31,6 @@ import re
 from sklearn.metrics import r2_score
 import seaborn as sns
 from matplotlib.colors import LogNorm
-from matplotlib.ticker import MaxNLocator
 import colorsys
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import matplotlib.gridspec as gridspec
@@ -45,7 +44,9 @@ from const import (
     GEDI_META_COLS,
     KEY_RHS_EVAL,
     FONT_SIZES,
+    FIGURE_SIZES,
     set_plot_fonts,
+    fewer_ticks,
 )
 from evaluation.utils import _short_count
 
@@ -62,19 +63,6 @@ def _sci(n) -> str:
     (mirrors the helper in on_wsci.py).'''
     mant, exp = f'{n:.2e}'.split('e')
     return f'{mant} \\times 10^{{{int(exp)}}}'
-
-
-def _fewer_ticks(ax, nbins: int = 3, axis: str = 'both', prune='both') -> None:
-    '''Thin axes to ~nbins nice major ticks for a cleaner look. The locator
-    is recomputed from the live axis limits at draw time, so the ticks still
-    track the axis if its limits are changed later. prune='both' drops the
-    end ticks (good for stacked panels); prune=None keeps them (so a square
-    0..max scatter shows ~3 ticks instead of collapsing to 2).
-    axis='y' leaves the x-axis alone (for categorical / bin-edge x ticks).'''
-    if axis in ('x', 'both'):
-        ax.xaxis.set_major_locator(MaxNLocator(nbins=nbins, prune=prune))
-    if axis in ('y', 'both'):
-        ax.yaxis.set_major_locator(MaxNLocator(nbins=nbins, prune=prune))
 
 
 def _annotate_stats(ax, r2, pvalue, n, corner='upper left') -> None:
@@ -98,7 +86,7 @@ def _annotate_stats(ax, r2, pvalue, n, corner='upper left') -> None:
     )
 
 
-def scatter_plot(df: pd.DataFrame, var: str, metrics: dict, biome_value: int = None, save_dir: Path = None, max_value: int = 3, show_colorbar: bool = True, show_ylabel: bool = True) -> None:
+def scatter_plot(df: pd.DataFrame, var: str, metrics: dict, biome_value: int = None, save_dir: Path = None, max_value: int = 3, show_colorbar: bool = True, show_ylabel: bool = True, **kwargs) -> None:
     if biome_value is None:
         plot_title, biome_slug = None, 'all'  # no title for the all-data plot
     else:
@@ -110,7 +98,7 @@ def scatter_plot(df: pd.DataFrame, var: str, metrics: dict, biome_value: int = N
         plot_title = BIOMES[biome_value]['name']
         biome_slug = BIOMES[biome_value]['abbr'].replace('.', '')
     file_name = f'scatter_plot_gedi_vs_ours_{var}_{biome_slug}.pdf'
-    fig, ax = plt.subplots(1, 1, figsize=(7, 6))
+    fig, ax = plt.subplots(1, 1, figsize=kwargs.get('figsize', FIGURE_SIZES['square']))
     sns.histplot(df, x=f'{var}_gedi', y = f'{var}_ours', bins=50, cbar=False, cmap='Greens', ax=ax)
     ax.collections[0].set_norm(LogNorm(vmin=1, vmax=1000))
     if show_colorbar:
@@ -131,7 +119,7 @@ def scatter_plot(df: pd.DataFrame, var: str, metrics: dict, biome_value: int = N
         ax.set_title(plot_title)
     _annotate_stats(ax, metrics[f'{var}_r2'], metrics[f'{var}_pvalue'], metrics[f'{var}_n'],
                     corner='lower right' if var == 'cr' else 'upper left')
-    _fewer_ticks(ax, nbins=3, prune=None)  # ~3 nice ticks, tracks live limits
+    fewer_ticks(ax, nbins=3)  # ~3 nice ticks, tracks live limits
     ax.set_aspect('equal')
     fig.savefig(save_dir / file_name, bbox_inches='tight')
     plt.close(fig)  # explicitly close THIS figure
@@ -139,7 +127,8 @@ def scatter_plot(df: pd.DataFrame, var: str, metrics: dict, biome_value: int = N
 
 def hexbin_scatter_plot(df: pd.DataFrame, var: str, metrics: dict, biome_value: int = None,
                         save_dir: Path = None, max_value: int = 3, gridsize: int = 50,
-                        cmap: str = 'Greens', show_colorbar: bool=True, show_ylabel: bool=True) -> None:
+                        cmap: str = 'Greens', show_colorbar: bool=True, show_ylabel: bool=True,
+                        **kwargs) -> None:
     '''Hexbin-density version of `scatter_plot`: GEDI (x) vs ours (y) with a
     1:1 reference line. Same biome handling, annotations and stats as
     `scatter_plot`, only the density layer differs (hexbin vs histplot).'''
@@ -158,7 +147,7 @@ def hexbin_scatter_plot(df: pd.DataFrame, var: str, metrics: dict, biome_value: 
     x = df[f'{var}_gedi'].to_numpy()
     y = df[f'{var}_ours'].to_numpy()
 
-    fig, ax = plt.subplots(1, 1, figsize=(7, 6))
+    fig, ax = plt.subplots(1, 1, figsize=kwargs.get('figsize', FIGURE_SIZES['square']))
     hb = ax.hexbin(
         x, y,
         gridsize=gridsize,
@@ -185,13 +174,13 @@ def hexbin_scatter_plot(df: pd.DataFrame, var: str, metrics: dict, biome_value: 
     ax.set_title(label)
     _annotate_stats(ax, metrics[f'{var}_r2'], metrics[f'{var}_pvalue'], metrics[f'{var}_n'],
                     corner='lower right' if var == 'cr' else 'upper left')
-    _fewer_ticks(ax, nbins=3, prune=None)  # ~3 nice ticks, tracks live limits
+    fewer_ticks(ax, nbins=3)  # ~3 nice ticks, tracks live limits
     ax.set_aspect('equal')
     fig.savefig(save_dir / file_name, bbox_inches='tight')
     plt.close(fig)  # explicitly close THIS figure
 
 
-def boxplot_with_marginal_histograms(df: pd.DataFrame, var: str, rh_col: str='rh98', bin_width:int=5, max_height:int=50, max_value:int=50, save_dir: Path = None) -> None:
+def boxplot_with_marginal_histograms(df: pd.DataFrame, var: str, rh_col: str='rh98', bin_width:int=5, max_height:int=50, max_value:int=50, save_dir: Path = None, **kwargs) -> None:
     '''
     NOTE: bin width here means the canopy top height bin width, not the vertical resolution width
     '''
@@ -215,7 +204,7 @@ def boxplot_with_marginal_histograms(df: pd.DataFrame, var: str, rh_col: str='rh
     counts = df.groupby('bin_label').size()
     
     # Set up grid: main axes + marginal on the right
-    fig = plt.figure(figsize=(10, 8))
+    fig = plt.figure(figsize=kwargs.get('figsize', FIGURE_SIZES['large']))
     gs = gridspec.GridSpec(2, 2, width_ratios=[5, 1], height_ratios=[1, 5],
                            wspace=0.05, hspace=0.05)
 
@@ -251,7 +240,7 @@ def boxplot_with_marginal_histograms(df: pd.DataFrame, var: str, rh_col: str='rh
     ax_main.set_ylabel(var, fontsize=FONT_SIZES['label'])
     ax_main.tick_params(axis='x', rotation=45)
     ax_main.grid(axis='y', alpha=0.3)
-    _fewer_ticks(ax_main, axis='y')
+    fewer_ticks(ax_main, axis='y', prune='both')
 
     # --- Right marginal KDE (distribution of var) ---
     vals_var = df[var].dropna().values
@@ -409,7 +398,7 @@ def boxplot_with_marginal_histograms_combined(
     ax_main.set_xlabel('Canopy Top Height (m)', fontsize=FONT_SIZES['label'])
     ax_main.set_ylabel(var, fontsize=FONT_SIZES['label'])
     ax_main.grid(axis='y', alpha=0.3)
-    _fewer_ticks(ax_main, axis='y')
+    fewer_ticks(ax_main, axis='y', prune='both')
 
     # Legend
     legend_patches = [mpatches.Patch(facecolor=colors[j], alpha=0.7, edgecolor='black',
@@ -556,12 +545,12 @@ def plot_residuals_rh98_bined(df: pd.DataFrame, save_dir: Path = None, max_heigh
         # keep boxplot axis in front
         ax.set_zorder(ax_bar.get_zorder() + 1)
         ax.patch.set_visible(False)
-        _fewer_ticks(ax, axis='y')  # keep the explicit bin-edge x-ticks
+        fewer_ticks(ax, axis='y', prune='both')  # keep the explicit bin-edge x-ticks
         return ax_bar
 
     if save_separate:
         for var, cfg, centers, data, counts in grouped_data:
-            fig, ax = plt.subplots(figsize=(10, 6))
+            fig, ax = plt.subplots(figsize=kwargs.get('figsize', FIGURE_SIZES['medium']))
             _draw(ax, cfg, centers, data, counts, count_ymax=max(counts) * 3)
             fig.tight_layout()
             for ext in ('pdf', 'png'):
@@ -570,7 +559,7 @@ def plot_residuals_rh98_bined(df: pd.DataFrame, save_dir: Path = None, max_heigh
             plt.close(fig)
 
     # Combined figure: 2x3 grid sharing x-axis and the right (count) y-axis.
-    fig, axes = plt.subplots(2, 3, figsize=(18, 7), sharex=True)
+    fig, axes = plt.subplots(2, 3, figsize=kwargs.get('figsize', FIGURE_SIZES['panel']), sharex=True)
     bar_axes = []
     count_ymax = global_max_count * 3 if global_max_count else 1
     for idx, (var, cfg, centers, data, counts) in enumerate(grouped_data):
@@ -1122,37 +1111,24 @@ def diversity_indices_distribution(indices_dir, save_dir, group_by=None, filter_
         indices = indices[RH_COLS]
         indices = indices.apply(lambda x: pixel_diversity_indices(x, bin_width=5), axis=1)
 
-if __name__ == "__main__":
-    save_dir = '/projects/dereeco/data/gvs/evaluation/with_gedi_on_diversity_indices/indices_by_tile/bin_width_5m/2020'
-    gedi_ours_dir = '/projects/dereeco/data/gvs/gedi/veg_sensitivity_gt0p95/subset_test/original_with_sota_chms_biome_and_ours_full/2020'
-    # cal_diversity_indices(save_dir, gedi_ours_dir)
-    tile_id = '36NTF'
-    year = 2020
-    vrt_path = f"~/data/gvs/products/vsm/{year}/original/vrt/{tile_id}_Q1.vrt"
-    output_dir = f"~/data/gvs/products/profile_entropy/{year}/tiles/geotiff"
+# ============================================================================
+# Hydra entrypoint
+# ============================================================================
+import hydra
+from config.loader import register
+from config.runner import run_cli
 
-    # # Create VRT if needed
-    tile_dir = f"~/data/gvs/products/vsm/{year}/original/tiles/cog/{tile_id}"
-    vrt_resolved = Path(vrt_path).expanduser()
-    if not vrt_resolved.exists():
-        create_vrt(tile_dir, vrt_path)
+register(
+    Path(__file__).resolve().parents[1] / 'config' / 'eval' / 'config.yaml',
+    section='on_diversity_indices',
+    default_run='compute_entropy',
+)
 
-    start = time.time()
-    compute_entropy(
-        output_dir=output_dir,
-        tile_id=tile_id,
-        year=year,
-        vrt_path=vrt_path,
-        chunk_size=512,
-        max_workers=8,
-        bin_width=5,
-    )
-    elapsed = time.time() - start
-    print(f"Time taken: {elapsed:.2f} seconds")
-    # # vertical_profile_per_biome(
-    # #     points_file='/projects/dereeco/data/gvs/analysis/typical_forests/typical_forests.zip',
-    # #     save_dir='/projects/dereeco/data/gvs/analysis/typical_forests/vertical_profile_gedi_ref',
-    # #     s2_grid_file='/projects/dereeco/data/gvs/state/s2_tiles_with_growing_months.parquet',
-    # #     gedi_ref_dir='/projects/dereeco/data/gvs/gedi/veg_sensitivity_gt0p95/all_valid/2020',
-    # #     max_distance=1000
-    # # )
+
+@hydra.main(config_name='no_log', version_base='1.2', config_path='../config/base')
+def main(cfg):
+    run_cli(cfg)
+
+
+if __name__ == '__main__':
+    main()

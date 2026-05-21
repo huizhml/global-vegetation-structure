@@ -6,7 +6,7 @@ import seaborn as sns
 from matplotlib.colors import LogNorm
 import matplotlib.pyplot as plt
 
-from const import FONT_SIZES, set_plot_fonts
+from const import FONT_SIZES, FIGURE_SIZES, set_plot_fonts, fewer_ticks
 
 set_plot_fonts()
 
@@ -65,8 +65,8 @@ def extract_pixels_and_save(ref_dir: str, ours_root_dir: str, save_dir: str = No
         df.to_parquet(out_file, index=False)
 
     
-def scatter_plot(tile_id: str, df: pd.DataFrame, ref_col: str, stats: dict, save_dir: Path = None, max_height: int = 80) -> None:
-    fig, ax = plt.subplots(1, 1, figsize=(8, 6))
+def scatter_plot(tile_id: str, df: pd.DataFrame, ref_col: str, stats: dict, save_dir: Path = None, max_height: int = 80, **kwargs) -> None:
+    fig, ax = plt.subplots(1, 1, figsize=kwargs.get('figsize', FIGURE_SIZES['medium']))
     sns.histplot(df, x=ref_col, y = 'ours_rh98', bins=50, cbar=True, cmap='viridis', ax=ax)
     ax.collections[0].set_norm(LogNorm(vmin=1, vmax=10000))
     ax.set_xlim(0, max_height)
@@ -78,6 +78,7 @@ def scatter_plot(tile_id: str, df: pd.DataFrame, ref_col: str, stats: dict, save
     plt.text(0.05, 0.85, f'ME = {stats['me']:.2f}', ha='left', va='top', transform=ax.transAxes, fontsize=FONT_SIZES['annot'])
     plt.text(0.05, 0.80, f'N = {stats['n']}', ha='left', va='top', transform=ax.transAxes, fontsize=FONT_SIZES['annot'])
     plt.text(0.05, 0.75, f'Avg Height = {stats['avg_height']:.2f}', ha='left', va='top', transform=ax.transAxes, fontsize=FONT_SIZES['annot'])
+    fewer_ticks(ax)
     plt.tight_layout()
     plt.savefig(save_dir / f'scatter_plot_{ref_col}_{tile_id}.pdf')
     plt.close()
@@ -142,5 +143,28 @@ def evaluate(df_dir: str, save_dir: str = None, ref_col: str = 'als', **kwargs) 
     df.to_csv(save_dir / f'overall_stats_{ref_col}.csv', index=False)
     tile_level_stats = pd.DataFrame(stats).T
     tile_level_stats = tile_level_stats.drop(columns='ref')
-    tile_level_stats.to_csv(save_dir / f'tile_level_stats_{ref_col}.csv', index=True) 
+    tile_level_stats.to_csv(save_dir / f'tile_level_stats_{ref_col}.csv', index=True)
     return stats
+
+
+# ============================================================================
+# Hydra entrypoint
+# ============================================================================
+import hydra
+from config.loader import register
+from config.runner import run_cli
+
+register(
+    Path(__file__).resolve().parents[1] / 'config' / 'eval' / 'config.yaml',
+    section='on_als',
+    default_run='evaluate_chm_with_als_and_lvis',
+)
+
+
+@hydra.main(config_name='no_log', version_base='1.2', config_path='../config/base')
+def main(cfg):
+    run_cli(cfg)
+
+
+if __name__ == '__main__':
+    main()
