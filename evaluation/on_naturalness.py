@@ -78,11 +78,52 @@ def _load_patch_stats(patch_stats_dir: str, name_pattern: str='train', **kwargs)
     
     y = df['Land_use_ID'].values.flatten().astype(int)
     return df, y
+  
+def add_accuracy_from_cms(summary_df, per_class_df, all_cms, labels):
+    summary_df = summary_df.copy()
+    per_class_df = per_class_df.copy()
+    summary_df['Accuracy'] = np.nan
+    per_class_df['Accuracy'] = np.nan
+
+    for model_name, cm in all_cms.items():
+        cm = np.asarray(cm)
+        total = cm.sum()
+        if total == 0:
+            continue
+        tp = np.diag(cm).astype(float)
+        fn = cm.sum(axis=1) - tp
+        fp = cm.sum(axis=0) - tp
+        tn = total - tp - fn - fp
+        per_class_acc = (tp + tn) / total
+        overall_acc = np.trace(cm) / total
+
+        for cls, acc in zip(labels, per_class_acc):
+            mask = (per_class_df.index == model_name) & (per_class_df['Class'] == cls)
+            per_class_df.loc[mask, 'Accuracy'] = acc
+
+        for avg_row in ('macro avg', 'weighted avg'):
+            mask = (summary_df.index == model_name) & (summary_df['Metric'] == avg_row)
+            summary_df.loc[mask, 'Accuracy'] = overall_acc
+
+    return summary_df, per_class_df
 
 # ---------------------------------------
 #   Plot functions
 # ---------------------------------------
-def plot_bars(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, groups: tuple[str], metric: str='Recall', avg:str='macro', baseline_name: str='rh98', save_dir: str=None, show_improve: bool=True, include_alpha_em: bool=False, **kwargs):
+def _lighten(color, amount=0.55):
+    '''Return `color` blended toward white by `amount` (0 = unchanged, 1 = white).
+
+    Used to draw the baseline part of each bar in a lighter shade of the model's
+    own color so the gain on top stands out — a plain solid fill, so the figure
+    stays fully vector (unlike hatch='///', which becomes a PDF tiling pattern
+    that Keynote / PowerPoint rasterize, losing selectable text).
+    '''
+    import matplotlib.colors as mcolors
+    r, g, b = mcolors.to_rgb(color)
+    return (r + (1 - r) * amount, g + (1 - g) * amount, b + (1 - b) * amount)
+
+
+def plot_bars(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, groups: tuple[str], metric: str='Recall', avg:str='macro', baseline_name: str='rh98', save_dir: str=None, show_improve: bool=True, show_legend: bool=True, include_alpha_em: bool=False, **kwargs):
     '''
     Plot the summary reports
     Args:
@@ -94,6 +135,7 @@ def plot_bars(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, groups: tupl
         save_dir: path to save the plots
         show_improve: if True, show delta relative to rh98 baseline
     '''
+    set_plot_fonts(label=16, annot=16, legend=14, ticks=14)
     assert avg in ['macro', 'weighted']
     mask = summary_df.Metric == f'{avg} avg'
     summary_df = summary_df.loc[mask,[metric]]
@@ -146,14 +188,17 @@ def plot_bars(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, groups: tupl
         values = np.array(values_dict[model_name])
         offsets = x_pos + i * bar_width
 
-        ax.bar(offsets, values, bar_width, label=MODEL_NAMES[model_name]['name'])
+        # Full bar in the model's color (also sets the legend swatch). The gain
+        # over baseline keeps this full color; the baseline part is overdrawn in
+        # a lighter shade so the improvement stands out.
+        bars = ax.bar(offsets, values, bar_width, label=MODEL_NAMES[model_name]['name'])
 
         if show_improve and model_name != baseline_name:
             improvement = np.maximum(values - baseline_vals, 0)
             base_part = np.minimum(values, baseline_vals)
-            ax.bar(offsets, improvement, bar_width, bottom=base_part,
-                   color='none', edgecolor='white', hatch='///',
-                   linewidth=0.5)
+            light = _lighten(bars.patches[0].get_facecolor())
+            ax.bar(offsets, base_part, bar_width, color=light,
+                   zorder=bars.patches[0].get_zorder())
 
             for j, imp in enumerate(improvement):
                 if imp > 0:
@@ -190,13 +235,19 @@ def plot_bars(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, groups: tupl
     ax.tick_params(axis='y', labelsize=FONT_SIZES['ticks'])
     ax.set_ylim(0, 1.01 )
     fewer_ticks(ax, axis='y')
-    if baseline_name == 'full_profile_center':
-        ax.legend(bbox_to_anchor=(0.62, 1), loc='upper left', fontsize=FONT_SIZES['legend'], ncol=1)
-    else:
-        ax.legend(bbox_to_anchor=(0.09, 1), loc='upper left', fontsize=FONT_SIZES['legend'], ncol=3)
+    leg = None
+    if show_legend:
+        if baseline_name == 'full_profile_center':
+            leg = ax.legend(bbox_to_anchor=(0.6, 1), loc='upper left', fontsize=FONT_SIZES['legend'], ncol=1)
+        else:
+            leg = ax.legend(loc='lower center', bbox_to_anchor=(0.5, 1.02), ncol=3, fontsize=FONT_SIZES['legend'], frameon=False)
+            leg.set_in_layout(False)  # keep tight_layout from shrinking the axes to fit the legend
     ax.grid(axis='y', alpha=0.3)
     plt.tight_layout()
-    plt.savefig(save_dir / f'barplot_{metric}_{avg}_baseline_{baseline_name}.pdf', dpi=150, bbox_inches='tight')
+    # bbox_extra_artists forces the (in_layout=False) legend back into the saved
+    # bbox, so it isn't cropped by bbox_inches='tight'.
+    plt.savefig(save_dir / f'barplot_{metric}_{avg}_baseline_{baseline_name}.pdf', dpi=150,
+                bbox_inches='tight', bbox_extra_artists=None if leg is None else [leg])
     plt.close()
     
 def plot_dots(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, groups: tuple[str], metric: str='F1', avg: str='macro', baseline_name: str='rh98', save_dir: str=None, include_alpha_em: bool=False, **kwargs):
@@ -414,34 +465,14 @@ def plot_confusion_matrix(all_cms: dict, save_dir: Path, include_alpha_em: bool 
     plt.tight_layout(rect=[0, 0, 0.91, 1])
     plt.savefig(save_dir / 'confusion_matrices.png', dpi=150, bbox_inches='tight')
     plt.close()
-    
-def add_accuracy_from_cms(summary_df, per_class_df, all_cms, labels):
-    summary_df = summary_df.copy()
-    per_class_df = per_class_df.copy()
-    summary_df['Accuracy'] = np.nan
-    per_class_df['Accuracy'] = np.nan
 
-    for model_name, cm in all_cms.items():
-        cm = np.asarray(cm)
-        total = cm.sum()
-        if total == 0:
-            continue
-        tp = np.diag(cm).astype(float)
-        fn = cm.sum(axis=1) - tp
-        fp = cm.sum(axis=0) - tp
-        tn = total - tp - fn - fp
-        per_class_acc = (tp + tn) / total
-        overall_acc = np.trace(cm) / total
+PLOT_FUNCTIONS = {
+    'bars': plot_bars,
+    'dots': plot_dots,
+    'heatmap': plot_improve_heatmap,
+    'confusion_matrix': plot_confusion_matrix
+}
 
-        for cls, acc in zip(labels, per_class_acc):
-            mask = (per_class_df.index == model_name) & (per_class_df['Class'] == cls)
-            per_class_df.loc[mask, 'Accuracy'] = acc
-
-        for avg_row in ('macro avg', 'weighted avg'):
-            mask = (summary_df.index == model_name) & (summary_df['Metric'] == avg_row)
-            summary_df.loc[mask, 'Accuracy'] = overall_acc
-
-    return summary_df, per_class_df
 
 # ----------------------------------------------------------------------------------------
 #  Step 0. Prepare location parquets
@@ -830,7 +861,7 @@ def build_and_save_reports(y_true_by_group: dict, y_pred_by_group: dict, save_di
     return all_summary_df, all_per_class_df, all_cms
 
 
-def evaluate_cnn_predictions(pred_dir: str, save_dir: str, groups: tuple[str]=None,
+def gather_cnn_predictions(pred_dir: str, save_dir: str, groups: tuple[str]=None,
                              prefix: str='cnn',
                              class_codes=None, predictions_are_class_idx: bool=True,
                              truth_col: str='Land_use_ID', pred_col: str='pred',
@@ -893,7 +924,7 @@ def evaluate_cnn_predictions(pred_dir: str, save_dir: str, groups: tuple[str]=No
                                   save_dir, prefix, labels=list(class_codes))
 
 
-def plot_results(summary_file: str, per_class_file: str, all_cms_file: str, save_dir: str, groups: tuple[str]=None, baseline_name: str='rh98', **kwargs):
+def plot_results(summary_file: str, per_class_file: str, all_cms_file: str, save_dir: str, groups: tuple[str]=None, baseline_name: str='rh98', plot_types: tuple[str]=('bars',), **kwargs):
     '''
     Plot the results
     Args:
@@ -912,15 +943,12 @@ def plot_results(summary_file: str, per_class_file: str, all_cms_file: str, save
     per_class_df = pd.read_csv(per_class_file, index_col=0)
     labels = [v['short_name'] for v in LAND_USE_NAMES.values()]
     summary_df, per_class_df = add_accuracy_from_cms(summary_df, per_class_df, all_cms, labels)
-    plot_bars(summary_df, per_class_df, groups=groups, metric='Recall', avg='macro', baseline_name=baseline_name, save_dir=save_dir)
-    plot_bars(summary_df, per_class_df, groups=groups, metric='Precision', avg='macro', baseline_name=baseline_name, save_dir=save_dir)
-    plot_bars(summary_df, per_class_df, groups=groups, metric='F1', avg='macro', baseline_name=baseline_name, save_dir=save_dir)
-    plot_bars(summary_df, per_class_df, groups=groups, metric='Accuracy', avg='macro', baseline_name=baseline_name, save_dir=save_dir)
-    plot_dots(summary_df, per_class_df, groups=groups, metric='Recall', avg='macro', save_dir=save_dir)
-    plot_dots(summary_df, per_class_df, groups=groups, metric='Precision', avg='macro', save_dir=save_dir)
-    plot_dots(summary_df, per_class_df, groups=groups, metric='F1', avg='macro', save_dir=save_dir)
-    plot_dots(summary_df, per_class_df, groups=groups, metric='Accuracy', avg='macro', save_dir=save_dir)
-    plot_confusion_matrix(all_cms, save_dir)
+    for t in plot_types:
+        plot_func = PLOT_FUNCTIONS[t]
+        plot_func(summary_df, per_class_df, groups=groups, metric='Recall', avg='macro', baseline_name=baseline_name, save_dir=save_dir, **kwargs)
+        plot_func(summary_df, per_class_df, groups=groups, metric='Precision', avg='macro', baseline_name=baseline_name, save_dir=save_dir, **kwargs)
+        plot_func(summary_df, per_class_df, groups=groups, metric='F1', avg='macro', baseline_name=baseline_name, save_dir=save_dir, **kwargs)
+        plot_func(summary_df, per_class_df, groups=groups, metric='Accuracy', avg='macro', baseline_name=baseline_name, save_dir=save_dir, **kwargs)
 
 
 def check_distribution(vsm_patch_stats_dir: str, save_dir: str, feature_cols: list, **kwargs):
