@@ -112,12 +112,12 @@ font_sizes:
 figure_sizes:
   mini:   [4,  4]   # tiny standalone panel (e.g. single RGB tile)
   small:  [8,  4]   # short wide panel
-  square: [7,  7]   # square plots (scatter, confusion matrix)
+  square: [4,  4]   # square plots (scatter, confusion matrix)
   medium: [10, 6]   # default single-panel figure
-  wide:   [14, 5]   # wider single panel
+  wide:   [14, 4]   # wider single panel
   large:  [12, 10]  # large composite / multi-row panel
   panel:  [18, 9]   # multi-panel grid figure
-  strip:  [15, 3]   # very wide / short strip
+  strip:  [16, 4]   # very wide / short strip
 
 # Colormap ranges for VSM thumbnails (diversity indices + per-RH bands).
 # cmin/cmax for rh*_q1 entries are in METERS — convert to decimeters (×10)

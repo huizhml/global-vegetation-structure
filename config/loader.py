@@ -60,7 +60,7 @@ def register(
     section_shared, ops = _split_shared_and_ops(data[section])
     shared = {**file_shared, **section_shared}
 
-    _register_base(default_run=default_run, shared=shared, group=group)
+    _register_base(default_run=default_run, shared=shared, group=group, section=section)
 
     cs = ConfigStore.instance()
     for name, cfg in ops.items():
@@ -68,18 +68,23 @@ def register(
     return list(ops.keys())
 
 
-def _register_base(default_run: str, shared: dict, group: str = 'run') -> None:
+def _register_base(default_run: str, shared: dict, group: str = 'run',
+                   section: str | None = None) -> None:
     """Build a RunConfig dataclass with `defaults`, `run`, and `shared` fields
     at the top level, and register it as `base_config`.
 
     Top-level shared values are required to live at the config root so that
-    ops can reference them via absolute `${name}` interpolation.
+    ops can reference them via absolute `${name}` interpolation. `section` (the
+    registering module's section) is stored too, so the runner can name the
+    results index `<section>/<op>`.
     """
     defaults_list = [{group: default_run}, '_self_']
     cls_fields = [
         ('defaults', List[Any], field(default_factory=lambda: list(defaults_list))),
         ('run', Any, field(default=MISSING)),
     ]
+    if section is not None:
+        cls_fields.append(('section', str, field(default=section)))
     for k, v in shared.items():
         if isinstance(v, (list, dict)):
             cls_fields.append((k, type(v), field(default_factory=lambda v=v: v)))

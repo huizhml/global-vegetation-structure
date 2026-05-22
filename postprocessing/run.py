@@ -1,16 +1,13 @@
 
-import os
-import time
 from typing import List, Optional, Any
 from hydra.core.config_store import ConfigStore
-from hydra.utils import instantiate
 from dataclasses import dataclass, field
 import hydra
-from omegaconf import OmegaConf, MISSING
+from omegaconf import MISSING
 import numpy as np
 from config.base_config_class import ClassConfig, FunctionConfig
+from config.runner import run_cli
 from const import KEY_RHS, CHM_COLS
-from postprocessing.core.utils import generate_run_log
 from tools.utils import resolve_args
 
 
@@ -314,24 +311,8 @@ cs.store(group='run', name='sample_forest_temp', node=SampleForestTempConfig)
 
 @hydra.main(config_name='no_log', version_base='1.2', config_path='../config/base')
 def main(cfg):
-    t0 = time.time()
-    print(OmegaConf.to_yaml(cfg))
     resolve_args(cfg.run)
-    if cfg.run.target_type == 'function':
-        instantiate(cfg.run)
-    elif cfg.run.target_type == 'class':
-        obj = instantiate(cfg.run)
-        excute_method = getattr(obj, cfg.run.target_method)
-        excute_method(**cfg.run.func_args)
-    else:
-        raise ValueError(f"Invalid target: {cfg.run.target_type}")
-    t1 = time.time()
-    runtime = t1 - t0
-    print(f'Time taken: {runtime} seconds')
-    if cfg.run.get('save_dir', None) is not None:
-        generate_run_log(os.path.join(cfg.run.save_dir, 'run.log'), cfg, runtime)
-    else:
-        print(f'No save_dir provided, skipping run log')
+    run_cli(cfg)
 
 if __name__ == "__main__":
     main()

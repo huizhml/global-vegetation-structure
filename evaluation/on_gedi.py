@@ -14,7 +14,7 @@ import seaborn as sns
 
 from const import FONT_SIZES, FIGURE_SIZES, set_plot_fonts, fewer_ticks
 
-set_plot_fonts()
+set_plot_fonts(label=20, title=20, annot=20)
 
 # -------------------------------------------------------------
 #  Plot functions
@@ -55,19 +55,8 @@ def compute_group_stats(ddf, ours_cols, gedi_cols, group_size=5,
         residuals = residuals[mask]
         ours_arr = ours_arr[mask]
         gedi_arr = gedi_arr[mask]
-        # Exact quartiles on the full per-group data — used to define the
-        # 1.5*IQR fence for the inlier filter.
-        q1, q3 = np.percentile(residuals, [25, 75])
-        iqr = q3 - q1
-        fence_lo = q1 - 1.5 * iqr
-        fence_hi = q3 + 1.5 * iqr
+
         std = residuals.std()
-        # Drop rows whose residual is outside the fence so both seaborn's
-        # boxplot whiskers and the violin reflect the same inlier set.
-        # inlier = (residuals >= fence_lo) & (residuals <= fence_hi)
-        # ours_arr = ours_arr[inlier]
-        # gedi_arr = gedi_arr[inlier]
-        # residuals = residuals[inlier]
         n_total = len(residuals)
         if n_violin_samples and n_total > n_violin_samples:
             idx = rng.choice(n_total, n_violin_samples, replace=False)
@@ -100,9 +89,7 @@ def make_residual_plot(group_results, save_path, normalize=False, **kwargs):
     figsize = kwargs.get('figsize', FIGURE_SIZES['strip'])
     fig, ax = plt.subplots(figsize=figsize)
     ax.axhline(0, color='red', linewidth=1)
-    # showfliers=False is moot — residual_sample has already been clipped to
-    # the 1.5*IQR fence — but it suppresses any seaborn-recomputed fliers if
-    # the sample's empirical IQR drifts slightly from the exact one.
+
     sns.boxplot(data=df, x='rh_group', y='residual', order=labels,
                 showfliers=False, showmeans=True,
                 width=0.5, linewidth=2,
@@ -116,9 +103,10 @@ def make_residual_plot(group_results, save_path, normalize=False, **kwargs):
     ax.set_ylabel("Residuals / σ" if normalize else "Residuals (m)",
                   fontsize=FONT_SIZES['label'])
     ax.set_title("Residuals of VSM on GEDI", fontsize=FONT_SIZES['title'])
-    ax.grid(False)
-    fewer_ticks(ax, axis='y')
-    plt.setp(ax.get_xticklabels(), rotation=45, ha='right')
+    ax.grid(True, axis='y', linestyle='--', alpha=0.5)
+    ax.set_axisbelow(True)
+    fewer_ticks(ax, axis='y', nbins=5)
+    plt.setp(ax.get_xticklabels(), ha='center')
     plt.tight_layout()
     plt.savefig(save_path)
     plt.close()
@@ -152,7 +140,8 @@ def make_violin_plot(group_results, save_path, **kwargs):
     ax.set_xlabel("Relative Height (0-100)", fontsize=FONT_SIZES['label'])
     ax.set_ylabel("Height (m)", fontsize=FONT_SIZES['label'])
     ax.set_title("RH distributions: VSM vs GEDI", fontsize=FONT_SIZES['title'])
-    ax.grid(False)
+    ax.grid(True, axis='y', linestyle='--', alpha=0.5)
+    ax.set_axisbelow(True)
     ax.get_legend().set_title('')
     plt.setp(ax.get_xticklabels(), ha='center'), #rotation=45,
     plt.tight_layout()

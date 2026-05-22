@@ -439,12 +439,17 @@ eval-run-naturalness-classification *args:
 # Plot bars (spatial context)
 [group('evaluation')]
 eval-plot-bars-spatial-context *args:
-    {{eval-on-naturalness}} run=plot_bars_spatial_context {{args}}
+    {{eval-on-naturalness}} run=plot_bars_spatial_context run.show_legend=False {{args}}
 
 # Plot bars (center pixel)
 [group('evaluation')]
 eval-plot-bars-center-pixel *args:
     {{eval-on-naturalness}} run=plot_bars_center_pixel {{args}}
+
+# Plot CNN results
+[group('evaluation')]
+eval-plot-cnn-results *args:
+    {{eval-on-naturalness}} run=plot_cnn_results {{args}}
 
 # Compute GLCM texture
 [group('evaluation')]
