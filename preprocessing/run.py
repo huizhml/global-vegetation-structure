@@ -1,5 +1,4 @@
 import os
-import time
 from typing import Any, Callable
 from osgeo import gdal
 from osgeo import osr
@@ -8,7 +7,6 @@ from pathlib import Path
 from typing import List, Union, Optional
 import geopandas as gpd
 from hydra.core.config_store import ConfigStore
-from hydra.utils import instantiate
 from dataclasses import dataclass, field
 import hydra
 import dask
@@ -18,8 +16,9 @@ from rio_cogeo.cogeo import cog_translate
 from rio_cogeo.profiles import cog_profiles
 import pystac
 from tqdm import tqdm
-from omegaconf import OmegaConf, MISSING
+from omegaconf import MISSING
 from config.base_config_class import FunctionConfig, ClassConfig
+from config.runner import run_cli
 
 
 
@@ -65,18 +64,7 @@ cs.store(name='base_config', node=RunConfig) # NOTE: name here should match the 
 
 @hydra.main(config_name='no_log', version_base='1.2', config_path='../config/base')
 def main(cfg):
-    t0 = time.time()
-    print(OmegaConf.to_yaml(cfg))
-    if cfg.run.target_type == 'function':
-        instantiate(cfg.run)
-    elif cfg.run.target_type == 'class':
-        obj = instantiate(cfg.run)
-        excute_method = getattr(obj, cfg.run.target_method)
-        excute_method()
-    else:
-        raise ValueError(f"Invalid target: {cfg.run.target_type}")
-    t1 = time.time()
-    print(f'Time taken: {t1 - t0} seconds')
+    run_cli(cfg)
 
 if __name__ == "__main__":
     main()
