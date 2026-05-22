@@ -186,28 +186,30 @@ def hexbin_regression_plot(
         norm=LogNorm(vmin=1),
         extent=[xmin, xmax, ymin, ymax],
     )
- 
     # Regression line
     ax.plot(x_fit, y_fit, color='black', linewidth=1.5, linestyle='--')
  
-    # Formatting
-    ax.set_xlim(xmin, xmax)
-    ax.set_ylim(ymin, ymax)
-    fewer_ticks(ax, nbins=3)  # ~3 nice ticks, tracks live limits
-    ax.tick_params(axis='both', labelsize=FONT_SIZES['ticks'])
-
+    # Always carve out the colorbar slot so the divider hands the main axes the
+    # same width whether or not a colorbar is drawn; only render the bar when
+    # asked (an invisible cax is dropped by bbox_inches='tight').
     annot_positony = 0.95
+    divider = make_axes_locatable(ax)
+    cax = divider.append_axes("right", size="5%", pad=0.1)
     if show_colorbar:
-        divider = make_axes_locatable(ax)
-        cax = divider.append_axes("right", size="5%", pad=0.1)
         cb = fig.colorbar(hb, cax=cax)
         cb.set_label('Sample count', fontsize=FONT_SIZES['colorbar'])
         cb.ax.tick_params(labelsize=FONT_SIZES['ticks'])
         annot_positony = 0.2
+    else:
+        cax.set_visible(False)
 
+    ax.set_xlim(xmin, xmax)
+    ax.set_ylim(ymin, ymax)
     ax.set_xlabel(x_label or x_name, fontsize=FONT_SIZES['label'])
     ax.set_ylabel(y_label or y_name, fontsize=FONT_SIZES['label'])
     # ax.set_title(title, fontsize=FONT_SIZES['title'])
+    fewer_ticks(ax, nbins=3)  # ~3 nice ticks, tracks live limits
+    ax.tick_params(axis='both', labelsize=FONT_SIZES['ticks'])
  
     # Stats annotation
     ax.text(
@@ -221,7 +223,6 @@ def hexbin_regression_plot(
         transform=ax.transAxes, fontsize=FONT_SIZES['annot'],
         bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8),
     )
- 
     fig.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close(fig)
 
