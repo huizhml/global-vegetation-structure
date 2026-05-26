@@ -1,0 +1,283 @@
+# All postprocessing/ ops registered as Hydra `run=<name>` configs.
+# Layout: <section> -> <op_name> -> <op fields>
+#
+# Single entrypoint loads this section:
+#   python -m postprocessing.run    run=mask_snow_water_preds
+#
+# Placeholders use Python str.format style ({year}, {root_dir}, {split}, ...)
+# and are resolved by tools.utils.resolve_args(cfg.run) in postprocessing/run.py
+# against sibling fields of the same op.
+#
+# `root_results_dir` is read by config.runner.run_cli to index each op's
+# `save_dir` under <root_results_dir>/postprocessing/<op> via a symlink.
+
+root_data_dir: ~/data/gvs
+root_results_dir: ~/data/gvs/results
+
+postprocessing:
+
+  # =========================================================================
+  # postprocessing/core/mask_snow_water_preds.py
+  # =========================================================================
+  mask_snow_water_preds:
+    _target_: postprocessing.core.mask_snow_water_preds.mask_snow_water_preds
+    target_type: function
+    stac_collection_dir: ~/data/gvs/products/gvsm_stac_catalog/vsm_local
+    year: 2020
+    tile_id: 57UVU
+    filename_pattern: '*Q1.tif'
+    translate: false
+    save_dir: ~/data/gvs/products/vsm/{year}/masked/tiles/
+
+  # =========================================================================
+  # postprocessing/core/stac_collection.py
+  # =========================================================================
+  update_stac_collection:
+    _target_: postprocessing.core.stac_collection.StacCatalog
+    target_type: class
+    target_method: update_collection
+    func_args: {}
+    year: 2020
+    collection_id: vsm
+    catalog_dir: ~/data/gvs/products/gvsm_stac_catalog
+    data_source: local
+    data_dir: ~/data/gvs/products/vsm
+    original_predictions_dir: ~/data/gvs/products/vsm/{year}/original/tiles/cog
+    new_predictions_dir: ~/data/gvs/products/vsm/{year}/original/tiles/geotiff
+
+  create_updated_stac_collection:
+    _target_: postprocessing.core.stac_collection.StacCatalog
+    target_type: class
+    target_method: create_updated_collection
+    year: 2020
+    collection_id: vsm
+    catalog_dir: ~/data/gvs/products/gvsm_stac_catalog
+    data_source: local
+    data_dir: ~/data/gvs/products/vsm
+    original_predictions_dir: ~/data/gvs/products/vsm/{year}/original/tiles/cog
+    func_args:
+      year: 2020
+      new_collection_id: vsm_local_masked
+      prediction_sources:
+        - ~/data/gvs/products/vsm/{year}/masked/tiles/geotiff
+        - ~/data/gvs/products/vsm/{year}/original/tiles/geotiff
+        - ~/data/gvs/products/vsm/{year}/original/tiles/cog
+
+  # =========================================================================
+  # postprocessing/core/sample_vsm.py
+  # =========================================================================
+  sample_vsm_points:
+    _target_: postprocessing.core.sample_vsm.sample_points
+    target_type: function
+    year: 2020
+    split: test
+    product_version: masked
+    data_name: original_with_sota_chms_biome
+    root_dir: ~/data/gvs/gedi/veg_sensitivity_gt0p95
+    loc_dir: '{root_dir}/subset_{split}/{data_name}/{year}'
+    save_dir: '{root_dir}/subset_{split}/version={product_version}/{year}'
+    stac_col_dir: ~/data/gvs/products/gvsm_stac_catalog/vsm_local_{product_version}/
+
+  sample_vsm_patches:
+    _target_: postprocessing.core.sample_vsm.sample_patches
+    target_type: function
+    year: 2020
+    product_version: masked
+    root_dir: ~/data/gvs/evaluation/downstream_tasks/naturalness
+    loc_dir: '{root_dir}/loc_by_tile/'
+    stac_col_dir: ~/data/gvs/products/gvsm_stac_catalog/vsm_local_{product_version}/
+    save_dir: '{root_dir}/vsm_patches_ps11/'
+    rh_idxs: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100]
+    q_idxs: [1]
+
+  # =========================================================================
+  # postprocessing/core/sample_raster.py
+  # =========================================================================
+  sample_forest_temp:
+    _target_: postprocessing.core.sample_raster.sample_forest_temp
+    target_type: function
+    tif_dir: ~/data/gvs/evaluation/downstream_tasks/forest_temp/
+    p: 1.0e-4
+    seed: 42
+
+  # =========================================================================
+  # tools/parq_ops.py (registered here for the historical justfile recipe)
+  # =========================================================================
+  make_parq_subcolumns:
+    _target_: tools.parq_ops.make_parq_subcolumns
+    target_type: function
+    parq_dir: ~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_test/original_with_sota_chms_ours_blended/2020
+    subcolumns: [rh98, rh95, rh100, lc, slope, lat, lon, shot_number, RH95_UMD, RH98_ETH, RH100_UM, RH95_META, RH95_Q1_raw, RH98_Q1_raw, RH100_Q1_raw]
+    save_fp: ~/data/gvs/evaluation/sota_chm_gedi_ours_test.parquet
+
+  # =========================================================================
+  # postprocessing/core/s2_tiling.py
+  # =========================================================================
+  get_tiles_nodata:
+    _target_: postprocessing.core.s2_tiling.get_tiles_nodata
+    target_type: function
+    cog_dir: ~/data/gvs/products/vsm/2020/blended/tiles/cog
+
+  get_tiles_redundant:
+    _target_: postprocessing.core.s2_tiling.get_tiles_redundant
+    target_type: function
+    s2_grid_file: ~/data/gvs/state/deploy_status.fgb
+    cog_dir: ~/data/gvs/products/vsm/2020/blended/tiles/cog
+    save_dir: ~/data/gvs/assets/worklists/
+
+  get_tiles_reblend:
+    _target_: postprocessing.core.s2_tiling.get_tiles_reblend
+    target_type: function
+    tiles_list_file: ~/data/gvs/assets/worklists/tiles_reblend_2020.txt
+    s2_grid_file: ~/data/gvs/state/s2_tiles_with_growing_months.parquet
+
+  get_tiles_wo_enough_gedi_gt:
+    _target_: postprocessing.core.s2_tiling.get_tiles_wo_enough_gedi_gt
+    target_type: function
+    tiles_list_file: ~/data/gvs/assets/worklists/total_tiles_2020.txt
+    bias_stats_dir: ~/data/gvs/assets/bias_correction_stats/slope_all_minpoints200/2020/stats_by_tile
+    s2_grid_file: ~/data/gvs/state/s2_tiles_with_growing_months.parquet
+
+  # =========================================================================
+  # postprocessing/core/translate.py
+  # =========================================================================
+  translate_predictions:
+    _target_: postprocessing.core.translate.translate_tile
+    target_type: function
+    src_dir: ~/data/gvs/products/vsm/2020/original/tiles/geotiff
+    dst_dir: ~/data/gvs/products/vsm/2020/original/tiles/cog
+
+  # =========================================================================
+  # postprocessing/corrections/blending.py
+  # =========================================================================
+  create_distance_maps:
+    _target_: postprocessing.corrections.blending.create_distance_map_for_all_tiles
+    target_type: function
+    stac_collection_dir: ~/data/gvs/products/gvsm_stac_catalog/vsm_local
+    save_dir: ~/data/gvs/assets/blending/distance_maps
+
+  # =========================================================================
+  # postprocessing/core/repartition_data.py
+  # =========================================================================
+  repartition_data:
+    _target_: postprocessing.core.repartition_data.repartition_index_table
+    target_type: function
+    based_on_col: assigned_tile
+    parquet_dir: ~/data/gvs/datasets/splits/split_test0.1_cal0.1_val0.1_seed42_v1/index_tables/val
+    save_dir: ~/data/gvs/datasets/splits/split_test0.1_cal0.1_val0.1_seed42_v1/index_tables_by_splitted_tile/val
+
+  # =========================================================================
+  # postprocessing/core/extract_sparse_points.py
+  # =========================================================================
+  extract_gedi_from_h5:
+    _target_: postprocessing.core.extract_sparse_points.extract_gedi_from_h5
+    target_type: function
+    keep_columns: []
+    year: 2020
+    h5_file: ~/data/gvs/datasets/splits/data_val.h5
+    index_table_dir: ~/data/gvs/datasets/splits/split_test0.1_cal0.1_val0.1_seed42_v1/index_tables_by_splitted_tile/val
+    save_dir: ~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_val/original/2020/
+
+  add_ours_to_sota_gedi:
+    _target_: postprocessing.core.extract_sparse_points.pair_predictions_with_gedi_ref_data
+    target_type: function
+    year: 2020
+    gedi_chm_reference_dir: ~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_cal/original_with_sota_chms/2020
+    save_dir: ~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_cal/original_with_sota_chms_ours/2020
+    stac_collection_dir: ~/data/gvs/products/gvsm_stac_catalog/vsm_local
+    rh_idxs: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100]
+
+  add_ours_blended_to_sota_gedi:
+    _target_: postprocessing.core.extract_sparse_points.pair_predictions_with_gedi_ref_data
+    target_type: function
+    year: 2020
+    gedi_chm_reference_dir: ~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_test/original_with_sota_chms/2020
+    save_dir: ~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_test/original_with_sota_chms_ours_blended/2020
+    pred_parent_dir: ~/data/gvs/products/vsm/2020/blended/tiles/cog
+    rh_idxs: [0, 10, 25, 50, 75, 95, 98, 100]
+
+  add_biome:
+    _target_: postprocessing.core.extract_sparse_points.add_biome
+    target_type: function
+    split: cal
+    root_dir: ~/data/gvs/gedi/veg_sensitivity_gt0p95
+    parq_dir: '{root_dir}/subset_{split}/original_with_sota_chms/2020'
+    biome_file: ~/data/GEDI/ecoregions/wwf_terr_ecos.shp
+    save_dir: '{root_dir}/subset_{split}/original_with_sota_chms_biome/2020'
+
+  # =========================================================================
+  # tools/sanity_check.py, tools/make_manifest.py (registered here for recipes)
+  # =========================================================================
+  check_two_datasets:
+    _target_: tools.sanity_check.check_npoints_for_two_datasets
+    target_type: function
+    source_dir: ~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_cal/original/2020/
+    target_dir: ~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_cal/original_with_sota_chms/2020/
+
+  check_two_partitioned_datasets:
+    _target_: tools.sanity_check.check_total_points_for_two_partitioned_data_hiarchy
+    target_type: function
+    source_dir: ~/data/gvs/datasets/splits/split_test0.1_cal0.1_val0.1_seed42_v1/index_tables/val
+    target_dir: ~/data/gvs/datasets/splits/split_test0.1_cal0.1_val0.1_seed42_v1/index_tables_by_splitted_tile/val
+
+  make_manifest:
+    _target_: tools.make_manifest.make_manifest
+    target_type: function
+    data_dir: ~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_val/original/2020/
+    dataset_name: gedi_val_2020
+    root_note: ''
+
+  # =========================================================================
+  # postprocessing/corrections/handle_border_artifacts.py
+  # =========================================================================
+  run_blending:
+    _target_: postprocessing.corrections.handle_border_artifacts.VSMCorrection
+    target_type: class
+    target_method: run_blending_and_mask
+    func_args: {}
+    year: 2020
+    tile_id: 20MRS
+    flag_dir: ~/data/gvs/state/2020/blended
+    output_dir: ~/data/gvs/products/vsm/2020/blended/tiles
+    stac_collection_dir: ~/data/gvs/products/gvsm_stac_catalog/vsm_local
+    distance_map_dir: ~/data/gvs/assets/blending/distance_maps
+    s2_grid_file: ~/data/gvs/state/s2_tiles_with_growing_months.parquet
+    costal_tiles_file: ~/data/gvs/assets/worklists/tiles_coastal_snow_regions.txt
+    chunksize: 1024
+    use_flash: false
+    rhs_idx: key_rhs
+
+  # NOTE: target `visualization.create_global_view.check_mosaic_after_bias_correction`
+  # is broken (missing `.core`, and the function is undefined) — carried over
+  # verbatim from the previous dataclass config.
+  check_after_bias_correction:
+    _target_: visualization.create_global_view.check_mosaic_after_bias_correction
+    target_type: function
+    year: 2020
+    bias_dir: ~/data/gvs/assets/bias_correction_stats/slope_lt20_minpoints2000/2020/stats_by_tile
+    save_dir: ~/data/gvs/products/vsm/2020/bias_corrected_slope_lt20_minpoints2000/mosaic
+    bias_cutoff: null
+    average_across_rhs: false
+
+  # =========================================================================
+  # postprocessing/corrections/bias_correction.py
+  # =========================================================================
+  evaluate_bias_correction:
+    _target_: postprocessing.corrections.bias_correction.evaluate_bias_correction_against_sota_chm
+    target_type: function
+    year: 2020
+    slope_lt20: false
+    gedi_chm_ours_dir: ~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_cal/original_with_sota_chms_ours/2020
+    correction_stats_dir: ~/data/gvs/assets/bias_correction_stats/slope_lt20_minpoints2000/2020/stats_with_median_and_trimmed_5_95_by_tile
+    save_dir: ~/data/gvs/assets/bias_correction_stats/slope_lt20_minpoints2000/2020/figures/cal_slope_lt20
+
+  # =========================================================================
+  # postprocessing/core/create_vrt.py
+  # =========================================================================
+  create_vrt:
+    _target_: postprocessing.core.create_vrt.create_vrt
+    target_type: function
+    tile_list_file: ~/data/gvs/assets/worklists/total_tiles_2020.txt
+    year: 2020
+    q_idx: '1'
+    vrt_dir: ~/data/gvs/products/vsm/2020/original/vrt_q1

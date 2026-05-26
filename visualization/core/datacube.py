@@ -175,26 +175,51 @@ def plot_datacube(
     y_min_n = float(y2d_n.min())
     y_max_n = float(y2d_n.max())
 
+    # GPU volume rendering uploads the grid as a 3-D texture, which OpenGL caps
+    # at MAX_3D_TEXTURE_SIZE per axis (2048 is the spec-guaranteed minimum and
+    # the limit on many GPUs). Decouple the render grid from the data grid: read
+    # the data at full overview detail (so the boundary contours stay sharp),
+    # but resample the volume onto a uniform grid capped at MAX_TEXTURE_DIM per
+    # axis so the texture stays valid. Raise this if your GPU reports a larger
+    # MAX_3D_TEXTURE_SIZE.
+    MAX_TEXTURE_DIM = 2048
+    gx = min(nx, MAX_TEXTURE_DIM)
+    gy = min(ny, MAX_TEXTURE_DIM)
+    gz = min(nz, MAX_TEXTURE_DIM)
+    if (gx, gy, gz) != (nx, ny, nz):
+        print(
+            f"Capping render grid {(nx, ny, nz)} -> {(gx, gy, gz)} "
+            f"(MAX_3D_TEXTURE_SIZE={MAX_TEXTURE_DIM})"
+        )
+
     uniform = pv.ImageData()
-    uniform.dimensions = (nx, ny, nz)
+    uniform.dimensions = (gx, gy, gz)
     uniform.origin = (x_min_n, y_min_n, 0.0)
     uniform.spacing = (
-        (x_max_n - x_min_n) / max(nx - 1, 1),
-        (y_max_n - y_min_n) / max(ny - 1, 1),
+        (x_max_n - x_min_n) / max(gx - 1, 1),
+        (y_max_n - y_min_n) / max(gy - 1, 1),
         z_spacing,
     )
 
     resampled = uniform.sample(src_grid)
 
-    # Fallback: if resampling gave empty data, assign directly
+    # Fallback: if resampling gave empty data, assign directly. Only valid when
+    # the render grid matches the source grid (no capping), since the raw values
+    # array is sized nx*ny*nz.
     vals = resampled.point_data.get("values")
     if vals is None or np.all(vals == 0):
-        print(
-            "WARNING: resampling produced no data — falling back to "
-            "direct assignment."
-        )
-        uniform.point_data["values"] = vol_vtk.ravel(order="F")
-        resampled = uniform
+        if (gx, gy, gz) == (nx, ny, nz):
+            print(
+                "WARNING: resampling produced no data — falling back to "
+                "direct assignment."
+            )
+            uniform.point_data["values"] = vol_vtk.ravel(order="F")
+            resampled = uniform
+        else:
+            print(
+                "WARNING: resampling produced no data on the capped render "
+                "grid; rendering may be empty."
+            )
 
     print(
         f"Grid bounds: {resampled.bounds}, "
@@ -203,7 +228,7 @@ def plot_datacube(
     )
 
     # ── 9. Plot ─────────────────────────────────────────────────────────
-    p = pv.Plotter(off_screen=True, window_size=(2200, 1200))
+    p = pv.Plotter(off_screen=True, window_size=(4400, 2400))
     p.enable_parallel_projection()
 
     p.add_volume(
@@ -241,7 +266,7 @@ def plot_datacube(
             "position_y": sbar_y,
             "height": sbar_h,
             "width": sbar_w,
-            "label_font_size": 24,
+            "label_font_size":72,
             "n_labels": 2,
             "fmt": "%.0f",
         },
@@ -302,7 +327,7 @@ def plot_datacube(
 
     p.set_background(bg_color)
     p.show(auto_close=False)
-    img = p.screenshot(transparent_background=False, return_img=True)
+    img = p.screenshot(scale=1,transparent_background=False, return_img=True)
     p.close()
 
     # ── 12. Auto-crop + padding ─────────────────────────────────────────
@@ -343,7 +368,7 @@ def plot_datacube(
         pil_img = PILImage.fromarray(img)
         img = np.array(pil_img.resize((new_w, new_h), PILImage.LANCZOS))
 
-    plt.imsave(save_path, img)
+    plt.imsave(save_path, img, dpi=300)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -440,16 +465,20 @@ def visualize_datacube(
     save_path: str = None,
     data_dir: str = None,
     filename_pattern: str = "*.tif",
-    cmap: str = "viridis",
+    cmap: str = "inferno",
     rh_step: int = 2,
+    overview_level: int = 3,
     bg_color: str = "black",
-    show_top_boundary: bool = False,
+    show_top_boundary: bool = True,
     min_contour_points: int = 50,
     aspect_ratio: float = None,
     **kwargs,
 ):
     data, lons, lats = read_datacube(
-        data_dir, filename_pattern=filename_pattern, rh_step=rh_step
+        data_dir,
+        filename_pattern=filename_pattern,
+        rh_step=rh_step,
+        overview_level=overview_level,
     )
     save_path = Path(save_path).expanduser()
     print(f"Read datacube with shape {data.shape}, lons {lons.shape}, lats {lats.shape}")

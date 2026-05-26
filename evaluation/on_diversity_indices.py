@@ -49,6 +49,7 @@ from const import (
     fewer_ticks,
 )
 from evaluation.utils import _short_count
+from evaluation.plots import hexbin_density_plot
 
 set_plot_fonts(label=20, title=20, annot=20)
 
@@ -133,51 +134,30 @@ def hexbin_scatter_plot(df: pd.DataFrame, var: str, metrics: dict, biome_value: 
     1:1 reference line. Same biome handling, annotations and stats as
     `scatter_plot`, only the density layer differs (hexbin vs histplot).'''
     if biome_value is None:
-        plot_title, biome_slug = None, 'all'  # no title for the all-data plot
+        biome_slug = 'all'
     else:
         if biome_value == 98:
             biome_value = 15
         elif biome_value == 99:
             biome_value = 16
         biome_value = int(biome_value) - 1
-        plot_title = BIOMES[biome_value]['name']
         biome_slug = BIOMES[biome_value]['abbr'].replace('.', '')
     file_name = f'hexbin_scatter_gedi_vs_ours_{var}_{biome_slug}.pdf'
-
-    x = df[f'{var}_gedi'].to_numpy()
-    y = df[f'{var}_ours'].to_numpy()
-
-    fig, ax = plt.subplots(1, 1, figsize=kwargs.get('figsize', FIGURE_SIZES['square']))
-    hb = ax.hexbin(
-        x, y,
-        gridsize=gridsize,
-        cmap=cmap,
-        mincnt=1,
-        edgecolors='none',
-        norm=LogNorm(vmin=1, vmax=100000),
-        extent=[0, max_value, 0, max_value],
-    )
-    if show_colorbar:
-        divider = make_axes_locatable(ax)
-        cax = divider.append_axes("right", size="5%", pad=0.1)
-        cb = fig.colorbar(ax.collections[0], cax=cax)
-        cb.set_label('Sample count', fontsize=FONT_SIZES['colorbar'])
-        cb.ax.tick_params(labelsize=FONT_SIZES['ticks'])
-
-    ax.set_xlim(0, max_value)
-    ax.set_ylim(0, max_value)
-    ax.plot([0, max_value], [0, max_value], color='black', linestyle='dashed')
     label = _DIV_VARS.get(var, var.upper())
-    ax.set_xlabel(f'GEDI', fontsize=FONT_SIZES['label'])
-    if show_ylabel:
-        ax.set_ylabel(f'Ours', fontsize=FONT_SIZES['label'])
-    ax.set_title(label)
-    _annotate_stats(ax, metrics[f'{var}_r2'], metrics[f'{var}_pvalue'], metrics[f'{var}_n'],
-                    corner='lower right' if var == 'cr' else 'upper left')
-    fewer_ticks(ax, nbins=3)  # ~3 nice ticks, tracks live limits
-    ax.set_aspect('equal')
-    fig.savefig(save_dir / file_name, bbox_inches='tight')
-    plt.close(fig)  # explicitly close THIS figure
+
+    hexbin_density_plot(
+        df[f'{var}_gedi'].to_numpy(), df[f'{var}_ours'].to_numpy(),
+        save_path=save_dir / file_name,
+        figsize=kwargs.get('figsize', FIGURE_SIZES['square']),
+        gridsize=gridsize, cmap=cmap, vmax=100000,
+        extent=(0, max_value, 0, max_value),
+        refline='identity', equal_aspect=True,
+        annotation=f"$R^2$ = {metrics[f'{var}_r2']:.3f}",
+        annot_corner='lower right' if var == 'cr' else 'upper left',
+        show_colorbar=show_colorbar,
+        x_label='GEDI', y_label='Ours' if show_ylabel else None,
+        title=label,
+    )
 
 
 def boxplot_with_marginal_histograms(df: pd.DataFrame, var: str, rh_col: str='rh98', bin_width:int=5, max_height:int=50, max_value:int=50, save_dir: Path = None, **kwargs) -> None:
@@ -482,7 +462,7 @@ def plot_residuals_rh98_bined(df: pd.DataFrame, save_dir: Path = None, max_heigh
         ax_bar = ax.twinx()
         ax_bar.bar(centers, counts, color='#B0C4DE', alpha=0.4, width=bar_w, zorder=1)
         if show_count_label:
-            ax_bar.set_ylabel('Count', color='grey')
+            ax_bar.set_ylabel('Sample count', color='grey')
         ax_bar.tick_params(axis='y', labelcolor='grey', labelright=show_count_ticks)
         ax_bar.set_ylim(0, count_ymax)  # push bars down to ~1/3 of plot height
         # Render scientific notation as 10^x rather than 1e6.
@@ -528,10 +508,10 @@ def plot_residuals_rh98_bined(df: pd.DataFrame, save_dir: Path = None, max_heigh
             showmeans=True,
         )
         ax.set_xticks(bin_edges)
-        ax.set_xticklabels([f'{int(e)}' for e in bin_edges], rotation=45, ha='right', fontsize=ticks_fontsize)
+        ax.set_xticklabels([f'{int(e)}' for e in bin_edges], ha='center', fontsize=ticks_fontsize)
         ax.set_xlim(bin_edges[0], bin_edges[-1])
         if show_xlabel:
-            ax.set_xlabel('RH98(m)', fontsize=label_fontsize)
+            ax.set_xlabel('GEDI RH98(m)', fontsize=label_fontsize)
         if show_ylabel:
             ax.set_ylabel(f'Residual', fontsize=label_fontsize)
         ax.set_title(cfg['name'], fontsize=label_fontsize)

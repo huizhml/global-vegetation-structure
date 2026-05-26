@@ -1,0 +1,160 @@
+# All visualization/ ops registered as Hydra `run=<name>` configs.
+# Layout: <section> -> <op_name> -> <op fields>
+#
+# Single entrypoint loads this section:
+#   python -m visualization.run    run=visualize_datacube
+#   python -m visualization.run    run=create_global_mosaic_pdf
+#
+# Placeholders use Python str.format style ({year}, {product}, ...) and are
+# resolved by tools.utils.resolve_args in visualization/run.py against sibling
+# fields of the same op (not OmegaConf ${...} interpolation).
+#
+# File-level scalars below land at the config root. `root_results_dir` is read
+# by config.runner.run_cli to index each op's `save_dir` under
+# <root_results_dir>/visualization/<op> via a symlink.
+
+root_data_dir: ~/data/gvs
+root_results_dir: ~/data/gvs/results
+
+visualization:
+
+  # =========================================================================
+  # visualization/core/create_global_view.py
+  # =========================================================================
+  # NOTE: target `resample_and_mosaic` is not currently defined in
+  # create_global_view.py (carried over from the previous dataclass config as
+  # the registered default; will fail at instantiate if actually run).
+  resample_and_mosaic:
+    _target_: visualization.core.create_global_view.resample_and_mosaic
+    target_type: function
+    year: 2020
+    rh_idx: 98
+    q_idx: 1
+    pred_dir: ~/data/gvs/products/vsm/2020/blended/tiles/geotiff/
+    s2_grid_file: ~/data/gvs/state/s2_tiles_with_growing_months.parquet
+    save_dir: ~/data/gvs/products/vsm/2020/blended/mosaic/
+
+  create_global_mosaic:
+    _target_: visualization.core.create_global_view.GlobalMosaicker
+    target_type: class
+    target_method: create_global_mosaic
+    func_args: {}
+    year: 2020
+    version: masked
+    rh_idx: 99
+    q_idx: 1
+    stac_collection_dir: ~/data/gvs/products/gvsm_stac_catalog/vsm_local_masked
+    total_tiles_file: ~/data/gvs/assets/worklists/total_tiles_2020.txt
+    save_dir: ~/data/gvs/products/vsm/{year}/{version}/mosaic/
+
+  create_global_diff_mosaic:
+    _target_: visualization.core.create_global_view.GlobalMosaicker
+    target_type: class
+    target_method: create_global_diff_mosaic
+    func_args: {}
+    year: 2020
+    version: masked
+    rh_idx: 99
+    stac_collection_dir: ~/data/gvs/products/gvsm_stac_catalog/vsm_local_masked
+    total_tiles_file: ~/data/gvs/assets/worklists/total_tiles_2020.txt
+    save_dir: ~/data/gvs/products/prediction_intervals/{year}/{version}/mosaic/
+
+  create_global_relative_diff_mosaic:
+    _target_: visualization.core.create_global_view.GlobalMosaicker
+    target_type: class
+    target_method: create_global_relative_diff_mosaic
+    func_args: {}
+    year: 2020
+    version: masked
+    rh_idx: 99
+    q_idx: 1
+    stac_collection_dir: ~/data/gvs/products/gvsm_stac_catalog/vsm_local_masked
+    total_tiles_file: ~/data/gvs/assets/worklists/total_tiles_2020.txt
+    save_dir: ~/data/gvs/products/relative_prediction_intervals/{year}/{version}/mosaic/
+
+  # NOTE: target `check_mosaic_after_bias_correction` is not currently defined
+  # in create_global_view.py (carried over from the previous dataclass config,
+  # which also lacked a target_type; will fail at instantiate if actually run).
+  check_after_bias_correction:
+    _target_: visualization.core.create_global_view.check_mosaic_after_bias_correction
+    target_type: function
+    year: 2020
+    bias_dir: ~/data/gvs/assets/bias_correction_stats/slope_lt20_minpoints2000/2020/stats_by_tile
+    save_dir: ~/data/gvs/products/vsm/2020/bias_corrected_slope_lt20_minpoints2000/mosaic
+    bias_cutoff: null
+    average_across_rhs: false
+
+  # =========================================================================
+  # visualization/core/create_pdf_thumb.py
+  # =========================================================================
+  create_global_mosaic_pdf:
+    _target_: visualization.core.create_pdf_thumb.make_global_mosaic_pdf
+    target_type: function
+    year: 2020
+    product_version: masked
+    data_format: cog
+    product: vsm
+    version: '1'
+    mosaic_dir: ~/data/gvs/products/{product}/{year}/{product_version}/mosaic/{data_format}
+    tif_filename_pattern: '*.tif'
+    pdf_file: ~/data/gvs/results/{product}/global_mosaic/{product_version}/global_mosaic_{year}_{product_version}_v{version}.pdf
+    show_profile: false
+    multi_pages: false
+    cmin: null
+    cmax: null
+    cmap: null
+
+  create_pdf_thumb:
+    _target_: visualization.core.create_pdf_thumb.make_rh_pair_pdf
+    target_type: function
+    tif_dir: ~/data/gvs/products/vsm/2020/blended/tiles/cog/
+    tile_id_file: ~/data/gvs/assets/worklists/tiles_intile_abnormal.txt
+    pdf_file: ~/data/gvs/diagnostics/pred_thumbs/issue_tiles.pdf
+    overview_level: 2
+    top_rh: 98
+    low_rh: 25
+
+  create_pred_neighbor_pdf:
+    _target_: visualization.core.create_pdf_thumb.make_pred_neighbor_pdf
+    target_type: function
+    tif_dir: ~/data/gvs/products/vsm/2020/blended/tiles/cog/
+    tile_id_file: ~/data/gvs/assets/worklists/tiles_system_biased.txt
+    pdf_file: ~/data/gvs/diagnostics/pred_thumbs/system_biased_tiles.pdf
+    s2_grid_file: ~/data/gvs/state/s2_tiles_with_growing_months.parquet
+    stac_collection_dir: ~/data/gvs/products/gvsm_stac_catalog/vsm_local
+    year: 2020
+    resolution: 100
+
+  # =========================================================================
+  # visualization/core/datacube.py
+  # =========================================================================
+  visualize_datacube:
+    _target_: visualization.core.datacube.visualize_datacube
+    target_type: function
+    product: vsm
+    product_format: cog
+    product_version: masked
+    filename_pattern: '*.tif'
+    year: 2020
+    rh_step: 2
+    overview_level: 3
+    version: '2'
+    data_dir: ~/data/gvs/products/{product}/{year}/{product_version}/mosaic/{product_format}/
+    save_path: ~/data/gvs/results/vsm_datacube/{product}_every{rh_step}rhs_{bg_color}_bg_v{version}.png
+    cmap: inferno
+    bg_color: black
+    show_top_boundary: true
+    aspect_ratio: 2.0
+
+  # =========================================================================
+  # visualization/core/create_boxplot.py
+  # =========================================================================
+  create_cloud_cover_boxplot:
+    _target_: visualization.core.create_boxplot.make_cloud_cover_boxplot
+    target_type: function
+    h5_dir: ~/data/gvs/inputs/inference_2020/
+    tile_id_file: ~/data/gvs/assets/worklists/tiles_system_biased.txt
+    pdf_file: ~/data/gvs/diagnostics/pred_thumbs/system_biased_tiles_cloud_cover.pdf
+    s2_grid_file: ~/data/gvs/state/s2_tiles_with_growing_months.parquet
+    year: 2020
+    max_cloud_cover: 90

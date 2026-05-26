@@ -12,6 +12,7 @@
 # File-level scalars below are accessible to every op via absolute ${...}.
 
 root_data_dir: ~/data/gvs
+eval_dir: ~/data/gvs/evaluation
 gedi_dir: /projects/dereeco/data/gvs/gedi/veg_sensitivity_gt0p95
 nat_dir: ~/data/gvs/evaluation/downstream_tasks/naturalness
 root_results_dir: ~/data/gvs/results
@@ -51,11 +52,18 @@ on_sota_chm:
 # =========================================================================
 on_als:
 
+  extract_pixels:
+    _target_: evaluation.on_als.extract_pixels_and_save
+    target_type: function
+    ref_dir: ${eval_dir}/with_airborne_lidar/ALS_MaxGEDIFootprint_GSD10m
+    ours_root_dir: ${root_data_dir}/products/vsm/
+    save_dir: ${eval_dir}/with_airborne_lidar/lidar_and_ours_year_matching
+
   evaluate_chm_with_als_and_lvis:
     _target_: evaluation.on_als.evaluate
     target_type: function
-    df_dir: /projects/dereeco/data/gvs/evaluation/with_airborne_lidar/lidar_and_ours_year_matching
-    save_dir: /projects/dereeco/data/gvs/evaluation/with_airborne_lidar/figures/evaluated_on_ours_year_matching
+    df_dir: ${eval_dir}/with_airborne_lidar/lidar_and_ours_year_matching
+    save_dir: ${eval_dir}/with_airborne_lidar/figures/evaluated_on_ours_year_matching
     ref_col: als
 
 

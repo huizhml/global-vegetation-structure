@@ -2,11 +2,10 @@ import rasterio
 import numpy as np
 from pathlib import Path
 import pandas as pd
-import seaborn as sns
-from matplotlib.colors import LogNorm
-import matplotlib.pyplot as plt
+from sklearn.metrics import r2_score, mean_squared_error
 
-from const import FONT_SIZES, FIGURE_SIZES, set_plot_fonts, fewer_ticks
+from const import FIGURE_SIZES, set_plot_fonts
+from evaluation.plots import hexbin_density_plot, hexbin_density_grid, sci_notation
 
 set_plot_fonts()
 
@@ -55,9 +54,7 @@ def extract_pixels_and_save(ref_dir: str, ours_root_dir: str, save_dir: str = No
                 ref_year = ref_year.split('-')[-1]
             ref_year = int(ref_year)
 
-        if ref_year < 2016:
-            continue
-        if ref_year == 2016:
+        if ref_year <= 2016:
             ref_year = 2017
         ours_dir = ours_root_dir / f'{ref_year}/original/tiles/geotiff/'
         ref, ours = extract_valid_pixels(ref_dir, ours_dir, tile_id)
@@ -65,42 +62,78 @@ def extract_pixels_and_save(ref_dir: str, ours_root_dir: str, save_dir: str = No
         df.to_parquet(out_file, index=False)
 
     
-def scatter_plot(tile_id: str, df: pd.DataFrame, ref_col: str, stats: dict, save_dir: Path = None, max_height: int = 80, **kwargs) -> None:
-    fig, ax = plt.subplots(1, 1, figsize=kwargs.get('figsize', FIGURE_SIZES['medium']))
-    sns.histplot(df, x=ref_col, y = 'ours_rh98', bins=50, cbar=True, cmap='viridis', ax=ax)
-    ax.collections[0].set_norm(LogNorm(vmin=1, vmax=10000))
-    ax.set_xlim(0, max_height)
-    ax.set_ylim(0, max_height)
-    ax.plot(np.arange(max_height), np.arange(max_height), color='black', linestyle='dashed')
-    plt.title(f'{ref_col} vs Ours (RH98) - {tile_id}, R^2 = {stats['r2']:.2f}')
-    plt.text(0.05, 0.95, f'R^2 = {stats['r2']:.2f}', ha='left', va='top', transform=ax.transAxes, fontsize=FONT_SIZES['annot'])
-    plt.text(0.05, 0.90, f'RMSE = {stats['rmse']:.2f}', ha='left', va='top', transform=ax.transAxes, fontsize=FONT_SIZES['annot'])
-    plt.text(0.05, 0.85, f'ME = {stats['me']:.2f}', ha='left', va='top', transform=ax.transAxes, fontsize=FONT_SIZES['annot'])
-    plt.text(0.05, 0.80, f'N = {stats['n']}', ha='left', va='top', transform=ax.transAxes, fontsize=FONT_SIZES['annot'])
-    plt.text(0.05, 0.75, f'Avg Height = {stats['avg_height']:.2f}', ha='left', va='top', transform=ax.transAxes, fontsize=FONT_SIZES['annot'])
-    fewer_ticks(ax)
-    plt.tight_layout()
-    plt.savefig(save_dir / f'scatter_plot_{ref_col}_{tile_id}.pdf')
-    plt.close()
-    
+def _stats_annotation(stats: dict) -> str:
+    '''Multi-line boxed-annotation text, shared by the single plot and grid.'''
+    return '\n'.join([
+        f'$R^2$ = {stats['r2']:.2f}',
+        f'RMSE = {stats['rmse']:.2f}',
+        f'ME = {stats['me']:.2f}',
+        f'N = ${sci_notation(stats['n'])}$',
+        f'Avg Height = {stats['avg_height']:.2f}m',
+    ])
+
+
+def _panel_title(tile_id: str, ref_col: str, ref_year: str = None, our_year: str = None) -> str:
+    '''Panel title: tile id, with the acquisition years on a second line when
+    available (e.g. "32MPC\\nALS 2019 / Ours 2019").'''
+    if ref_year and our_year:
+        return f'{tile_id}\n{ref_col.upper()} ({ref_year}) vs Ours ({our_year})'
+    return tile_id
+
+
+def scatter_plot(tile_id: str, df: pd.DataFrame, ref_col: str, stats: dict, save_dir: Path = None,
+                 max_height: int = 80, ref_year: str = None, our_year: str = None, **kwargs) -> None:
+    hexbin_density_plot(
+        df[ref_col].to_numpy(), df['ours_rh98'].to_numpy(),
+        save_path=save_dir / f'scatter_plot_{ref_col}_{tile_id}.pdf',
+        figsize=kwargs.get('figsize', FIGURE_SIZES['medium']),
+        gridsize=80, vmax=100_000,
+        extent=(0, max_height, 0, max_height),
+        refline='identity', equal_aspect=True,
+        annotation=_stats_annotation(stats), annot_corner='upper left', annot_fontsize=14,
+        title=_panel_title(tile_id, ref_col, ref_year, our_year),
+        x_label=ref_col.upper(),
+        y_label='Ours (RH98)',
+    )
+
+
+def scatter_plot_grid(items: list, ref_col: str, save_dir: Path = None,
+                      max_height: int = 80, nrows: int = 3, ncols: int = 4, **kwargs) -> None:
+    '''Combined nrows x ncols panel of per-tile hexbin scatters with shared x/y
+    axes and a single shared colorbar. `items` is a list of
+    (tile_id, x, y, stats, ref_year, our_year); the per-tile acquisition years
+    go on a second line of each panel title.'''
+    panels = [
+        {'x': x, 'y': y, 'annotation': _stats_annotation(stats),
+         'title': _panel_title(tile_id, ref_col, ref_year, our_year)}
+        for tile_id, x, y, stats, ref_year, our_year in items
+    ]
+    hexbin_density_grid(
+        panels,
+        save_path=save_dir / f'scatter_grid_{ref_col}.pdf',
+        nrows=nrows, ncols=ncols,
+        gridsize=80, vmax=100_000,
+        extent=(0, max_height, 0, max_height),
+        refline='identity', equal_aspect=True,
+        annot_corner='upper left', annot_fontsize=10,
+        panel_title_fontsize=14,
+        x_label=ref_col.upper(), y_label='Ours (RH98)',
+    )
+
+
 def tile_level_evaluate(df: pd.DataFrame, ref_col: str, ours_col: str='ours_rh98') -> dict:
-    n = len(df)
-    residual = df[ours_col] - df[ref_col]
-    rss = (residual**2).sum()
-    avg_height = df[ref_col].mean()
-    rmse = np.sqrt(rss/n)
-    me = residual.mean()
-    tss = ((df[ref_col] - avg_height)**2).sum()
-    r2 = 1- rss/tss
-    
+    y_true = df[ref_col].to_numpy()
+    y_pred = df[ours_col].to_numpy()
+    residual = y_pred - y_true
+    # rss/ref are kept so evaluate() can pool a global RMSE/R^2 across tiles.
     return {
-        'n': n,
-        'rss': rss,
+        'n': len(df),
+        'rss': float((residual ** 2).sum()),
         'ref': df[ref_col],
-        'rmse': rmse,
-        'me': me,
-        'r2': r2,
-        'avg_height': avg_height
+        'rmse': float(np.sqrt(mean_squared_error(y_true, y_pred))),
+        'me': float(residual.mean()),  # signed bias; no sklearn/scipy equivalent
+        'r2': float(r2_score(y_true, y_pred)),
+        'avg_height': float(y_true.mean()),
     }
 
 def evaluate(df_dir: str, save_dir: str = None, ref_col: str = 'als', **kwargs) -> dict:
@@ -117,13 +150,35 @@ def evaluate(df_dir: str, save_dir: str = None, ref_col: str = 'als', **kwargs) 
     save_dir = save_dir or df_dir.parent / 'figures'
     save_dir = Path(save_dir).expanduser()
     save_dir.mkdir(parents=True, exist_ok=True)
+
+    # Per-tile acquisition years for the axis labels: 'Year' is the reference
+    # (ALS/LVIS) year, 'Ours' our prediction year. Optional — fall back to no
+    # year if the meta CSV is missing or a tile isn't listed.
+    meta_path = df_dir.parent / f'meta_{ref_col}.csv'
+    year_map = {}
+    if meta_path.exists():
+        meta = pd.read_csv(meta_path)
+        year_map = {str(r['Tile name']): (str(r['Year']), str(r['Ours']))
+                    for _, r in meta.iterrows()}
+    else:
+        print(f'  evaluate: no meta file at {meta_path}; skipping year labels')
+
     stats = {}
-    for f in df_dir.glob(f'*{ref_col}*.parquet'):
+    grid_items = []
+    for f in sorted(df_dir.glob(f'*{ref_col}*.parquet')):
         df = pd.read_parquet(f)
         tile_id = f.stem.split('_')[-1]
+        ref_year, our_year = year_map.get(tile_id, (None, None))
         stats[tile_id] = tile_level_evaluate(df, ref_col)
-        scatter_plot(tile_id, df, ref_col, stats[tile_id], save_dir)
-    
+        scatter_plot(tile_id, df, ref_col, stats[tile_id], save_dir,
+                     ref_year=ref_year, our_year=our_year)
+        grid_items.append((tile_id, df[ref_col].to_numpy(), df['ours_rh98'].to_numpy(),
+                           stats[tile_id], ref_year, our_year))
+    if grid_items:
+        # Order panels by reference avg height (ascending: shortest -> tallest).
+        grid_items.sort(key=lambda it: it[3]['avg_height'])
+        scatter_plot_grid(grid_items, ref_col, save_dir)
+
     rss =0
     me =0
     n =0

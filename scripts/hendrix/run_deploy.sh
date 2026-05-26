@@ -37,7 +37,7 @@ line_num=${SLURM_ARRAY_TASK_ID:-2}
 stream_input=${2:-False}
 year=${4:-2020}
 repredict_tiles=${4:-True}
-save_dir=${root_data_dir}/predictions/${year}/original/tiles/geotiff
+save_dir=${root_data_dir}/products/vsm/${year}/original/tiles/geotiff
 mkdir -p $save_dir
 
 tile_id_file=${3:-${root_data_dir}/assets/worklists/tiles_duplicated.txt}
@@ -61,7 +61,7 @@ tile_id_file=${root_data_dir}/evaluation/with_airborne_lidar/meta_als.csv
 read tile_id year <<< $(read_line_from_csv "$tile_id_file" "$line_num")
 
 echo "Processing tile ID: $tile_id, year: $year"
-save_dir=${root_data_dir}/predictions/${year}/original/tiles/geotiff
+save_dir=${root_data_dir}/products/vsm/${year}/original/tiles/geotiff
 mkdir -p $save_dir
 
 meta_file=none
