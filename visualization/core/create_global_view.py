@@ -423,25 +423,24 @@ class GlobalMosaicker:
         cog_dir = self.save_dir / 'cog'
         cog_dir.mkdir(parents=True, exist_ok=True)
         cog_path = cog_dir / f"RH{self.rh_idx}_Q{self.q_idx}.tif"
-        # if cog_path.exists():
-        #     print(f"Global mosaic COG already exists: {cog_path}")
-        #     return cog_path
+        if cog_path.exists():
+            print(f"Global mosaic COG already exists: {cog_path}")
+            return cog_path
         
-        # gtif_dir = self.save_dir / 'geotiff'
-        # gtif_dir.mkdir(parents=True, exist_ok=True)
-        # mosaic_path = gtif_dir/ f"RH{self.rh_idx}_Q{self.q_idx}.tif"
-        # if mosaic_path.exists():
-        #     print(f"Global mosaic already exists: {mosaic_path}")
-        #     self._to_cog(mosaic_path, cog_path)
-        #     print(f"✅ Global mosaic written to {cog_path}")
-        #     return 
+        gtif_dir = self.save_dir / 'geotiff'
+        gtif_dir.mkdir(parents=True, exist_ok=True)
+        mosaic_path = gtif_dir/ f"RH{self.rh_idx}_Q{self.q_idx}.tif"
+        if mosaic_path.exists():
+            print(f"Global mosaic already exists: {mosaic_path}")
+            self._to_cog(mosaic_path, cog_path)
+            print(f"✅ Global mosaic written to {cog_path}")
+            return 
 
         temp_dir_name = f"tmp_tiles_resampled_1km_RH{self.rh_idx}_Q{self.q_idx}"
         temp_dir = self.init_tmp_dir(self.save_dir / temp_dir_name)
         warp_options = dict(self.downsample_warp_options)
         tasks = []
         downsampled_paths = []
-        self.tile_ids = ['53XND']
         for tile_id in self.tile_ids:
             dst_path = temp_dir / f'{tile_id}.tif'
             downsampled_paths.append(str(dst_path))
@@ -453,11 +452,11 @@ class GlobalMosaicker:
         with ProgressBar():
             dask.compute(tasks, scheduler="processes", num_workers=8)
 
-        # geotiff_dir = self.save_dir / 'geotiff'
-        # geotiff_dir.mkdir(parents=True, exist_ok=True)
-        # self._mosaic_tiles(downsampled_paths, mosaic_path)
-        # self._to_cog(mosaic_path, cog_path)
-        # print(f"✅ Global mosaic written to {cog_path}")
+        geotiff_dir = self.save_dir / 'geotiff'
+        geotiff_dir.mkdir(parents=True, exist_ok=True)
+        self._mosaic_tiles(downsampled_paths, mosaic_path)
+        self._to_cog(mosaic_path, cog_path)
+        print(f"✅ Global mosaic written to {cog_path}")
     
     def create_global_diff_mosaic(self, left_q_idx: int=0, right_q_idx: int=2):
         '''

@@ -39,12 +39,12 @@ visualization:
     target_type: class
     target_method: create_global_mosaic
     func_args: {}
-    year: 2020
-    version: masked
-    rh_idx: 99
+    year: 2024
+    version: original
+    rh_idx: 98
     q_idx: 1
-    stac_collection_dir: ~/data/gvs/products/gvsm_stac_catalog/vsm_local_masked
-    total_tiles_file: ~/data/gvs/assets/worklists/total_tiles_2020.txt
+    stac_collection_dir: ~/data/gvs/products/gvsm_stac_catalog/vsm_local
+    total_tiles_file: ~/data/gvs/assets/worklists/total_tiles_{year}.txt
     save_dir: ~/data/gvs/products/vsm/{year}/{version}/mosaic/
 
   create_global_diff_mosaic:
