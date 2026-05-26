@@ -8,6 +8,7 @@
 #     just viz-<TAB>    visualization recipes
 #     just dl-<TAB>     download recipes
 #     just post-<TAB>   postprocessing recipes
+#     just pre-<TAB>    preprocessing recipes
 #     just eval-<TAB>   evaluation recipes
 #     just tools-<TAB>  tools recipes
 # `[group(...)]` only affects how `just --list` buckets them.
@@ -193,6 +194,11 @@ dl-inference *args:
 dl-downstream-task-data *args:
     {{dl}} run=download_downstream_task_data {{args}}
 
+# Deduplicate GEDI shots in a subset parquet dir
+[group('download')]
+dl-dedup-shots *args:
+    {{dl}} run=dedup_shots {{args}}
+
 # ─────────────────────────────────────────────────────────────────────────
 # postprocessing  (python -m postprocessing.run)
 # ─────────────────────────────────────────────────────────────────────────
@@ -341,6 +347,11 @@ eval-vsm-on-gedi *args:
 eval-chm-with-sota *args:
     {{eval-on-sota-chm}} run=evaluate_chm_with_sota {{args}}
 
+# Evaluate CHM with ALS and LVIS - estract pixels
+[group('evaluation')]
+eval-with-als-extract-pixels *args:
+    {{eval-on-als}} run=extract_pixels {{args}}
+
 # Evaluate CHM with ALS and LVIS
 [group('evaluation')]
 eval-chm-with-als-and-lvis *args:
@@ -465,6 +476,21 @@ eval-compute-glcm-texture *args:
 tools-update-readme *args:
     {{tools}} run=update_readme {{args}}
 
+# Add columns from a source per-tile parquet dir into a target dir
+[group('tools')]
+tools-add-cols-from-dir *args:
+    {{tools}} run=add_cols_from_dir {{args}}
+
+# Merge columns from two per-tile parquet dirs into one combined parquet
+[group('tools')]
+tools-merge-cols-from-dirs *args:
+    {{tools}} run=merge_cols_from_dirs {{args}}
+
+# Build a 1-degree world land grid
+[group('tools')]
+tools-make-world-grid *args:
+    {{tools}} run=make_world_grid {{args}}
+
 # ─────────────────────────────────────────────────────────────────────────
 # misc entrypoints (different invocation shape — generic passthrough)
 # ─────────────────────────────────────────────────────────────────────────
@@ -475,7 +501,21 @@ tools-update-readme *args:
 train *args:
     python run.py {{args}}
 
-# preprocessing entrypoint (single hydra config, no registered run= names)
-[group('misc')]
+# ─────────────────────────────────────────────────────────────────────────
+# preprocessing  (python -m preprocessing.run)
+# ─────────────────────────────────────────────────────────────────────────
+
+# Calculate naturalness input mean/std stats
+[group('preprocessing')]
+pre-cal-naturalness-input-stats *args:
+    {{preproc}} run=cal_naturalness_input_stats {{args}}
+
+# Convert chunk-by-1 zarr to a single HDF5
+[group('preprocessing')]
+pre-zarr-to-h5 *args:
+    {{preproc}} run=zarr_to_h5 {{args}}
+
+# Generic preprocessing passthrough (pass run=<name> and any overrides)
+[group('preprocessing')]
 pre *args:
     {{preproc}} {{args}}

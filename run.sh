@@ -411,7 +411,7 @@ python run.py test -c config/train_naturalness.yaml --model.backbone config/mode
 # 3. Takes about 31 min to predict one tile on one L40s (write all 303 bands)
 # ******************************
 echo predict tiles on Hendrix
-tile_id=21MTM # 32MQE
+tile_id=30TWN # 32MQE
 year=2020
 run_id=cg11fpjr
 echo run prediction for model $run_id for tile $tile_id in year $year;
@@ -421,8 +421,8 @@ python run.py predict -c config/predict.yaml --model.backbone config/model/xcept
         --data.init_args.tile_id $tile_id \
         --data.init_args.stream_input False \
         --data.init_args.metadata_file none  \
-        --data.init_args.pred_fp ~/data/gvs/deploy/inference_${year}.zarr \
-        --data.init_args.prediction_dir ~/data/gvs/deploy/predictions_GTiff_${year}_test/${tile_id}_GTiff \
+        --data.init_args.pred_fp ~/data/gvs/inputs/inference_${year}.zarr \
+        --data.init_args.prediction_dir ~/data/gvs/products/vsm/predictions_GTiff_${year}_test/${tile_id}_GTiff \
         --data.init_args.year $year \
         --correct_bias True \
         --data.init_args.patch_size 544 \
@@ -496,8 +496,8 @@ python run.py predict -c config/predict.yaml --model.backbone config/model/xcept
 #/scratch/$tile_id
 # ******************************
 echo predict tiles 
-tile_id=32MQE # 32MQE
-year=2020
+tile_id=30TWN # 32MQE
+year=2017
 run_id=cg11fpjr
 echo run prediction for model $run_id for tile $tile_id;
 python run.py predict -c config/predict.yaml --model.backbone config/model/xception_mix_order.yaml \

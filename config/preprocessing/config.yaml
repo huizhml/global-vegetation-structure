@@ -1,0 +1,35 @@
+# All preprocessing/ ops registered as Hydra `run=<name>` configs.
+# Layout: <section> -> <op_name> -> <op fields>
+#
+# Single entrypoint loads this section:
+#   python -m preprocessing.run    run=zarr_to_h5
+#
+# These ops use literal paths (no {...} placeholders), so preprocessing/run.py
+# does not call resolve_args.
+#
+# `root_results_dir` is read by config.runner.run_cli to index each op's
+# `save_dir` under <root_results_dir>/preprocessing/<op> via a symlink (no op
+# here defines save_dir, so indexing is skipped).
+
+root_data_dir: ~/data/gvs
+root_results_dir: ~/data/gvs/results
+
+preprocessing:
+
+  # =========================================================================
+  # preprocessing/pipeline/step6_calculate_naturalness_stats.py
+  # =========================================================================
+  cal_naturalness_input_stats:
+    _target_: preprocessing.pipeline.step6_calculate_naturalness_stats.calculate_naturalness_mean_std
+    target_type: function
+    data_file: ~/data/gvs/evaluation/downstream_tasks/naturalness/results_from_vsm_2017/vsm_patches_ps15_single_h5_72xl3wma_ps31.zarr
+    out_fp: ~/data/gvs/evaluation/downstream_tasks/naturalness/results_from_vsm_2017/vsm_patches_ps15_single_h5_72xl3wma_ps31.npz
+
+  # =========================================================================
+  # preprocessing/pipeline/step7_zarr_to_h5.py
+  # =========================================================================
+  zarr_to_h5:
+    _target_: preprocessing.pipeline.step7_zarr_to_h5.convert_zarr_to_h5
+    target_type: function
+    data_file: ~/data/gvs/evaluation/downstream_tasks/naturalness/results_from_vsm_2017/vsm_patches_ps15_single_h5_72xl3wma_ps31.zarr
+    out_fp: ~/data/gvs/evaluation/downstream_tasks/naturalness/results_from_vsm_2017/vsm_patches_ps15_single_h5_72xl3wma_ps31.h5

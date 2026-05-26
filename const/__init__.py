@@ -139,6 +139,11 @@ def set_plot_fonts(**overrides):
         "ytick.labelsize":  FONT_SIZES["ticks"],
         "legend.fontsize":  FONT_SIZES["legend"],
         "figure.titlesize": FONT_SIZES["title"],
+        # Embed TrueType subsets (with a ToUnicode cmap) instead of the default
+        # Type 3 fonts, so exported PDF/PS text stays selectable and copies as
+        # correct Unicode even after the figure is re-embedded in another doc.
+        "pdf.fonttype":     42,
+        "ps.fonttype":      42,
     })
     return dict(FONT_SIZES)
 

@@ -5,17 +5,16 @@ import pandas as pd
 import geopandas as gpd
 import dask_geopandas as dgp
 import matplotlib.pyplot as plt
-from matplotlib.colors import LogNorm
-from mpl_toolkits.axes_grid1 import make_axes_locatable
 import rasterio
 from rasterio.crs import CRS
 from rasterio.transform import rowcol
 from rasterio.warp import transform as warp_transform
 from rasterio.windows import Window
-from scipy.stats import pearsonr, spearmanr, linregress
+from scipy.stats import pearsonr, spearmanr
 from tqdm import tqdm
 
 from const import BIOMES, FONT_SIZES, FIGURE_SIZES, set_plot_fonts, fewer_ticks
+from evaluation.plots import hexbin_density_plot
 
 set_plot_fonts(label=20, title=20, annot=20)
 
@@ -165,66 +164,21 @@ def hexbin_regression_plot(
     gridsize    : Number of hexagons across the x-axis.
     cmap        : Matplotlib colormap name.
     """
-    x = df[x_name].to_numpy()
-    y = df[y_name].to_numpy()
- 
-    xmin, xmax = float(np.min(x)), float(np.max(x))
-    ymin, ymax = float(np.min(y)), float(np.max(y))
-    slope, intercept, _, _, _ = linregress(x, y)
-    x_fit = np.linspace(xmin, xmax, 100)
-    y_fit = slope * x_fit + intercept
- 
-    # ── Plot ──────────────────────────────────────────────────────
-    fig, ax = plt.subplots(1, 1, figsize=kwargs.get('figsize', FIGURE_SIZES['square']))
- 
-    hb = ax.hexbin(
-        x, y,
-        gridsize=gridsize,
-        cmap=cmap,
-        mincnt=1,
-        edgecolors='none',
-        norm=LogNorm(vmin=1),
-        extent=[xmin, xmax, ymin, ymax],
+    # Colorbar drops the annotation to the lower-left so the box clears the bar;
+    # without one it sits top-left. (va='top' for both, matching the original.)
+    annot_pos = (0.05, 0.2, 'left', 'top') if show_colorbar else (0.05, 0.95, 'left', 'top')
+    hexbin_density_plot(
+        df[x_name].to_numpy(), df[y_name].to_numpy(),
+        save_path=save_path,
+        figsize=kwargs.get('figsize', FIGURE_SIZES['square']),
+        gridsize=gridsize, cmap=cmap,
+        refline='regression',
+        annotation=f"$R^2$ = {metrics['r2']:.3f}",
+        annot_pos=annot_pos,
+        show_colorbar=show_colorbar, reserve_colorbar_slot=True,
+        x_label=x_label or x_name, y_label=y_label or y_name,
+        dpi=300,
     )
-    # Regression line
-    ax.plot(x_fit, y_fit, color='black', linewidth=1.5, linestyle='--')
- 
-    # Always carve out the colorbar slot so the divider hands the main axes the
-    # same width whether or not a colorbar is drawn; only render the bar when
-    # asked (an invisible cax is dropped by bbox_inches='tight').
-    annot_positony = 0.95
-    divider = make_axes_locatable(ax)
-    cax = divider.append_axes("right", size="5%", pad=0.1)
-    if show_colorbar:
-        cb = fig.colorbar(hb, cax=cax)
-        cb.set_label('Sample count', fontsize=FONT_SIZES['colorbar'])
-        cb.ax.tick_params(labelsize=FONT_SIZES['ticks'])
-        annot_positony = 0.2
-    else:
-        cax.set_visible(False)
-
-    ax.set_xlim(xmin, xmax)
-    ax.set_ylim(ymin, ymax)
-    ax.set_xlabel(x_label or x_name, fontsize=FONT_SIZES['label'])
-    ax.set_ylabel(y_label or y_name, fontsize=FONT_SIZES['label'])
-    # ax.set_title(title, fontsize=FONT_SIZES['title'])
-    fewer_ticks(ax, nbins=3)  # ~3 nice ticks, tracks live limits
-    ax.tick_params(axis='both', labelsize=FONT_SIZES['ticks'])
- 
-    # Stats annotation
-    ax.text(
-        0.05, annot_positony,
-        f"$R^2$ = {metrics['r2']:.3f}",
-        # f"p = {metrics['pearson_p']:.2e}",
-        # f"Corr $r$ = {metrics['pearson_r']:.3f}\n"
-        # f"Spearman $\\rho$ = {metrics['spearman_rho']:.3f}\n"
-        # f"N = ${_sci(metrics['n'])}$",
-        ha='left', va='top',
-        transform=ax.transAxes, fontsize=FONT_SIZES['annot'],
-        bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8),
-    )
-    fig.savefig(save_path, dpi=300, bbox_inches='tight')
-    plt.close(fig)
 
 
 def _correlate(df: pd.DataFrame, wsci_name: str, index_name: str,
@@ -238,7 +192,7 @@ def _correlate(df: pd.DataFrame, wsci_name: str, index_name: str,
     rows.append({'diversity_index': label, 'group': 'all',
                  'biome_value': -1, **m})
     hexbin_regression_plot(sub, wsci_name, index_name, m,
-                     save_dir / f'wsci_vs_{index_name}_scatter_all.pdf',
+                     save_dir / f'scatter_wsci_vs_{index_name}_all.pdf',
                      title=f'{wsci_name} vs {label}', y_label=label, show_colorbar=index_name=='cr')
     print(f'{label} all:', m)
 
@@ -253,7 +207,7 @@ def _correlate(df: pd.DataFrame, wsci_name: str, index_name: str,
                          'biome_value': int(biome_value), **gm})
             hexbin_regression_plot(
                 group, wsci_name, index_name, gm,
-                save_dir / f'wsci_vs_{index_name}_scatter_{abbr}.pdf',
+                save_dir / f'scatter_wsci_vs_{index_name}_{abbr}.pdf',
                 title=f'{wsci_name} vs {label} ({name})', y_label=label,
             )
             print(f'  {label}/{name}:', gm)

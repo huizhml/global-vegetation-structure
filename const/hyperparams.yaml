@@ -116,7 +116,7 @@ figure_sizes:
   medium: [10, 6]   # default single-panel figure
   wide:   [14, 4]   # wider single panel
   large:  [12, 10]  # large composite / multi-row panel
-  panel:  [18, 9]   # multi-panel grid figure
+  panel:  [18, 6]   # multi-panel grid figure
   strip:  [16, 4]   # very wide / short strip
 
 # Colormap ranges for VSM thumbnails (diversity indices + per-RH bands).

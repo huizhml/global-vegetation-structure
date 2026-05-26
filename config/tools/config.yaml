@@ -1,0 +1,58 @@
+# All tools/ ops registered as Hydra `run=<name>` configs.
+# Layout: <section> -> <op_name> -> <op fields>
+#
+# Single entrypoint loads this section:
+#   python -m tools.run    run=make_world_grid
+#
+# Placeholders use Python str.format style ({split}, {year}) and are resolved by
+# tools.utils.resolve_args in tools/run.py against sibling fields of the op.
+#
+# `root_results_dir` is read by config.runner.run_cli to index each op's
+# `save_dir` under <root_results_dir>/tools/<op> via a symlink.
+
+root_data_dir: ~/data/gvs
+root_results_dir: ~/data/gvs/results
+
+tools:
+
+  # =========================================================================
+  # tools/update_readme.py
+  # =========================================================================
+  update_readme:
+    _target_: tools.update_readme.update_all_readmes
+    target_type: function
+    data_dir: ~/data/gvs/assets
+    dry_run: false
+
+  # =========================================================================
+  # tools/parq_ops.py
+  # =========================================================================
+  add_cols_from_dir:
+    _target_: tools.parq_ops.add_columns_from_dir
+    target_type: function
+    target_dir: /projects/dereeco/data/gvs/gedi/veg_sensitivity_gt0p95/subset_cal/original_with_ours_biome/2020
+    source_dir: /projects/dereeco/data/gvs/gedi/veg_sensitivity_gt0p95/subset_cal/original_with_sota_chms/2020
+    validate_cols: [shot_number, geometry]
+
+  merge_cols_from_dirs:
+    _target_: tools.parq_ops.merge_columns_from_dirs
+    target_type: function
+    year: 2020
+    split: cal
+    target_dir: /projects/dereeco/data/gvs/gedi/veg_sensitivity_gt0p95/subset_{split}/version=masked/{year}
+    source_dir: /projects/dereeco/data/gvs/gedi/veg_sensitivity_gt0p95/subset_{split}/original_with_sota_chms_biome/{year}
+    save_fp: /projects/dereeco/data/gvs/gedi/veg_sensitivity_gt0p95/subset_{split}/version=masked/original_with_ours_sota_biome_2020.parquet
+    validate_cols: [shot_number, geometry]
+
+  # =========================================================================
+  # tools/make_world_grid.py
+  # =========================================================================
+  make_world_grid:
+    _target_: tools.make_world_grid.make_world_land_grid
+    target_type: function
+    out_file: ~/data/gvs/assets/world_1deg_land_grid.parquet
+    resolution: 1.0
+    land_source: naturalearth.land
+    clip_to_land: false
+    biome_file: ~/data/GEDI/ecoregions/wwf_terr_ecos.shp
+    biome_cols: null

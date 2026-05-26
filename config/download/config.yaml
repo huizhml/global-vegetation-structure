@@ -1,0 +1,255 @@
+# All download/ ops registered as Hydra `run=<name>` configs.
+# Layout: <section> -> <op_name> -> <op fields>
+#
+# Single entrypoint loads this section:
+#   python -m download.run    run=download_all_valid_gedi
+#
+# Placeholders use Python str.format style ({root_dir}, {split}, ...) and are
+# resolved by tools.utils.resolve_args in download/run.py against sibling fields
+# of the same op. NOTE: several paths bake in year=2020 as literals because the
+# original dataclass used f-strings evaluated at class-definition time (so a
+# `run.year=` override never rewrote them — preserved here).
+#
+# `root_results_dir` is read by config.runner.run_cli to index each op's
+# `save_dir` under <root_results_dir>/download/<op> via a symlink.
+
+root_data_dir: ~/data/gvs
+root_results_dir: ~/data/gvs/results
+
+download:
+
+  # =========================================================================
+  # download/products/sota_chm.py
+  # =========================================================================
+  download_sota_chms:
+    _target_: download.products.sota_chm.SOTAChmDownloader
+    target_type: class
+    target_method: download
+    func_args: {}
+    location_files: ~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_cal/original/2020/*.parquet
+    save_dir: ~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_cal/original_with_sota_chms/2020
+    n_parallel: 60
+    rewrite: false
+    debug: false
+
+  # =========================================================================
+  # download/products/forest_temp.py
+  # =========================================================================
+  download_forest_temp:
+    _target_: download.products.forest_temp.download_forest_temp
+    target_type: function
+    url: https://figshare.com/ndownloader/files/39528400
+    out_dir: ~/data/gvs/evaluation/downstream_tasks/forest_temp
+
+  # =========================================================================
+  # download/products/mgrs.py
+  # =========================================================================
+  get_mgrs:
+    _target_: download.products.mgrs.MGRS
+    target_type: class
+    target_method: get_mgrs
+    func_args: {}
+    gee_asset: projects/gisproject-1/assets/mgrs_with_landmass_and_gedi_counts_high_sens
+    missing_file: ~/data/GEDI/missing.csv
+    mgrs_file: ~/data/GEDI/mgrs_with_nbest_v2.parquet
+
+  add_gedi_count:
+    _target_: download.products.mgrs.MGRS
+    target_type: class
+    target_method: add_gedi_count
+    func_args: {}
+    version: 3
+    mgrs_file: ~/data/GEDI/mgrs_with_nbest_v2.parquet
+    zone_count_tmp: ~/data/GEDI/zone_count_tmp
+
+  # =========================================================================
+  # download/products/gedi.py
+  # =========================================================================
+  download_all_valid_gedi:
+    _target_: download.products.gedi.GEDI
+    target_type: class
+    target_method: download_all_valid
+    func_args: {}
+    year: 2020
+    n_parallel: 100
+    gedi_table_index_file: ~/data/gvs/gedi/l2a_orbit_table/l2a_orbit_table_2020.parquet
+    save_dir: ~/data/gvs/gedi/veg_sensitivity_gt0p95/all_valid/2020
+    s2_table_file: ~/data/gvs/state/s2_tiles_with_growing_months.parquet
+
+  add_slope:
+    _target_: download.products.gedi.GEDI
+    target_type: class
+    target_method: add_slope
+    func_args: {}
+    year: 2020
+    location_dir: ~/data/gvs/gedi/veg_sensitivity_gt0p95/all_valid/2020
+    dem_meta_file: ~/data/gvs/assets/dem/cop-dem-glo-30_items.parquet
+    save_dir: ~/data/gvs/gedi/veg_sensitivity_gt0p95/all_valid_with_slope/2020
+
+  check_slope_distribution:
+    _target_: download.products.gedi.GEDI
+    target_type: class
+    target_method: check_slope_distribution
+    func_args: {}
+    year: 2020
+    deploy_status_dir: ~/data/gvs/state
+    input_dir: ~/data/gvs/gedi/veg_sensitivity_gt0p95/all_valid_with_slope/2020
+
+  get_used_gedi_points:
+    _target_: download.products.gedi.GEDI
+    target_type: class
+    target_method: get_used_gedi_points
+    func_args: {}
+    year: 2020
+    s2_grid_file: ~/data/gvs/s2_tiles_with_growing_months.parquet
+    used_parq_dir: ~/data/gvs/train_subsets
+    save_dir: ~/data/gvs/fitting_data_coord_partitions
+
+  get_tiles_covered_by_gedi:
+    _target_: download.products.gedi.GEDI
+    target_type: class
+    target_method: get_tiles_covered_by_gedi
+    func_args: {}
+    year: 2020
+    s2_grid_file: ~/data/gvs/s2_tiles_with_growing_months.parquet
+    gedi_table_index_file: ~/data/gvs/gedi/l2a_orbit_table/l2a_orbit_table_2020.parquet
+    save_dir: ~/data/gvs/deploy/correction_2020
+
+  dedup_shots:
+    _target_: download.products.gedi.dedup_shots
+    target_type: function
+    root_dir: ~/data/gvs/gedi/veg_sensitivity_gt0p95
+    split: test
+    year: 2020
+    data_name: original_with_sota_chms_biome
+    parq_dir: '{root_dir}/subset_{split}/{data_name}/{year}'
+
+  # =========================================================================
+  # download/products/sentinel2/
+  # =========================================================================
+  s2_meta_gather:
+    _target_: download.products.sentinel2.train_meta.S2MetaGather
+    target_type: class
+    target_method: process_zone
+    func_args: {}
+    year: 2020
+    zone: 23J
+    rewrite: false
+    debug: false
+    merge_zones: ''
+    n_parallel: 100
+    query_days: 90
+    max_cloud_cover: 50
+    max_water_percentage: 99
+    max_retries: 3
+    gedi_dir: ~/data/gvs/GEDI_extra
+    S2_meta_dir: ~/data/GEDI/S2_geoparquet_items
+    temp_dir: ~/data/gvs/S2_temp
+    s2_grid_file: ~/data/GEDI/Sentinel-2_tilling_shp/sentinel_2_index_shapefile.shp
+    save_dir: ~/data/gvs/GEDI_extra_with_s2_candidates
+
+  s2_best_candidates_api:
+    _target_: download.products.sentinel2.train_best_candidates_api.BestS2FinderAPI
+    target_type: class
+    target_method: find_best_s2
+    func_args: {}
+    year: 2020
+    zone: 23J
+    rewrite: false
+    debug: false
+    patch_size: 15
+    out_res: 10
+    maxCloudCover: 50
+    maxWaterPercentage: 100
+    queryDaysRange: 90
+    extendDays: 30
+    sem_max_release: 60
+    n_parallel: 100
+    gedi_dir: ~/data/gvs/GEDI_extra_with_s2_candidates
+    S2_meta_dir: ~/data/GEDI/S2_geoparquet_items
+    save_dir: ~/data/gvs/GEDI_extra_with_s2_candidates_and_best
+    flag_dir: ~/data/gvs/flags_find_best/
+
+  s2_best_candidates:
+    _target_: download.products.sentinel2.train_best_candidates.BestS2Finder
+    target_type: class
+    target_method: find_best_s2
+    func_args: {}
+    year: 2020
+    zone: 23J
+    rewrite: false
+    debug: false
+    patch_size: 15
+    out_res: 10
+    n_parallel: 100
+    gedi_dir: ~/data/gvs/GEDI_extra_with_s2_candidates
+    save_dir: ~/data/gvs/GEDI_extra_with_s2_candidates_and_best
+    S2_meta_dir: ~/data/GEDI/S2_geoparquet_items
+    flag_dir: ~/data/gvs/flags_find_best/
+
+  s2_download:
+    _target_: download.products.sentinel2.train_data.S2Downloader
+    target_type: class
+    target_method: download_zone
+    func_args: {}
+    year: 2020
+    zone: 23J
+    rewrite: false
+    debug: false
+    patch_size: 15
+    out_res: 10
+    n_parallel: 8
+    gedi_dir: ~/data/gvs/GEDI_extra_with_s2_candidates_and_best
+    save_dir: ~/data/gvs/GEDI_S2_h5_extra
+    flag_dir: ~/data/gvs/Correct_order_flags/
+    S2_meta_dir: ~/data/GEDI/S2_geoparquet_items
+    wc_dem_meta_dir: ~/data/GEDI
+
+  download_inference:
+    _target_: download.products.sentinel2.inference.WorldS2
+    target_type: class
+    target_method: download
+    func_args: {}
+    year: 2020
+    zone: 23J
+    rewrite: false
+    debug: false
+    s2_grid_file: ~/data/gvs/s2_tiles_with_growing_months.parquet
+    wc_parq_file: ~/data/gvs/deploy/esa_wc.parquet
+    store_name: inference
+    comp_name: lz4
+    comp_level: 7
+    max_cloud_cover: 90
+    max_water_percentage: 99
+    total_splits: 21
+    job_id: 5
+
+  download_downstream_task_data:
+    _target_: download.products.sentinel2.train_data.S2DownloaderDownstream
+    target_type: class
+    target_method: download
+    func_args: {}
+    task_name: ''
+    crowd_source_data_file: ~/data/gvs/downstream_task_data/naturalness/reference_data_set_updated.csv
+    output_dir: ~/data/gvs/downstream_task_data
+    s2_parquet: ~/data/gvs/s2_tiles_with_growing_months.parquet
+    wc_dem_meta_dir: ~/data/GEDI
+    n_parallel: 100
+    maxCloudCover: 50
+    year: 2017
+    patch_size: 31
+    out_res: 10
+    job_id: 0
+
+  # =========================================================================
+  # download/products/growing_season.py
+  # =========================================================================
+  agg_growing_season:
+    _target_: download.products.growing_season.GrowingSeason
+    target_type: class
+    target_method: get_growing_months_per_tile
+    func_args: {}
+    year: 2020
+    version: v1
+    asset_id: projects/gisproject-1/assets/sentinel_2_shapefile_with_growing_month_counts
+    save_dir: ~/data/gvs/state

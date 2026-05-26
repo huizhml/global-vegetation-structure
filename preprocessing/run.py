@@ -1,70 +1,26 @@
-import os
-from typing import Any, Callable
-from osgeo import gdal
-from osgeo import osr
-from glob import glob
 from pathlib import Path
-from typing import List, Union, Optional
-import geopandas as gpd
-from hydra.core.config_store import ConfigStore
-from dataclasses import dataclass, field
 import hydra
-import dask
-import subprocess
-import numpy as np
-from rio_cogeo.cogeo import cog_translate
-from rio_cogeo.profiles import cog_profiles
-import pystac
-from tqdm import tqdm
-from omegaconf import MISSING
-from config.base_config_class import FunctionConfig, ClassConfig
+from config.loader import register
 from config.runner import run_cli
 
+# Register every op under the `preprocessing` section of
+# config/preprocessing/config.yaml as a Hydra `run=<name>` choice. Mirrors the
+# per-module entrypoints in evaluation/ (see config/eval/config.yaml).
+#
+# NOTE: default_run was previously 'repartition_data', which is a postprocessing
+# op and was never registered here (so `python -m preprocessing.run` with no
+# override failed to compose). Pointed at a real preprocessing op instead.
+register(
+    Path(__file__).resolve().parents[1] / 'config' / 'preprocessing' / 'config.yaml',
+    section='preprocessing',
+    default_run='cal_naturalness_input_stats',
+)
 
-
-
-defaults = [
-    {'run': 'repartition_data'},
-    "_self_"
-]
-
-@dataclass
-class RunConfig:
-    defaults: List[Any] = field(default_factory=lambda: defaults)
-    run: Any = MISSING
-    
-cs = ConfigStore.instance()
-
-
-# -----------------------------------------------------------------------
-# Calculate mean and std for naturalness classfication
-# -----------------------------------------------------------------------
-@dataclass
-class CalNaturalnessStasConfig(FunctionConfig):
-    data_file: str = '~/data/gvs/evaluation/downstream_tasks/naturalness/results_from_vsm_2017/vsm_patches_ps15_single_h5_72xl3wma_ps31.zarr'
-    out_fp: str = '~/data/gvs/evaluation/downstream_tasks/naturalness/results_from_vsm_2017/vsm_patches_ps15_single_h5_72xl3wma_ps31.npz'
-    _target_: str = 'preprocessing.pipeline.step6_calculate_naturalness_stats.calculate_naturalness_mean_std'
-
-cs.store(group='run', name='cal_naturalness_input_stats', node=CalNaturalnessStasConfig)
-
-
-# -----------------------------------------------------------------------
-# Convert the chunk-by-1 zarr to a single HDF5 (network-FS friendly)
-# -----------------------------------------------------------------------
-@dataclass
-class ZarrToH5Config(FunctionConfig):
-    data_file: str = '~/data/gvs/evaluation/downstream_tasks/naturalness/results_from_vsm_2017/vsm_patches_ps15_single_h5_72xl3wma_ps31.zarr'
-    out_fp: str = '~/data/gvs/evaluation/downstream_tasks/naturalness/results_from_vsm_2017/vsm_patches_ps15_single_h5_72xl3wma_ps31.h5'
-    _target_: str = 'preprocessing.pipeline.step7_zarr_to_h5.convert_zarr_to_h5'
-
-cs.store(group='run', name='zarr_to_h5', node=ZarrToH5Config)
-
-
-cs.store(name='base_config', node=RunConfig) # NOTE: name here should match the default in ../config/base/no_log.yaml
 
 @hydra.main(config_name='no_log', version_base='1.2', config_path='../config/base')
 def main(cfg):
     run_cli(cfg)
+
 
 if __name__ == "__main__":
     main()
