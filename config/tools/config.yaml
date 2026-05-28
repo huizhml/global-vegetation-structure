@@ -56,3 +56,19 @@ tools:
     clip_to_land: false
     biome_file: ~/data/GEDI/ecoregions/wwf_terr_ecos.shp
     biome_cols: null
+
+  # =========================================================================
+  # tools/annotate_locations_map.py
+  # =========================================================================
+  annotate_locations_map:
+    _target_: tools.annotate_locations_map.annotate_locations_on_map
+    target_type: function
+    csv_file: ~/data/gvs/locations/sites.csv
+    out_file: ~/data/gvs/results/tools/annotate_locations_map/sites_map.png
+    extent: null
+    title: null
+    marker_color: '#d62728'
+    marker_size: 60
+    label_fontsize: 9
+    pad_deg: 2.0
+    dpi: 200

@@ -19,6 +19,7 @@ import pystac
 import stackstac
 import geopandas as gpd
 import cartopy.crs as ccrs
+import cartopy.feature as cfeature
 from cartopy.mpl.ticker import LongitudeFormatter, LatitudeFormatter
 import seaborn as sns
 
@@ -255,10 +256,143 @@ def plot_tiff_image(image: xr.DataArray, cmin: int=None, cmax: int=None, cmap: s
     return figs
 
 
-def plot_tiff_image_with_profile(image: xr.DataArray, cmin: int=None, cmax: int=None, cmap: str = None, show_profile: bool = False, **kwargs):
+def _cluster_by_latlon(lats: np.ndarray, lons: np.ndarray, thresh_deg: float):
     """
-    Plot single-band image on Equal Earth projection with an optional latitudinal mean±sd profile on the left.
+    Union-find cluster points whose lat/lon are within `thresh_deg` of each other.
+    Returns a list of index-lists, one per cluster.
     """
+    n = len(lats)
+    parent = list(range(n))
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+    for i in range(n):
+        for j in range(i + 1, n):
+            if abs(lats[i] - lats[j]) <= thresh_deg and abs(lons[i] - lons[j]) <= thresh_deg:
+                ri, rj = find(i), find(j)
+                if ri != rj:
+                    parent[ri] = rj
+    groups = {}
+    for i in range(n):
+        groups.setdefault(find(i), []).append(i)
+    return list(groups.values())
+
+
+def _add_base_map(ax, base_map: str, osm_zoom: int = 4):
+    """
+    Draw a context base map under the data layer. Supported:
+      - 'none' / None: do nothing.
+      - 'naturalearth': vector land/ocean/lakes + admin borders at 10m. No
+        internet, sharp at any zoom, calm palette suited for overlays.
+      - 'osm': OpenStreetMap raster tiles via cartopy.io.img_tiles.OSM.
+        Requires internet; busier visuals.
+    """
+    if base_map in (None, 'none'):
+        return
+    if base_map == 'naturalearth':
+        ax.add_feature(cfeature.NaturalEarthFeature('physical', 'ocean', '10m'),
+                       facecolor='#cfdfeb', edgecolor='none', zorder=0)
+        ax.add_feature(cfeature.NaturalEarthFeature('physical', 'land', '10m'),
+                       facecolor='#f0e8dc', edgecolor='none', zorder=0)
+        ax.add_feature(cfeature.NaturalEarthFeature('physical', 'lakes', '10m'),
+                       facecolor='#cfdfeb', edgecolor='none', zorder=1)
+        ax.add_feature(cfeature.NaturalEarthFeature(
+            'cultural', 'admin_0_boundary_lines_land', '10m'),
+            facecolor='none', edgecolor='#888', linewidth=0.3, zorder=2)
+    elif base_map == 'osm':
+        from cartopy.io.img_tiles import OSM
+        ax.add_image(OSM(), osm_zoom)
+    else:
+        raise ValueError(f'Unknown base_map: {base_map!r}. Use none/naturalearth/osm.')
+
+
+def _read_annotation_csv(annotation_csv: Union[str, Path]) -> pd.DataFrame:
+    """Read CSV with sniffed delimiter and required cols name/lat/lon (case-insensitive)."""
+    df = pd.read_csv(Path(annotation_csv).expanduser(), sep=None, engine='python')
+    cols = {c.lower(): c for c in df.columns}
+    missing = [c for c in ('name', 'lat', 'lon') if c not in cols]
+    if missing:
+        raise ValueError(
+            f'{annotation_csv} is missing required columns {missing}; found {list(df.columns)}'
+        )
+    return df.rename(columns={cols['name']: 'name', cols['lat']: 'lat', cols['lon']: 'lon'})
+
+
+def _overlay_annotations(ax, df: pd.DataFrame,
+                         marker_color: str = '#d62728',
+                         marker_size: int = 12,
+                         label_fontsize: int = 12,
+                         label_color: str = 'black',
+                         label_offset: tuple = (4, 4),
+                         cluster_thresh_deg: float = 3.0,
+                         fan_radius_pts: float = 22.0):
+    """
+    Scatter + label points (cols: name, lat, lon) on a cartopy axis.
+    Points are reprojected from PlateCarree to the axis's projection automatically.
+
+    Points within `cluster_thresh_deg` of each other get their labels fanned
+    out radially around the cluster with leader lines, so they don't overlap.
+    """
+    data_crs = ccrs.PlateCarree()
+    ax.scatter(
+        df['lon'], df['lat'],
+        s=marker_size, color=marker_color,
+        edgecolor='black', linewidth=0.4,
+        zorder=10, transform=data_crs,
+    )
+
+    lats = df['lat'].to_numpy()
+    lons = df['lon'].to_numpy()
+    clusters = _cluster_by_latlon(lats, lons, cluster_thresh_deg)
+
+    for cluster in clusters:
+        if len(cluster) == 1:
+            i = cluster[0]
+            ax.annotate(
+                str(df.iloc[i]['name']),
+                xy=ax.projection.transform_point(lons[i], lats[i], data_crs),
+                xytext=label_offset, textcoords='offset points',
+                fontsize=label_fontsize, color=label_color, zorder=11,
+                bbox=dict(boxstyle='round,pad=0.2', fc='white', ec='none', alpha=0.7),
+            )
+        else:
+            n = len(cluster)
+            # Fan labels evenly around the cluster, starting at the top
+            # (angle = -pi/2 in math convention so cos/sin map to right/up).
+            for k, i in enumerate(cluster):
+                angle = -np.pi / 2 + 2 * np.pi * k / n
+                dx = fan_radius_pts * np.cos(angle)
+                dy = -fan_radius_pts * np.sin(angle)  # screen y is flipped
+                ha = 'left' if dx > 1 else ('right' if dx < -1 else 'center')
+                va = 'bottom' if dy > 1 else ('top' if dy < -1 else 'center')
+                ax.annotate(
+                    str(df.iloc[i]['name']),
+                    xy=ax.projection.transform_point(lons[i], lats[i], data_crs),
+                    xytext=(dx, dy), textcoords='offset points',
+                    fontsize=label_fontsize, color=label_color, zorder=11,
+                    ha=ha, va=va,
+                    bbox=dict(boxstyle='round,pad=0.2', fc='white', ec='none', alpha=0.8),
+                    arrowprops=dict(arrowstyle='-', color='black', lw=0.4,
+                                    shrinkA=0, shrinkB=2),
+                )
+
+
+def plot_tiff_image_with_profile(image: xr.DataArray, cmin: int=None, cmax: int=None, cmap: str = None, show_profile: bool = False, annotation_csv: str = None, crop_to_annotations: bool = False, crop_pad_deg: float = 10.0, base_map: str = 'none', osm_zoom: int = 4, **kwargs):
+    """
+    Plot single-band image on Equal Earth (or PlateCarree when cropped) with
+    an optional latitudinal mean±sd profile on the left.
+
+    - `annotation_csv` (cols: name, lat, lon): overlay points + labels.
+    - `crop_to_annotations`: crop to points' bbox + `crop_pad_deg` padding.
+      Auto-switches projection to PlateCarree for an exact lon/lat rectangle
+      (EqualEarth's curvature would leave bulges otherwise).
+    - `base_map`: 'none' | 'naturalearth' | 'osm'. Drawn under the data so
+      it shows through NoData pixels.
+    """
+    ann_df = _read_annotation_csv(annotation_csv) if annotation_csv is not None else None
+    cropping = crop_to_annotations and ann_df is not None
     if image.ndim == 2:
         image = image.expand_dims('band')
     figs = {}
@@ -279,7 +413,7 @@ def plot_tiff_image_with_profile(image: xr.DataArray, cmin: int=None, cmax: int=
             cmin_ = float(np.nanpercentile(data, 2))
             cmax_ = float(np.nanpercentile(data, 98))
         print(f'{band.item()} cmin: {cmin_}, cmax: {cmax_}')
-        proj = ccrs.EqualEarth()
+        proj = ccrs.PlateCarree() if cropping else ccrs.EqualEarth()
         data_crs = ccrs.PlateCarree()
 
         fig = plt.figure(figsize=kwargs.get('figsize', FIGURE_SIZES['small']))
@@ -295,13 +429,24 @@ def plot_tiff_image_with_profile(image: xr.DataArray, cmin: int=None, cmax: int=
         extent = [x.min(), x.max(), y.min(), y.max()]
         if cmap_.lower() == 'mako':
             cmap_ = sns.color_palette("mako", as_cmap=True)
+        _add_base_map(ax_img, base_map, osm_zoom=osm_zoom)
         ax_img.imshow(
             data.values, cmap=cmap_, vmin=cmin_, vmax=cmax_,
             origin='upper', extent=extent,
-            transform=data_crs
+            transform=data_crs, zorder=3,
         )
-        ax_img.set_global()
+        if cropping:
+            lon_min = max(ann_df['lon'].min() - crop_pad_deg, -180)
+            lon_max = min(ann_df['lon'].max() + crop_pad_deg, 180)
+            lat_min = max(ann_df['lat'].min() - crop_pad_deg, -90)
+            lat_max = min(ann_df['lat'].max() + crop_pad_deg, 90)
+            ax_img.set_extent([lon_min, lon_max, lat_min, lat_max], crs=data_crs)
+        else:
+            ax_img.set_global()
         ax_img.coastlines(linewidth=0.3, color='gray')
+
+        if ann_df is not None:
+            _overlay_annotations(ax_img, ann_df)
 
         fig.canvas.draw()
         map_pos = ax_img.get_position()
@@ -350,6 +495,14 @@ def plot_tiff_image_with_profile(image: xr.DataArray, cmin: int=None, cmax: int=
                 map_pos.y0 + 0.001,
                 map_pos.width * 0.015,
                 map_pos.height * 0.25
+            ])
+        elif cropping:
+            # Lower-left inset for cropped/locator views.
+            cax = fig.add_axes([
+                map_pos.x0 + map_pos.width * 0.03,
+                map_pos.y0 + map_pos.height * 0.05,
+                map_pos.width * 0.015,
+                map_pos.height * 0.20,
             ])
         else:
             cax = fig.add_axes([
@@ -497,7 +650,7 @@ def make_rh_pair_pdf(
             plt.close(fig)
     print(f'saved to {pdf_file}')
     
-def make_global_mosaic_pdf(mosaic_dir: str, tif_filename_pattern: str = 'global_mosaic_*RH*_Q0-Q2.cog.tif', pdf_file: Path=None, multi_pages: bool = False, cmin: float = None, cmax: float = None, cmap: str = None, show_profile: bool = False, **kwargs):
+def make_global_mosaic_pdf(mosaic_dir: str, tif_filename_pattern: str = 'global_mosaic_*RH*_Q0-Q2.cog.tif', pdf_file: Path=None, multi_pages: bool = False, cmin: float = None, cmax: float = None, cmap: str = None, show_profile: bool = False, annotation_csv: str = None, crop_to_annotations: bool = False, crop_pad_deg: float = 10.0, base_map: str = 'none', osm_zoom: int = 4, **kwargs):
     '''
     Make a PDF file where each page renders a global mosaic of a TIFF image
     '''
@@ -516,18 +669,19 @@ def make_global_mosaic_pdf(mosaic_dir: str, tif_filename_pattern: str = 'global_
             plt.close(fig_cover)
             for tif_file in tif_files:
                 image = rio_read(tif_file)
-                figs = plot_tiff_image_with_profile(image, cmin=cmin, cmax=cmax, cmap=cmap)
+                figs = plot_tiff_image_with_profile(image, cmin=cmin, cmax=cmax, cmap=cmap, annotation_csv=annotation_csv, crop_to_annotations=crop_to_annotations, crop_pad_deg=crop_pad_deg, base_map=base_map, osm_zoom=osm_zoom)
                 for band, fig in figs.items():
                     pdf.savefig(fig, bbox_inches='tight', dpi=300)
                     plt.close(fig)
         print(f'saved to {pdf_file}')
     else:
+        suffix = '_zoom_in_annot' if (crop_to_annotations and annotation_csv is not None) else ''
         for tif_file in tif_files:
             image = rio_read(tif_file)
-            figs = plot_tiff_image_with_profile(image, cmin=cmin, cmax=cmax, cmap=cmap, show_profile=show_profile)
+            figs = plot_tiff_image_with_profile(image, cmin=cmin, cmax=cmax, cmap=cmap, show_profile=show_profile, annotation_csv=annotation_csv, crop_to_annotations=crop_to_annotations, crop_pad_deg=crop_pad_deg, base_map=base_map, osm_zoom=osm_zoom)
             for band, fig in figs.items():
                 band_name = '' if 'RH' in band else band
-                _pdf_file = pdf_file.parent / f'{tif_file.stem}{band_name}.pdf' # band is for multibands tif
+                _pdf_file = pdf_file.parent / f'{tif_file.stem}{band_name}{suffix}.pdf' # band is for multibands tif
                 fig.savefig(_pdf_file, bbox_inches='tight', dpi=300)
                 fig.savefig(_pdf_file.with_suffix('.png'), bbox_inches='tight', dpi=300)
                 plt.close(fig)
