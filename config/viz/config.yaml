@@ -103,6 +103,19 @@ visualization:
     cmin: null
     cmax: null
     cmap: null
+    # CSV with cols: name, lat, lon. If set, points are overlaid on each mosaic
+    # in EqualEarth projection (reprojected from PlateCarree automatically).
+    annotation_csv: null
+    # If true, crop the map to the points' bbox + `crop_pad_deg` of padding,
+    # instead of showing the full globe. Auto-switches projection to
+    # PlateCarree when cropping (EqualEarth's curvature leaves bulges).
+    crop_to_annotations: false
+    crop_pad_deg: 10.0
+    # Context layer drawn under the prediction: 'none' | 'naturalearth' | 'osm'.
+    # naturalearth: vector land/ocean/lakes/borders at 10m (no internet).
+    # osm: OpenStreetMap raster tiles (requires internet; `osm_zoom` controls detail).
+    base_map: none
+    osm_zoom: 4
 
   create_pdf_thumb:
     _target_: visualization.core.create_pdf_thumb.make_rh_pair_pdf
