@@ -72,31 +72,37 @@ on_als:
 # =========================================================================
 diversity_maps:
 
+  create_tile_diversity_maps:
+    _target_: evaluation.diversity_maps.create_tile_diversity_maps
+    target_type: function
+    link_results: false
+    tile_id: 35NRA
+    year: 2020
+    product_version: original
+    product_format: cog
+    q_idx: 1
+    chunk_size: 512
+    max_workers: 8
+    bin_width: 5
+    max_height: 150
+    keep_geotiff: false
+    vsm_tile_root: ${root_data_dir}/products/vsm/${.year}/${.product_version}/tiles
+    save_dir: ${root_data_dir}/products/diversity_indices/${.year}/${.product_version}/tiles
+
   create_global_diversity_maps:
     _target_: evaluation.diversity_maps.create_global_diversity_maps
     target_type: function
+    link_results: false
     year: 2020
-    bin_width: 5
-    max_height: 150
-    product: diversity_indices
     product_version: masked
     product_format: cog
+    chunk_size: 512
+    max_workers: 8
+    bin_width: 5
+    max_height: 150
+    keep_geotiff: false
     tif_dir: ${root_data_dir}/products/vsm/${.year}/${.product_version}/mosaic/${.product_format}
-    save_dir: ${root_data_dir}/products/${.product}/${.year}/${.product_version}/mosaic/
-
-  # Same target as above; kept under the historical name used by the justfile
-  # recipe `eval-generate-diversity-indices-map`.
-  generate_diversity_indices_map:
-    _target_: evaluation.diversity_maps.create_global_diversity_maps
-    target_type: function
-    year: 2020
-    bin_width: 5
-    max_height: 150
-    product: diversity_indices
-    product_version: masked
-    product_format: cog
-    tif_dir: ${root_data_dir}/products/vsm/2020/${.product_version}/mosaic/${.product_format}
-    save_dir: ${root_data_dir}/products/${.product}/${.year}/${.product_version}/mosaic/
+    save_dir: ${root_data_dir}/products/diversity_indices/${.year}/${.product_version}/mosaic
 
 
 # =========================================================================
@@ -144,16 +150,6 @@ utils:
 # evaluation/on_diversity_indices.py
 # =========================================================================
 on_diversity_indices:
-
-  compute_entropy:
-    _target_: evaluation.on_diversity_indices.compute_entropy
-    target_type: function
-    output_dir: ${root_data_dir}/products/profile_entropy/2020/tiles/geotiff
-    tile_id: 36NTF
-    year: 2020
-    chunk_size: 512
-    max_workers: 8
-    bin_width: 50
 
   compute_diversity_indices:
     _target_: evaluation.on_diversity_indices.cal_diversity_indices

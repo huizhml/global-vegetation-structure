@@ -85,10 +85,15 @@ viz-global-mosaic-pdf-rh25 *args:
         run.tif_filename_pattern='*RH25*.tif' \
         run.cmap=mako run.cmax=20 run.cmin=0 {{args}}
 
-# 3-D datacube render (override run.bg_color=black for dark background)
+# 3-D datacube render (override run.bg_color=white for white background)
 [group('visualization')]
 viz-datacube *args:
     {{viz}} run=visualize_datacube {{args}}
+
+# 3-D datacube render for Europe (override run.bg_color=white for white background)
+[group('visualization')]
+viz-datacube-eu *args:
+    {{viz}} run=visualize_datacube run.region=europe run.overview_level=1 {{args}}
 
 # Check a mosaic after bias correction
 [group('visualization')]
@@ -357,11 +362,6 @@ eval-with-als-extract-pixels *args:
 eval-chm-with-als-and-lvis *args:
     {{eval-on-als}} run=evaluate_chm_with_als_and_lvis {{args}}
 
-# Generate diversity-indices map
-[group('evaluation')]
-eval-generate-diversity-indices-map *args:
-    {{eval-diversity-maps}} run=generate_diversity_indices_map {{args}}
-
 # Sample points by biome
 [group('evaluation')]
 eval-sample-points-by-biome *args:
@@ -372,12 +372,17 @@ eval-sample-points-by-biome *args:
 eval-partition-points-by-tile *args:
     {{eval-utils}} run=partition_points_by_tile {{args}}
 
-# Compute entropy
+# Compute diversity maps for one tile
 [group('evaluation')]
-eval-compute-entropy *args:
-    {{eval-on-div-indices}} run=compute_entropy {{args}}
+generate-tile-diversity-maps *args:
+    {{eval-diversity-maps}} run=create_tile_diversity_maps {{args}}
 
-# Compute diversity indices
+# Compute diversity maps for downsampled global mosaic (1km)
+[group('evaluation')]
+generate-global-diversity-maps *args:
+    {{eval-diversity-maps}} run=create_global_diversity_maps {{args}}
+
+# Compute diversity indices for sparse points, test set
 [group('evaluation')]
 eval-compute-diversity-indices *args:
     {{eval-on-div-indices}} run=compute_diversity_indices {{args}}

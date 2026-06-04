@@ -99,7 +99,9 @@ def link_results_dir(save_dir, root_results_dir, index_name) -> Path:
         if _abspath(os.readlink(link)) == save_dir:
             return save_dir  # already pointing where we want it
         print(f"  [link_results_dir] re-pointing {link} -> {save_dir}")
-        link.unlink()
+        # missing_ok=True: under SLURM array submission many tasks race
+        # here, and a peer may have unlinked between our check and call.
+        link.unlink(missing_ok=True)
     elif link.exists():
         # A real dir/file already sits at the index location; don't clobber it.
         print(f"  [link_results_dir] {link} exists and is not a symlink; "
@@ -107,8 +109,14 @@ def link_results_dir(save_dir, root_results_dir, index_name) -> Path:
         return save_dir
 
     link.parent.mkdir(parents=True, exist_ok=True)
-    os.symlink(save_dir, link, target_is_directory=True)
-    print(f"  [link_results_dir] {link} -> {save_dir}")
+    try:
+        os.symlink(save_dir, link, target_is_directory=True)
+        print(f"  [link_results_dir] {link} -> {save_dir}")
+    except FileExistsError:
+        # Another concurrent task created the same symlink first. Since they
+        # all share the same save_dir for this op, the winner's link is
+        # equivalent — accept and move on.
+        pass
     return save_dir
 
 
