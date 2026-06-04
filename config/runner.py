@@ -14,9 +14,16 @@ def run_cli(cfg):
     # root_results_dir/<section>/<op> with a symlink pointing back, so all
     # results are browsable in one place under a clean, logical name —
     # decoupled from where the data physically lives, and without moving bytes.
+    #
+    # Ops that produce raw data products (rasters under products/, etc.)
+    # rather than browsable artifacts (plots, CSVs) should set
+    # `link_results: false` in their config to skip this — the products tree
+    # is its own catalog, and the symlink would just add noise (and a small
+    # concurrency footgun under SLURM array submission).
     save_dir = cfg.run.get('save_dir', None)
     root_results_dir = cfg.get('root_results_dir', None)
-    if save_dir is not None and root_results_dir is not None:
+    link_results = cfg.run.get('link_results', True)
+    if link_results and save_dir is not None and root_results_dir is not None:
         op_name = HydraConfig.get().runtime.choices.get('run')
         section = cfg.get('section', None)
         index_name = f'{section}/{op_name}' if section else op_name

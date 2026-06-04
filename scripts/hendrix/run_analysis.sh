@@ -21,10 +21,9 @@ echo "Calculating profile entropy for DK"
 tile_id_file=${HOME}/data/gvs/assets/worklists/dk.txt
 tile_id=$(sed -n "${SLURM_ARRAY_TASK_ID}p" $tile_id_file)
 echo "Processing tile ID: $tile_id"
-
-output_dir=${HOME}/data/gvs/products/profile_entropy/2020/tiles/geotiff
-# python -m evaluation.on_diversity_indices run=compute_entropy run.output_dir=$output_dir run.tile_id=$tile_id run.year=2020
-
+year=2020
+output_dir=${HOME}/data/gvs/products/diversity_indices/${year}/tiles/geotiff
+just create_tile_diversity_maps run.output_dir=${output_dir} run.tile_id=${tile_id} run.year=2020
 ;;
 
 

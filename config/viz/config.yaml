@@ -144,6 +144,8 @@ visualization:
   visualize_datacube:
     _target_: visualization.core.datacube.visualize_datacube
     target_type: function
+    data_dir: ~/data/gvs/products/{product}/{year}/{product_version}/mosaic/{product_format}/
+    save_path: ~/data/gvs/results/vsm_datacube/{product}_{region}_every{rh_step}rhs_{bg_color}_bg_v{version}.png
     product: vsm
     product_format: cog
     product_version: masked
@@ -152,12 +154,39 @@ visualization:
     rh_step: 2
     overview_level: 3
     version: '2'
-    data_dir: ~/data/gvs/products/{product}/{year}/{product_version}/mosaic/{product_format}/
-    save_path: ~/data/gvs/results/vsm_datacube/{product}_every{rh_step}rhs_{bg_color}_bg_v{version}.png
+    # region: 'global' (no mask) or a key from REGIONS in datacube.py
+    # (currently: 'europe' — uses EU countries.gpkg + EPSG:3035 projection).
+    region: global
+    # Optional override for the region preset's vector file (.gpkg/.shp/.geojson).
+    # Leave null to use the path declared in REGIONS[region]['file'].
+    region_file: null
+    # Optional override for the region preset's exclude list. Names matched
+    # case-insensitively against the first name-like column in the gpkg.
+    # Leave null to use REGIONS[region]['exclude'] (e.g. ['Iceland'] for europe).
+    exclude: null
+    # Optional override for the region preset's clip bbox in EPSG:4326.
+    # Either a single [lon_min, lat_min, lon_max, lat_max] OR a list of such
+    # bboxes whose union forms the clip region. Applied AFTER `exclude`.
+    # Use this to cut Atlantic islands off the mainland multipolygon; the
+    # europe preset uses two boxes to also keep Iceland.
+    clip_bbox: null
+    # Camera overrides — leave null to use REGIONS[region]['camera']. See
+    # plot_datacube docstring for what each knob does.
+    # camera_pitch: 1 = oblique (legacy global view), 0 = pure top-down.
+    # z_spacing: spacing between RH layers in normalised units (xy is 0..100);
+    #   shrink to flatten the cube relative to its footprint.
+    camera_shift_x: null
+    camera_shift_y: null
+    camera_zoom: null
+    camera_pitch: null
+    z_spacing: null
     cmap: inferno
     bg_color: black
     show_top_boundary: true
-    aspect_ratio: 2.0
+    # Final image width/height ratio. Leave null to use REGIONS[region]
+    # ['aspect_ratio'] (global=2.0 wide-strip, europe=null no-crop).
+    # Set a number here to force-override (e.g. 1.5).
+    aspect_ratio: null
 
   # =========================================================================
   # visualization/core/create_boxplot.py

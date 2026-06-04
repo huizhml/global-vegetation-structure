@@ -185,6 +185,9 @@ def evaluate(df_dir: str, save_dir: str = None, ref_col: str = 'als', **kwargs) 
     sum_me =0
     ref = []
     for tile_id in stats.keys():
+        # if stats[tile_id]['r2'] < 0:
+        #     print(f"Warning: tile {tile_id} has negative R^2 ({stats[tile_id]['r2']:.2f}), skipping in global stats")
+        #     continue
         rss += stats[tile_id]['rss']
         n += stats[tile_id]['n']
         sum_me += stats[tile_id]['me'] * stats[tile_id]['n']

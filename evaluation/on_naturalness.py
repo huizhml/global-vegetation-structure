@@ -18,7 +18,7 @@ import seaborn as sns
 import xgboost as xgb
 import warnings
 from evaluation.utils import load_vsm_naturalness
-from evaluation.on_diversity_indices import _chunk_diversity
+from evaluation.diversity_maps import _chunk_diversity
 from const import VSM_NODATA, KEY_RHS_EVAL, FONT_SIZES, FIGURE_SIZES, set_plot_fonts, fewer_ticks
 
 set_plot_fonts()

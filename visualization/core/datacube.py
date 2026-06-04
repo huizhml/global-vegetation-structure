@@ -22,6 +22,192 @@ from download.core.utils import get_epsg_from_tile
 pv.OFF_SCREEN = True
 
 
+# Region presets. Each entry bundles:
+#   file       — vector boundary (.gpkg/.shp/.geojson); None = no spatial mask
+#   projection — pyproj-acceptable CRS string for plot_datacube
+#   camera     — {shift_x, shift_y, zoom} for the oblique 3-D view; see
+#                plot_datacube for what each knob does
+REGIONS = {
+    "global": {
+        "file": None,
+        # Equal Earth — global equal-area, wide-and-short framing.
+        "projection": "+proj=eqearth",
+        # pitch=1 keeps the legacy oblique view; z_spacing=6 keeps the cube
+        # tall relative to its footprint.
+        "camera": {
+            "shift_x": 18.0, "shift_y": 5.0,
+            "zoom": 1.2, "pitch": 1.0,
+        },
+        "z_spacing": 6.0,
+        "aspect_ratio": 2.0,
+        "scalar_bar": {
+            "position_x": 0.04, "position_y": 0.6,
+            "height": 0.22, "width": 0.03,
+            "label_font_size": 72, "n_labels": 2,
+        },
+    },
+    "europe": {
+        "file": "~/data/gvs/results/eu_results/countries.gpkg",
+        # ETRS89-extended / LAEA Europe — the official equal-area projection
+        # for pan-European statistical and cartographic products.
+        "projection": "EPSG:3035",
+        # Lower pitch tilts the camera more top-down; smaller z_spacing
+        # compresses the time-axis so the cube isn't a tall skinny column.
+        # Iterate from here.
+        "camera": {
+            "shift_x": 60.0, "shift_y": 10.0,
+            #  standard zoom; >1 closer, <1 wider.
+            "zoom": 0.6, "pitch": 1, #  view tilt, 0..1. 1 = the legacy oblique south-east view, 0 = pure top-down
+        },
+        "z_spacing": 4.0, # how thick each RH layer is in the normalized cube
+        "exclude": ["Cyprus"],
+        "clip_bbox": [
+            (-12.0, 30.0, 50.0, 75.0),   # mainland Europe + UK + Scandinavia
+            (-25.0, 62.0, -12.0, 67.0),  # Iceland
+        ],
+        "aspect_ratio": 1.7777777778,
+        # Colorbar disabled — Europe panels are typically shown without one.
+        # Set this to a dict (same keys as the global preset) to bring it back.
+        "scalar_bar": False,
+    },
+}
+
+
+def _load_region_geometry(
+    region: str,
+    region_file: str = None,
+    exclude: list = None,
+    clip_bbox: tuple = None,
+):
+    """Return a shapely (Multi)Polygon for `region` in EPSG:4326.
+
+    `region_file` overrides the preset's `file`; `exclude` overrides the
+    preset's exclude list. Excluded names are matched case-insensitively
+    against the first name-like column present in the vector file.
+    `clip_bbox=(lon_min, lat_min, lon_max, lat_max)` further trims the
+    geometry (applied after exclude).
+    """
+    spec = REGIONS[region]
+    path = Path(region_file or spec["file"]).expanduser()
+    gdf = gpd.read_file(path)
+    if gdf.crs is None:
+        raise ValueError(f"region file {path} has no CRS")
+    if gdf.crs.to_epsg() != 4326:
+        gdf = gdf.to_crs("EPSG:4326")
+
+    exclude = exclude if exclude is not None else spec.get("exclude", [])
+    if exclude:
+        candidate_cols = [
+            "NAME", "name", "NAME_EN", "NAME_LONG",
+            "ADMIN", "admin", "CNTR_NAME", "country", "Country",
+        ]
+        name_col = next((c for c in candidate_cols if c in gdf.columns), None)
+        if name_col is None:
+            print(
+                f"WARNING: 'exclude'={exclude} set but no name column found "
+                f"in {path}; available columns: {list(gdf.columns)}"
+            )
+        else:
+            lower_exclude = {e.casefold() for e in exclude}
+            keep = ~gdf[name_col].astype(str).str.casefold().isin(lower_exclude)
+            dropped = int((~keep).sum())
+            gdf = gdf[keep]
+            print(
+                f"Dropped {dropped} feature(s) matching {exclude} on "
+                f"column '{name_col}'"
+            )
+
+    geom = gdf.union_all()
+
+    clip_bbox = clip_bbox if clip_bbox is not None else spec.get("clip_bbox")
+    if clip_bbox is not None:
+        from shapely.geometry import box
+        from shapely.ops import unary_union
+        # Accept either a single bbox or a list of bboxes (union them).
+        bboxes = (
+            [tuple(b) for b in clip_bbox]
+            if hasattr(clip_bbox[0], "__iter__")
+            else [tuple(clip_bbox)]
+        )
+        clip_shape = unary_union([box(*bb) for bb in bboxes])
+        before_bounds = geom.bounds
+        geom = geom.intersection(clip_shape)
+        print(
+            f"Clipped region geometry to {len(bboxes)} bbox(es) {bboxes} "
+            f"(bounds {before_bounds} -> {geom.bounds})"
+        )
+    return geom
+
+
+def _mask_data_to_region(
+    data, lons, lats, region: str,
+    region_file: str = None,
+    exclude: list = None,
+    clip_bbox: tuple = None,
+):
+    """Crop and mask `data` to the exact shape of `region`.
+
+    Returns (data, lons, lats) where pixels outside the region polygon are NaN
+    and the arrays are cropped to the region's bounding box.
+    """
+    from rasterio.features import rasterize
+    from rasterio.transform import from_origin
+
+    geom = _load_region_geometry(
+        region, region_file=region_file, exclude=exclude, clip_bbox=clip_bbox,
+    )
+
+    if np.nanmax(lons) > 180:
+        lons = ((lons + 180) % 360) - 180
+        order = np.argsort(lons)
+        lons = lons[order]
+        data = data[:, order, :]
+
+    lon_min, lat_min, lon_max, lat_max = geom.bounds
+    lon_mask = (lons >= lon_min) & (lons <= lon_max)
+    lat_mask = (lats >= lat_min) & (lats <= lat_max)
+    if not lon_mask.any() or not lat_mask.any():
+        raise ValueError(
+            f"region '{region}' bounds {geom.bounds} do not overlap data extent"
+        )
+    lons_c = lons[lon_mask]
+    lats_c = lats[lat_mask]
+    data_c = data[lat_mask][:, lon_mask, :]
+
+    # rasterio wants a north-up transform. Flip to descending lats temporarily
+    # if needed, then flip back so the existing plot logic still sees the
+    # original orientation.
+    flip_lat = lats_c[0] < lats_c[-1]
+    if flip_lat:
+        lats_for_tx = lats_c[::-1]
+        data_c = data_c[::-1, :, :]
+    else:
+        lats_for_tx = lats_c
+
+    nx = len(lons_c)
+    ny = len(lats_for_tx)
+    dlon = (lons_c[-1] - lons_c[0]) / max(nx - 1, 1)
+    dlat = (lats_for_tx[0] - lats_for_tx[-1]) / max(ny - 1, 1)
+    west = lons_c[0] - dlon / 2.0
+    north = lats_for_tx[0] + dlat / 2.0
+    transform = from_origin(west, north, dlon, dlat)
+
+    mask = rasterize(
+        [(geom, 1)],
+        out_shape=(ny, nx),
+        transform=transform,
+        fill=0,
+        dtype="uint8",
+    ).astype(bool)
+
+    data_c[~mask] = np.nan
+
+    if flip_lat:
+        data_c = data_c[::-1, :, :]
+
+    return data_c, lons_c, lats_c
+
+
 def plot_datacube(
     data: np.ndarray,
     lons: np.ndarray,
@@ -32,9 +218,16 @@ def plot_datacube(
     show_top_boundary: bool = False,
     min_contour_points: int = 50,
     aspect_ratio: float = None,
+    projection: str = "+proj=eqearth",
+    camera_shift_x: float = 18.0,
+    camera_shift_y: float = 5.0,
+    camera_zoom: float = 1.2,
+    camera_pitch: float = 1.0,
+    z_spacing: float = 6.0,
+    scalar_bar: dict = None,
 ):
-    """Render a 3-D datacube as a volume with Equal Earth projection
-    and data-coverage boundary outlines on the base plane.
+    """Render a 3-D datacube as a volume and data-coverage boundary outlines
+    on the base plane.
 
     Parameters
     ----------
@@ -42,6 +235,23 @@ def plot_datacube(
         Target width/height ratio for the final image.  e.g. 2.5 means
         the image will be 2.5× wider than tall.  None keeps the original
         proportions after auto-crop.
+    projection : str
+        Any CRS string accepted by pyproj (EPSG code, proj string, WKT).
+        Defaults to Equal Earth — global equal-area. For Europe use
+        "EPSG:3035" (ETRS89 LAEA).
+    camera_shift_x, camera_shift_y : float
+        Horizontal / "into-the-scene" offsets applied to both the eye and
+        focal point, in the [0, 100] normalised projected-coord units.
+        +shift_x moves eye east, +shift_y lifts the eye toward the focal.
+    camera_zoom : float
+        Parallel-projection zoom factor. >1 zooms in, <1 zooms out.
+    camera_pitch : float
+        View tilt in [0, 1]. 1 = the oblique south-east view (legacy global
+        framing); 0 = pure top-down. Intermediate values blend the two.
+    z_spacing : float
+        Spacing between RH layers in the normalised projected grid. The xy
+        extent is normalised to [0, 100], so this is also the unit per layer
+        on the time axis. Smaller = shorter cube relative to its footprint.
     """
 
     # Boundary / text colour: contrast with background
@@ -113,9 +323,9 @@ def plot_datacube(
     vol = np.nan_to_num(data, nan=sentinel)
     vol = np.clip(vol, sentinel, vmax)
 
-    # ── 5. Project lon/lat → Equal Earth ────────────────────────────────
+    # ── 5. Project lon/lat → target CRS ─────────────────────────────────
     transformer = Transformer.from_crs(
-        "EPSG:4326", "+proj=eqearth", always_xy=True
+        "EPSG:4326", projection, always_xy=True
     )
 
     lon2d, lat2d = np.meshgrid(lons, lats)  # (ny, nx)
@@ -131,8 +341,6 @@ def plot_datacube(
 
     x2d_n = (x2d - x_min) * scale  # (ny, nx), range ~[0, 100]
     y2d_n = (y2d - y_min) * scale
-
-    z_spacing = 6.0
 
     # ── 6. Project boundary polylines into the same normalised space ────
     z_top = (nz - 1) * z_spacing  # top layer of the volume
@@ -241,36 +449,45 @@ def plot_datacube(
         show_scalar_bar=False,
     )
 
-    # Dummy mesh for a clean scalar bar
-    dummy = pv.PolyData(np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]))
-    dummy["values"] = np.array([0.0, vmax])
     # ── Scalar-bar layout (single source of truth) ────────────────────
-    sbar_x = 0.04           # left edge (normalised viewport)
-    sbar_y = 0.6          # bottom edge
-    sbar_h = 0.22          # height
-    sbar_w = 0.03          # width
-    sbar_title_gap = 0.02  # gap between bar top and title
-
-    p.add_mesh(
-        dummy,
-        scalars="values",
-        cmap=cmap,
-        clim=(0, vmax),
-        show_scalar_bar=True,
-        opacity=0.0,
-        scalar_bar_args={
-            "title": "",
-            "color": line_color,
-            "vertical": True,
-            "position_x": sbar_x,
-            "position_y": sbar_y,
-            "height": sbar_h,
-            "width": sbar_w,
-            "label_font_size":72,
+    # Defaults match the legacy global framing; override per-region via
+    # REGIONS[region]["scalar_bar"] or pass `scalar_bar=...` directly.
+    # Pass `scalar_bar=False` to suppress the colorbar entirely.
+    if scalar_bar is not False:
+        sbar = {
+            "position_x": 0.04,
+            "position_y": 0.6,
+            "height": 0.22,
+            "width": 0.03,
+            "label_font_size": 72,
             "n_labels": 2,
-            "fmt": "%.0f",
-        },
-    )
+        }
+        if scalar_bar:
+            sbar.update(scalar_bar)
+
+        # Dummy mesh carries the scalar bar; the volume itself has it off.
+        dummy = pv.PolyData(np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]))
+        dummy["values"] = np.array([0.0, vmax])
+        p.add_mesh(
+            dummy,
+            scalars="values",
+            cmap=cmap,
+            clim=(0, vmax),
+            show_scalar_bar=True,
+            opacity=0.0,
+            scalar_bar_args={
+                "title": "",
+                "color": line_color,
+                "vertical": True,
+                "position_x": sbar["position_x"],
+                "position_y": sbar["position_y"],
+                "height": sbar["height"],
+                "width": sbar["width"],
+                "label_font_size": sbar["label_font_size"],
+                "n_labels": sbar["n_labels"],
+                "fmt": "%.0f",
+            },
+        )
 
     # # Manually place the colorbar title, left-aligned with the bar
     # import vtk
@@ -314,16 +531,31 @@ def plot_datacube(
     diag = np.sqrt((bx1 - bx0) ** 2 + (by1 - by0) ** 2 + (bz1 - bz0) ** 2)
     print(f"Grid diagonal: {diag:.2f}")
 
-    shift_x = 18.0
-    shift_y = 5.0
+    shift_x = camera_shift_x
+    shift_y = camera_shift_y
+    pitch = float(np.clip(camera_pitch, 0.0, 1.0))
 
-    p.camera_position = [
-        (cx + shift_x, by0 + diag * 0.02 + shift_y, bz1 + diag * 0.1),  # eye
-        (cx - 0.5 + shift_x, cy - 0.1 + shift_y, cz),  # focal point
-        (0, 0, 1),  # view-up
-    ]
+    # Two camera anchors blended by `pitch`:
+    #   pitch=1 -> oblique south-east view (legacy global framing)
+    #   pitch=0 -> pure top-down (eye directly above the focal)
+    eye_y_obl = by0 + diag * 0.02 + shift_y
+    eye_z_obl = bz1 + diag * 0.1
+    eye_y_top = cy - 0.1 + shift_y
+    eye_z_top = bz1 + diag * 1.5
+
+    eye = (
+        cx + shift_x,
+        pitch * eye_y_obl + (1 - pitch) * eye_y_top,
+        pitch * eye_z_obl + (1 - pitch) * eye_z_top,
+    )
+    focal = (cx - 0.5 + shift_x, cy - 0.1 + shift_y, cz)
+    # View-up rotates from world-+z (oblique) to world-+y (top-down) so the
+    # north of the map stays "up" in the image as we tilt down.
+    view_up = (0.0, 1.0 - pitch, pitch)
+
+    p.camera_position = [eye, focal, view_up]
     p.enable_parallel_projection()
-    p.camera.zoom(1.2)
+    p.camera.zoom(camera_zoom)
 
     p.set_background(bg_color)
     p.show(auto_close=False)
@@ -398,6 +630,10 @@ def read_datacube(
     filename_pattern: str = "*.tif",
     overview_level: int = 4,
     rh_step: int = 2,
+    region: str = None,
+    region_file: str = None,
+    exclude: list = None,
+    clip_bbox: tuple = None,
 ):
     data_dir = Path(data_dir).expanduser()
     files = list(data_dir.glob(filename_pattern))
@@ -411,6 +647,13 @@ def read_datacube(
     lons, lats, nodata = read_coords(files[0], overview_level=overview_level)
     data = data.astype(np.float32)
     data[data == nodata] = np.nan
+    if region is not None and region != "global":
+        data, lons, lats = _mask_data_to_region(
+            data, lons, lats, region,
+            region_file=region_file,
+            exclude=exclude,
+            clip_bbox=clip_bbox,
+        )
     return data, lons, lats
 
 
@@ -472,6 +715,17 @@ def visualize_datacube(
     show_top_boundary: bool = True,
     min_contour_points: int = 50,
     aspect_ratio: float = None,
+    region: str = None,
+    region_file: str = None,
+    exclude: list = None,
+    clip_bbox: tuple = None,
+    projection: str = None,
+    camera_shift_x: float = None,
+    camera_shift_y: float = None,
+    camera_zoom: float = None,
+    camera_pitch: float = None,
+    z_spacing: float = None,
+    scalar_bar: dict = None,
     **kwargs,
 ):
     data, lons, lats = read_datacube(
@@ -479,14 +733,51 @@ def visualize_datacube(
         filename_pattern=filename_pattern,
         rh_step=rh_step,
         overview_level=overview_level,
+        region=region,
+        region_file=region_file,
+        exclude=exclude,
+        clip_bbox=clip_bbox,
     )
+    # Resolve from REGIONS preset: explicit arg > region preset > global preset.
+    preset = REGIONS.get(region, REGIONS["global"])
+    if projection is None:
+        projection = preset.get("projection", REGIONS["global"]["projection"])
+    cam = preset.get("camera", REGIONS["global"]["camera"])
+    if camera_shift_x is None:
+        camera_shift_x = cam["shift_x"]
+    if camera_shift_y is None:
+        camera_shift_y = cam["shift_y"]
+    if camera_zoom is None:
+        camera_zoom = cam["zoom"]
+    if camera_pitch is None:
+        camera_pitch = cam.get("pitch", REGIONS["global"]["camera"]["pitch"])
+    if z_spacing is None:
+        z_spacing = preset.get("z_spacing", REGIONS["global"]["z_spacing"])
+    if aspect_ratio is None:
+        aspect_ratio = preset.get("aspect_ratio")
+    if scalar_bar is None:
+        scalar_bar = preset.get("scalar_bar", REGIONS["global"].get("scalar_bar"))
+
     save_path = Path(save_path).expanduser()
     print(f"Read datacube with shape {data.shape}, lons {lons.shape}, lats {lats.shape}")
+    print(f"Projecting with CRS: {projection}")
+    print(
+        f"Camera: shift_x={camera_shift_x}, shift_y={camera_shift_y}, "
+        f"zoom={camera_zoom}, pitch={camera_pitch}, z_spacing={z_spacing}, "
+        f"aspect_ratio={aspect_ratio}"
+    )
     plot_datacube(
         data, lons, lats, save_path, cmap=cmap, bg_color=bg_color,
         show_top_boundary=show_top_boundary,
         min_contour_points=min_contour_points,
         aspect_ratio=aspect_ratio,
+        projection=projection,
+        camera_shift_x=camera_shift_x,
+        camera_shift_y=camera_shift_y,
+        camera_zoom=camera_zoom,
+        camera_pitch=camera_pitch,
+        z_spacing=z_spacing,
+        scalar_bar=scalar_bar,
     )
 
 
