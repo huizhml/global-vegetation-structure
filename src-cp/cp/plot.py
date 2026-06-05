@@ -20,7 +20,7 @@ def get_tint(color, factor=0.5):
 
 
 def nature_subplot_formatting(ax, title):
-    ax.set_title(title, fontsize=6, pad=4)
+    ax.set_title(title, pad=4)  # fontsize=6
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
     ax.xaxis.grid(True, color="#E0E0E0", linestyle="-", linewidth=0.5, zorder=0)
@@ -28,24 +28,20 @@ def nature_subplot_formatting(ax, title):
     ax.tick_params(axis="both", labelsize=6)
 
 
-def nature_closing_figure_formatting(fig, legend_elements, save_path):
+def nature_closing_figure_formatting(
+    fig, legend_elements, save_path, legend_loc="outside upper center"
+):
+    side_locs = {"outside left", "outside right"}
+    ncol = 1 if legend_loc in side_locs else 3
     fig.legend(
         handles=legend_elements,
-        loc="upper center",
-        bbox_to_anchor=(0.5, 1.05),
-        ncol=3,
+        loc=legend_loc,
+        ncol=ncol,
         frameon=False,
-        fontsize=6,
         handletextpad=0.4,
         columnspacing=1.5,
         labelspacing=0.8,
     )
-
-    # ---------------------------------------------------------
-    # 5. High-Res Export
-    # ---------------------------------------------------------
-    plt.tight_layout(w_pad=1.0, h_pad=2.0)
-    plt.subplots_adjust(top=0.90, bottom=0.15)
 
     plt.savefig(
         save_path,
@@ -56,6 +52,13 @@ def nature_closing_figure_formatting(fig, legend_elements, save_path):
         transparent=False,
     )
     plt.close()
+
+
+def set_supxlabel(fig, label):
+    xlabel_pad_in = 0.15  # fixed gap in inches, regardless of figsize
+    y_xlabel = xlabel_pad_in / fig.get_size_inches()[1]
+
+    fig.supxlabel(label, fontsize=7, y=-y_xlabel)
 
 
 def plot_rh_coverage_per_biome(
@@ -72,6 +75,7 @@ def plot_rh_coverage_per_biome(
     color=OKABE_ITO_PALETTE["blue"],
     target_line_color=OKABE_ITO_PALETTE["orange"],
     skip_groups=None,
+    legend_loc="outside upper center",
 ):
     # ---------------------------------------------------------
     # 1. Setup the Plot (Double Column Width)
@@ -84,6 +88,7 @@ def plot_rh_coverage_per_biome(
         sharex=True,
         sharey=True,
         facecolor="white",
+        constrained_layout=True,
     )
     axes = axes.flatten()
     ys_mapping = {val: idx for idx, val in enumerate(y_axis_order)}
@@ -158,11 +163,18 @@ def plot_rh_coverage_per_biome(
     axes[0].set_yticks(range(len(y_axis_order)))
     axes[0].set_yticklabels(y_axis_order)
 
-    # Shared X-label
-    fig.supxlabel("Coverage", fontsize=8, y=0.05)
+    set_supxlabel(fig, "Coverage")
+    for ax in axes.flatten():
+        ax.xaxis.set_major_formatter(
+            plt.FuncFormatter(lambda x, _: f"{x:.1f}".lstrip("0"))
+        )
+        ax.margins(x=0.1, y=0.1)  # 15% padding on each side of the data range
 
     # Legend (Placed at the top center of the entire figure)
     shaded_color = get_tint(color, factor=tint_factor)
+    target_cov_label = f"Min. target coverage ({100 * (1 - alpha):.0f}%)"
+    if legend_loc is not None:
+        target_cov_label = f"Min. target\ncoverage ({100 * (1 - alpha):.0f}%)"
     legend_elements = [
         mlines.Line2D(
             [0],
@@ -194,10 +206,15 @@ def plot_rh_coverage_per_biome(
             linewidth=1,
             alpha=1,
             # label=textwrap.fill("Min. target coverage", width=15),
-            label=f"Min. target coverage ({100 * (1 - alpha):.0f}%)",
+            label=target_cov_label,
         ),
     ]
-    nature_closing_figure_formatting(fig, legend_elements, save_path)
+    xlim = axes[0].get_xlim()
+    xticks = [t for t in axes[0].get_xticks() if xlim[0] <= t <= xlim[1]]
+    nature_closing_figure_formatting(
+        fig, legend_elements, save_path, legend_loc
+    )
+    return xlim, xticks
 
 
 def plot_rh_width_changes_per_biome(
@@ -213,6 +230,7 @@ def plot_rh_width_changes_per_biome(
     color_worsened=OKABE_ITO_PALETTE["vermillion"],
     color_initial="#E0E0E0",
     skip_groups=None,
+    legend_loc="outside upper center",
 ):
     # ---------------------------------------------------------
     # 1. Setup the Plot
@@ -224,6 +242,7 @@ def plot_rh_width_changes_per_biome(
         sharex=True,
         sharey=True,
         facecolor="white",
+        constrained_layout=True,
     )
     axes = axes.flatten()
     ys_mapping = {val: idx for idx, val in enumerate(y_axis_order)}
@@ -320,7 +339,7 @@ def plot_rh_width_changes_per_biome(
     axes[0].set_yticks(range(len(y_axis_order)))
     axes[0].set_yticklabels(y_axis_order)
 
-    fig.supxlabel("Average Interval Width [dm]", fontsize=8, y=0.05)
+    set_supxlabel(fig, "Average width (m)")
 
     legend_elements = [
         mpatches.Patch(facecolor=color_initial, label="Uncalibrated width"),
@@ -328,4 +347,88 @@ def plot_rh_width_changes_per_biome(
         mpatches.Patch(facecolor=color_worsened, label="Width increase"),
     ]
 
-    nature_closing_figure_formatting(fig, legend_elements, save_path)
+    nature_closing_figure_formatting(
+        fig, legend_elements, save_path, legend_loc
+    )
+
+
+def plot_global_coverage(
+    calibrated_global: pd.Series,
+    initial_global: pd.Series,
+    save_path: str,
+    y_axis_order: list[str],
+    alpha: float,
+    figsize=(1.0, 4.5),
+    tint_factor=0.3,
+    color=OKABE_ITO_PALETTE["blue"],
+    target_line_color=OKABE_ITO_PALETTE["orange"],
+    xlim=(0.78, 0.96),
+    xticks=(0.8, 0.9),
+):
+    fig, ax = plt.subplots(figsize=figsize, constrained_layout=True)
+    ys_mapping = {val: idx for idx, val in enumerate(y_axis_order)}
+    shaded_color = get_tint(color, factor=tint_factor)
+
+    for y_tick in y_axis_order:
+        calibrated_val = calibrated_global[y_tick]
+        initial_val = initial_global[y_tick]
+        y_pos = ys_mapping[y_tick]
+
+        ax.scatter(
+            initial_val,
+            y_pos,
+            color=shaded_color,
+            marker="o",
+            s=15,
+            zorder=4,
+            edgecolors="none",
+        )
+        ax.plot(
+            [initial_val, calibrated_val],
+            [y_pos, y_pos],
+            color=shaded_color,
+            linewidth=1.0,
+            zorder=3,
+        )
+        ax.scatter(
+            calibrated_val,
+            y_pos,
+            color=color,
+            marker="D",
+            s=12,
+            edgecolors="black",
+            linewidth=0.4,
+            zorder=5,
+        )
+
+    ax.axvline(
+        1 - alpha,
+        color=target_line_color,
+        linestyle="--",
+        linewidth=1,
+        zorder=2,
+    )
+
+    ax.set_yticks(range(len(y_axis_order)))
+    ax.set_yticklabels(y_axis_order)
+    nature_subplot_formatting(ax, "Global")
+    set_supxlabel(fig, "Coverage")
+    # ax.xaxis.set_major_formatter(
+    #     plt.FuncFormatter(lambda x, _: f"{x:.1f}".lstrip("0"))
+    # )
+    # ax.set_xlim(*xlim)
+    # ax.set_xticks(list(xticks))
+
+    ax.margins(x=0.1)  # 15% padding on each side of the data range
+    ax.xaxis.set_major_formatter(
+        plt.FuncFormatter(lambda x, _: f"{x:.2f}".lstrip("0"))
+    )
+    plt.savefig(
+        save_path,
+        dpi=300,
+        format="pdf",
+        bbox_inches="tight",
+        facecolor="white",
+        transparent=False,
+    )
+    plt.close()
