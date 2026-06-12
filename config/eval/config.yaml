@@ -331,3 +331,37 @@ on_glcm_texture:
     save_dir: /projects/dereeco/data/gvs/downstream_tasks/naturalness/results_from_vsm_2020/glcm_texture_train
     bin_width: 5
     n_levels: 100
+
+
+# =========================================================================
+# evaluation/protected_area_analysis.py
+# =========================================================================
+protected_area_analysis:
+  pa_dir: ${eval_dir}/protected_areas
+
+  analyze_protected_areas:
+    _target_: evaluation.protected_area_analysis.analyze_protected_areas
+    target_type: function
+    year: 2020
+    diversity_file:    ${root_data_dir}/products/diversity_indices/${.year}/masked/mosaic/cog/diversity_maps_bin5_max150.cog.tif
+    rh98_file:         ${root_data_dir}/products/vsm/${.year}/masked/mosaic/cog/RH98_Q1.tif
+    fhd_band: 1   # band order in diversity_file: 1=fhd, 2=enl1d, 3=enl2d, 4=cr
+    enl_band: 3   # 2=enl1d, 3=enl2d
+    cr_band: 4
+    bin_size: 5   # metres; max FHD = ln(RH98 / bin_size) used to normalise fhd_rel
+    wdpa_file:         ${pa_dir}/wdpa_data/wdpa_terrestrial.gpkg
+    wdpa_layer:        null  # set to e.g. WDPA_poly_<release> if the gpkg has multiple layers
+    wdpa_cache_file:   ${pa_dir}/cache/wdpa_mask.tif
+    biomes_file:       ~/data/GEDI/ecoregions/wwf_terr_ecos.shp
+    biomes_layer:      null
+    biomes_cache_file: ${pa_dir}/cache/biomes.tif
+    naturalness_file:  ${root_data_dir}/evaluation/downstream_tasks/naturalness/reference_data_set_updated.csv
+    save_dir:          ${pa_dir}/results
+    biome_attribute: BIOME
+    forest_biomes: [1, 2, 3, 4, 5, 6, 12, 14]
+    forest_threshold: 5  # metres of RH98; pixels taller than this count as forest
+    naturalness_col: Land_use_ID
+    primary_forest_value: 11
+    lon_col: Longitude
+    lat_col: Latitude
+    min_primary_samples: 100
