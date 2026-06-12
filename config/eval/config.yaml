@@ -365,3 +365,80 @@ protected_area_analysis:
     lon_col: Longitude
     lat_col: Latitude
     min_primary_samples: 100
+
+  # AUC of the normalized RH profile (height-independent structure) sampled at
+  # 10 m, compared vs RH98. Reuses the same WDPA/biome caches + naturalness CSV.
+  # The 10 m RH product is per-S2-tile (n_rh_bands single-band files per tile in
+  # local UTM). Tiles live in different folders, so each tile's RH directory is
+  # resolved through the STAC collection; points are grouped by tile and sampled
+  # one process per tile.
+  analyze_protected_areas_auc:
+    _target_: evaluation.protected_area_analysis.analyze_protected_areas_auc
+    target_type: function
+    year: 2020
+    rh98_1km_file:     ${root_data_dir}/products/vsm/${.year}/masked/mosaic/cog/RH98_Q1.tif
+    rh98_1km_in_decimetres: true
+    # Per-tile 10 m RH product, resolved via STAC: each item's RH98_Q1 asset
+    # href -> the tile folder holding RH{level}_Q{q_idx}.tif.
+    stac_col_dir:      ${root_data_dir}/products/gvsm_stac_catalog/vsm_local_masked
+    rh_10m_filename_pattern: "RH{level}_Q{q_idx}.tif"
+    q_idx: 1
+    s2_grid_file:      ~/data/gvs/state/s2_tiles_with_growing_months.parquet
+    max_workers: 8
+    rh_10m_in_decimetres: true
+    n_rh_bands: 101
+    # Sample every Nth RH level (top kept as RH98 denominator; RH0 always
+    # skipped since it's negative). The dominant cost is per-tile file opens on
+    # the network FS, so a coarser step (e.g. 5) cuts runtime proportionally
+    # with negligible change to the AUC of a smooth profile. 1 = every level.
+    rh_level_step: 1
+    samples_per_biome: 10000
+    random_seed: 42
+    wdpa_file:         ${pa_dir}/wdpa_data/wdpa_terrestrial.gpkg
+    wdpa_layer:        null
+    wdpa_cache_file:   ${pa_dir}/cache/wdpa_mask.tif
+    biomes_file:       ~/data/GEDI/ecoregions/wwf_terr_ecos.shp
+    biomes_layer:      null
+    biomes_cache_file: ${pa_dir}/cache/biomes.tif
+    naturalness_file:  ${root_data_dir}/evaluation/downstream_tasks/naturalness/reference_data_set_updated.csv
+    save_dir:          ${pa_dir}/results/auc
+    # Parquet cache of the sampled per-point profiles. If present, sampling +
+    # 10 m extraction are skipped (re-analysis is instant). null =>
+    # save_dir/samples_profiles.parquet. Delete the file to re-sample.
+    samples_cache_file: null
+    biome_attribute: BIOME
+    forest_biomes: [1, 2, 3, 4, 5, 6, 12, 14]
+    forest_threshold: 5
+    naturalness_col: Land_use_ID
+    primary_forest_value: 11
+    lon_col: Longitude
+    lat_col: Latitude
+    min_primary_samples: 100
+
+
+# =========================================================================
+# evaluation/structure_partial_correlation.py
+# =========================================================================
+# Partial correlation of predicted-vs-true lower RH controlling for TRUE RH98:
+# does the VSM encode vertical structure beyond canopy top height? Runs on the
+# same held-out GEDI test set as on_gedi (per-tile parquet, `rh{lvl}` true /
+# `RH{lvl}_Q1` predicted).
+structure_partial_correlation:
+
+  structure_partial_correlation:
+    _target_: evaluation.structure_partial_correlation.structure_partial_correlation
+    target_type: function
+    test_data: ${gedi_dir}/subset_test/version=masked/original_with_ours_sota_biome_2020.parquet
+    save_dir: ${gedi_dir}/subset_test/version=masked/results/structure_partial_correlation
+    test_levels: [25, 50]   # lower-canopy RH metrics the SAR critique targets
+    control_level: 98       # canopy-height control (TRUE GEDI RH98)
+    true_pattern: "rh{lvl}"
+    pred_pattern: "RH{lvl}_Q1"
+    biome_col: BIOME        # set null to skip the stratified pass
+    exclude_biomes: [11, 98, 99]  # drop Tundra + Lake/Rock-ice placeholders; [] keeps all
+    slope_lt20: true
+    rh98_min: 5             # metres; forest-height window for the analysis
+    rh98_max: 60
+    rh98_bin_width: 2       # metres; bin width for the within-height correlation
+    min_bin_samples: 50
+    random_seed: 0

@@ -35,6 +35,7 @@ eval-utils               := "python -m evaluation.utils"
 eval-on-div-indices      := "python -m evaluation.on_diversity_indices"
 eval-on-naturalness      := "python -m evaluation.on_naturalness"
 eval-on-glcm-texture     := "python -m evaluation.on_glcm_texture"
+eval-structure-partial   := "python -m evaluation.structure_partial_correlation"
 
 # Show all available recipes, grouped
 default:
@@ -395,6 +396,12 @@ eval-compute-diversity-indices *args:
 [group('evaluation')]
 eval-div-metrics *args:
     {{eval-on-div-indices}} run=evaluate_diversity_indices {{args}}
+
+# Partial correlation of predicted-vs-true lower RH controlling for RH98
+# (does the VSM encode structure beyond canopy top height?)
+[group('evaluation')]
+eval-structure-partial-correlation *args:
+    {{eval-structure-partial}} run=structure_partial_correlation {{args}}
 
 # Per-biome metrics + per-biome marginal-histogram boxplots
 [group('evaluation')]
