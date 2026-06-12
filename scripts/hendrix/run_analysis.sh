@@ -94,6 +94,30 @@ python -m postprocessing.run run=sample_vsm_points run.split=${split}
 # run_sanity_check check_two_datasets ${gedi_ref_dir} ${save_dir} || exit $?
 ;;
 
+# =======================================
+#   Protected area analysis
+# =======================================
+3)
+# ---------------------------------------
+#   Protected area structural analysis (normalized RH profile AUC)
+# ---------------------------------------
+# Samples primary / protected / outside-PA forest points, extracts their 10 m
+# RH profiles per S2 tile, and compares AUC vs RH98 per biome. The per-point
+# profiles are cached to {save_dir}/samples_profiles.parquet — re-running only
+# re-does the analysis/plots (delete that file to re-sample).
+#
+# Args: $2 = max_workers (default 16), $3 = rh_level_step (default 1; use 5 for
+# ~5x fewer file reads at negligible AUC cost). I/O-bound (workers wait on
+# network reads, CPU idle), so max_workers can exceed --cpus-per-task; bump the
+# SBATCH --cpus-per-task / --mem in the header if you push it much higher.
+echo "Protected area AUC analysis"
+max_workers=${2:-16}
+rh_level_step=${3:-1}
+python -m evaluation.protected_area_analysis run=analyze_protected_areas_auc \
+    run.max_workers=${max_workers} \
+    run.rh_level_step=${rh_level_step} || exit $?
+;;
+
 *)
 echo "Invalid option"
 exit 1
