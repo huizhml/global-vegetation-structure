@@ -20,7 +20,9 @@ def collect_data(data_root, config: RHDataCPConfig):
         for path in pbar:
             gdf = gpd.read_parquet(path).to_crs("epsg:4326")
             geo_dfs.append(gdf[columns])
-    full_gdf = gpd.GeoDataFrame(pd.concat(geo_dfs, ignore_index=True), crs="epsg:4326")
+    full_gdf = gpd.GeoDataFrame(
+        pd.concat(geo_dfs, ignore_index=True), crs="epsg:4326"
+    )
     if "BIO_REALM" in full_gdf.columns:
         full_gdf["BIO_REALM"] = full_gdf["ECO_ID"] // 100
     return full_gdf
@@ -54,7 +56,9 @@ def convert_to_decimeter(data: gpd.GeoDataFrame, config: RHDataCPConfig):
     return data
 
 
-def preprocess_rh_data(data: gpd.GeoDataFrame, config: RHDataCPConfig, min_err=0.0):
+def preprocess_rh_data(
+    data: gpd.GeoDataFrame, config: RHDataCPConfig, min_err=0.0
+):
     # 1. Drop nan predictions and BIOME values
     required_cols = config.get_all_rh_cols() + ["BIOME"]
     data.dropna(subset=required_cols, inplace=True)
@@ -78,6 +82,7 @@ def load_data(
     config: RHDataCPConfig,
     data_root: str | None = None,
     data_path: str | None = None,
+    preprocess: bool = True,
 ):
     if data_root is not None:
         logging.info(
@@ -85,10 +90,6 @@ def load_data(
             data_root,
         )
         data = collect_data(data_root, config)
-        logging.info(
-            "Preprocessing the data",
-        )
-        data = preprocess_rh_data(data, config)
     elif data_path is not None:
         logging.info(
             "Reading single parquet file from %s",
@@ -97,5 +98,10 @@ def load_data(
         data = gpd.read_parquet(data_path).to_crs("epsg:4326")
     else:
         raise ValueError("Must provide only one of --data_root or --data_path")
+    if preprocess:
+        logging.info(
+            "Preprocessing the data...",
+        )
+        data = preprocess_rh_data(data, config)
 
     return data

@@ -3,8 +3,13 @@ plot:
   skip_biomes: [11]
   # Figure widths are in points (default LaTeX unit)
   coverage:
-    fig_width_pt: 372
-    fig_height_pt: 230
+    fig_width_pt: 350
+    fig_height_pt: 130
+    flatten: false
+    legend_loc: "outside right"
+    plot_style:
+      axes.titlesize: 6
+      legend.fontsize: 7
   avg_width:
     fig_width_pt: 372
     fig_height_pt: 230
@@ -16,6 +21,11 @@ eval:
   # files, where after collecting all files, they will be combined into one
   # table and preprocessed in the same way as the combined parquet file:
   # data_root: ../data/calibration-data/
+  # Flag to indicate whether the data should be preprocessed, which includes
+  # filtering out rows with missing values and selecting only the columns
+  # specified in the data configuration.
+  # IMPORTANT: preprocessing assumes that the data is in meter units
+  preprocess_data: true
 cp:
   alpha: 0.1
   cqr_methods:
@@ -28,17 +38,13 @@ cp:
   # - SE-CQR-m
   # Path and data_root option as in the case of eval configuration
   cal_data_path: /projects/dereeco/data/gvs/gedi/veg_sensitivity_gt0p95/subset_cal/version=masked/original_with_ours_sota_biome_2020.parquet
+  preprocess_data: true
 data:
   # Specifies column names in the data table, where names need to be the same
   # for calibration and evaluation data, as the same configuration is used for
   # both.
   biome_col: BIOME
   rh_cols:
-    0:
-      ground_truth: rh0
-      q_hi: RH0_Q0
-      q_lo: RH0_Q2
-      q_med: RH0_Q1
     10:
       ground_truth: rh10
       q_hi: RH10_Q0
@@ -69,11 +75,6 @@ data:
       q_hi: RH98_Q0
       q_lo: RH98_Q2
       q_med: RH98_Q1
-    100:
-      ground_truth: rh100
-      q_hi: RH100_Q0
-      q_lo: RH100_Q2
-      q_med: RH100_Q1
   other_cols:
   - lc
   - slope
