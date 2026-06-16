@@ -93,7 +93,7 @@ on_lvis:
     aggregate_within_pixel: mean
     lvis_dir: ${eval_dir}/with_airborne_lidar/LVIS2_Gabon2016/geolocated_surface_elevation/s2_tiled
     vsm_tile_dir: /projects/dereeco/data/gvs/products/vsm/2017/original/tiles/geotiff
-    save_dir: ${eval_dir}/with_airborne_lidar/LVIS2_Gabon2016/geolocated_surface_elevation/lvis_vsm_paires/agg_${.aggregate_within_pixel}
+    save_dir: ${eval_dir}/with_airborne_lidar/LVIS2_Gabon2016/geolocated_surface_elevation/lvis_vsm_pairs/agg_${.aggregate_within_pixel}
     rewrite: false
 
   # Compute R2 / RMSE / MAE / ME (+ partial_r controlling for LVIS RH98)
@@ -103,14 +103,14 @@ on_lvis:
     _target_: evaluation.on_lvis.evaluate_on_lvis_pairs
     target_type: function
     aggregate_within_pixel: mean
-    pairs_dir: ${eval_dir}/with_airborne_lidar/LVIS2_Gabon2016/geolocated_surface_elevation/lvis_vsm_paires/agg_${.aggregate_within_pixel}
+    pairs_dir: ${eval_dir}/with_airborne_lidar/LVIS2_Gabon2016/geolocated_surface_elevation/lvis_vsm_pairs/agg_${.aggregate_within_pixel}
     save_dir: ${.pairs_dir}/results
     # Sensor-specific dispatch into the shared core.
     pred_pattern: "vsm_RH{lvl}"   # vsm_RH98, vsm_RH100, ... (matches LVIS uppercase)
     pred_label: VSM
     pred_color: C1                # right half of split violin
     output_basename: lvis_vsm     # *_overall_stats.csv, scatter_grid_*.pdf, ...
-    pairs_glob: "eval_lvis_*.parquet"   # extract_lvis_vsm_pairs filename pattern
+    pairs_glob: "*.parquet"   # extract_lvis_vsm_pairs filename pattern
     max_distance_m: null          # pixel-aggregated pairs carry no distance col
     per_tile: true
     control_rh: RH98          # height control for the partial correlation
@@ -279,7 +279,7 @@ lvis_vs_gedi:
     # been enriched with slope/BIOME yet — add them back here once the
     # prep step writes those columns so structure_partial_correlation
     # can use slope_lt20 / biome_col.
-    gedi_optional_columns: []
+    gedi_optional_columns: ['sensitivity']
     max_workers: 4
     rewrite: false
 

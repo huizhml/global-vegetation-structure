@@ -660,7 +660,7 @@ def evaluate_on_lvis_pairs(
             use 'C2' for GEDI to keep cross-figure comparability.
         pairs_glob: glob pattern under `pairs_dir`. Defaults to
             `*.parquet`; the LVIS-VSM pair extractor writes
-            `eval_lvis_<tile>.parquet` so pass `eval_lvis_*.parquet`
+            `eval_lvis_<tile>.parquet` so pass `*.parquet`
             there.
         rh_metrics: subset of LVIS RH metrics to score; defaults to every
             LVIS percentile (RH10..RH100).
