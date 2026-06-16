@@ -26,6 +26,7 @@ import warnings
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import seaborn as sns
 import numpy as np
 import pandas as pd
 from scipy import stats
@@ -98,6 +99,54 @@ def binned_correlation(df, true_col, pred_col, rh98_col,
             "p_value": p,
         })
     return pd.DataFrame(results)
+
+
+def _bootstrap_pearson_r(x, y, n_boot, rng):
+    """Vectorized bootstrap of Pearson r: draw `n_boot` index resamples
+    with replacement, compute r per row. Returns shape (n_boot,)."""
+    n = len(x)
+    idx = rng.integers(0, n, size=(n_boot, n))
+    xs = x[idx]
+    ys = y[idx]
+    xm = xs - xs.mean(axis=1, keepdims=True)
+    ym = ys - ys.mean(axis=1, keepdims=True)
+    num = (xm * ym).sum(axis=1)
+    den = np.sqrt((xm ** 2).sum(axis=1) * (ym ** 2).sum(axis=1))
+    # Bootstrap samples can be degenerate (all-zero variance) when the
+    # draw lands on identical rows; mask those to NaN so the violin's
+    # KDE drops them rather than throwing.
+    with np.errstate(invalid='ignore', divide='ignore'):
+        return np.where(den > 0, num / den, np.nan)
+
+
+def bootstrap_binned_correlation(df, true_col, pred_col, rh98_col,
+                                 rh98_min, rh98_max, bin_width,
+                                 min_bin_samples, n_boot, rng):
+    """For each RH98 bin, return `n_boot` bootstrap draws of Pearson r in
+    long format (one row per draw). Pairs with the existing
+    `binned_correlation` point-estimate CSV: same bins, same min-sample
+    cutoff, just adds the sampling-uncertainty distribution the violin
+    plot needs."""
+    bins = np.arange(rh98_min, rh98_max + bin_width, bin_width)
+    df = df.copy()
+    df["rh98_bin"] = pd.cut(df[rh98_col], bins=bins)
+
+    rows = []
+    for bin_label, bin_df in df.groupby("rh98_bin"):
+        true_vals = bin_df[true_col].values
+        pred_vals = bin_df[pred_col].values
+        valid = np.isfinite(true_vals) & np.isfinite(pred_vals)
+        if valid.sum() < min_bin_samples:
+            continue
+        draws = _bootstrap_pearson_r(true_vals[valid], pred_vals[valid],
+                                     n_boot, rng)
+        rows.append(pd.DataFrame({
+            "rh98_bin_mid": float(bin_label.mid),
+            "pearson_r": draws,
+        }))
+    if not rows:
+        return pd.DataFrame(columns=["rh98_bin_mid", "pearson_r"])
+    return pd.concat(rows, ignore_index=True)
 
 
 # =============================================================================
@@ -192,11 +241,31 @@ def plot_residual_scatter(res_true, res_pred, metric, r, output_path, rng):
     print(f"  Residual scatter saved: {output_path.name}")
 
 
-def plot_binned_correlation(binned, metric, bin_width, output_path):
-    """Per-RH98-bin correlation, showing the signal holds across height ranges."""
+def plot_binned_correlation(draws, metric, bin_width, output_path):
+    """Per-RH98-bin Pearson r, shown as a violin whose width is the
+    bootstrap distribution of the correlation. Replaces the old bar
+    plot — y-axis is identical (`corr(pred, true)`), but the violin
+    width now exposes the sampling uncertainty the bar height hid.
+
+    `draws` is the long-format DataFrame from
+    `bootstrap_binned_correlation`: one row per (bin midpoint, bootstrap
+    iteration). Bins are positioned at their numeric midpoint so
+    violins are spaced proportionally to canopy height, not categorical.
+    """
     fig, ax = plt.subplots(figsize=(7, 4))
-    ax.bar(binned["rh98_bin_mid"], binned["pearson_r"],
-           width=bin_width * 0.8, color=_METRIC_COLORS.get(metric, "#2166ac"))
+    if draws.empty:
+        ax.text(0.5, 0.5, 'No bins met min_bin_samples',
+                ha='center', va='center', transform=ax.transAxes)
+    else:
+        # seaborn's `native_scale=True` keeps the x-axis numeric so
+        # violins sit at the true bin midpoint; without it, bins are
+        # treated as categories and the x spacing loses meaning.
+        sns.violinplot(
+            data=draws, x="rh98_bin_mid", y="pearson_r",
+            color=_METRIC_COLORS.get(metric, "#2166ac"),
+            inner="quartile", cut=0, native_scale=True,
+            width=bin_width * 0.9, linewidth=0.5, ax=ax,
+        )
     ax.set_xlabel("RH98 bin midpoint (m)")
     ax.set_ylabel(f"corr(pred, true) for {metric.upper()}")
     ax.set_title(f"{metric.upper()}: within-height-bin correlation")
@@ -243,6 +312,7 @@ def structure_partial_correlation(
     rh98_max: float = 60.0,
     rh98_bin_width: float = 2.0,
     min_bin_samples: int = 50,
+    bootstrap_n: int = 200,
     random_seed: int = 0,
     **kwargs,
 ):
@@ -284,7 +354,12 @@ def structure_partial_correlation(
         caps the sparse tall tail.
     rh98_bin_width : RH98 bin width (metres) for the binned correlation.
     min_bin_samples : Skip RH98 bins with fewer valid footprints.
-    random_seed : Seed for subsampling the residual scatter plots.
+    bootstrap_n : Bootstrap iterations per RH98 bin for the violin plot.
+        Default 200 — enough for a smooth KDE while keeping each metric
+        under ~1 s. Larger gives smoother violins at quadratic memory
+        cost (kept in long format until the plot finishes).
+    random_seed : Seed for the bootstrap RNG and the residual scatter
+        subsample.
     """
     save_dir = Path(save_dir).expanduser()
     save_dir.mkdir(parents=True, exist_ok=True)
@@ -342,7 +417,9 @@ def structure_partial_correlation(
         else:
             print(f"    => No significant height-independent signal for {metric.upper()}.")
 
-        # Method A: binned correlation.
+        # Method A: binned correlation. CSV keeps the point estimate per
+        # bin; the violin plot uses bootstrap draws so the figure shows
+        # sampling uncertainty the scalar can't.
         binned = binned_correlation(df, true_col, pred_col, rh98_col,
                                     rh98_min, rh98_max, rh98_bin_width,
                                     min_bin_samples)
@@ -351,7 +428,12 @@ def structure_partial_correlation(
             print(f"\n  Binned corr (mean across {len(binned)} RH98 bins): "
                   f"r={mean_binned_r:.3f}")
             binned.to_csv(save_dir / f"binned_{metric}.csv", index=False)
-            plot_binned_correlation(binned, metric, rh98_bin_width,
+            draws = bootstrap_binned_correlation(
+                df, true_col, pred_col, rh98_col,
+                rh98_min, rh98_max, rh98_bin_width,
+                min_bin_samples, bootstrap_n, rng,
+            )
+            plot_binned_correlation(draws, metric, rh98_bin_width,
                                     save_dir / f"binned_{metric}.png")
 
         # Method C: residuals for the scatter (correlation == method B).

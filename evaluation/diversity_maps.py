@@ -81,7 +81,7 @@ def create_vrt(tile_dir, vrt_path, q_idx="1"):
     )
     files = files[1:]
     print(f"Creating VRT for {len(files)} files")
-    assert len(files) == 100, f"Expected 100 files, found {len(files)}"
+    assert len(files) == 100, f"Expected 100 files, found {len(files)} in {tile_dir}"
 
     vrt_options = gdal.BuildVRTOptions(separate=True)
     vrt = gdal.BuildVRT(str(vrt_path), files, options=vrt_options)
@@ -305,6 +305,7 @@ def _compute_diversity_maps(vrt_path, save_dir, name, *, chunk_size, max_workers
 
 def create_tile_diversity_maps(save_dir, tile_id, year,
                                product_version='bias_corrected',
+                               product_format='geotiff',
                                vsm_tile_root=None, q_idx=1, vrt_path=None,
                                chunk_size=512, max_workers=8,
                                bin_width=5, max_height=MAX_HEIGHT_METERS,
@@ -335,7 +336,7 @@ def create_tile_diversity_maps(save_dir, tile_id, year,
 
     if vrt_path is None:
         vsm_tile_root = Path(vsm_tile_root).expanduser()
-        tile_dir = vsm_tile_root / 'cog' / tile_id
+        tile_dir = vsm_tile_root / product_format / tile_id
         vrt_path = vsm_tile_root / 'vrt' / f'{tile_id}_Q{q_idx}.vrt'
         create_vrt(tile_dir, vrt_path)
 

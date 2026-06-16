@@ -58,6 +58,23 @@ tools:
     biome_cols: null
 
   # =========================================================================
+  # tools/latex_gen.py
+  # =========================================================================
+  csv_to_latex:
+    _target_: tools.latex_gen.csv_to_latex
+    target_type: function
+    csv_file: ~/data/gvs/deploy/correction/correction_performance_2020_compared_with_sota_chm_eu.csv
+    precision: 2
+    drop_cols: null  # e.g. [model_name] to keep only numeric columns for the S column format
+
+  csv_to_latex_rh:
+    _target_: tools.latex_gen.csv_to_latex_rh
+    target_type: function
+    csv_file: ~/data/gvs/deploy/correction/correction_performance_2020_compared_with_sota_chm_eu.csv
+    precision: 2
+    drop_cols: null  # e.g. [model_name] to keep only numeric columns for the S column format
+
+  # =========================================================================
   # tools/annotate_locations_map.py
   # =========================================================================
   annotate_locations_map:

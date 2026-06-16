@@ -9,117 +9,122 @@
 #SBATCH --output=./logs/%x-%A_%a.out
 #SBATCH --error=./logs/%x-%A_%a.err
 
+# Dispatch named tasks via just. Pass the task name as $1; per-task args use
+# key=value (parsed by parse_kv_args in scripts/core/utils.sh). pa-auc is the
+# exception — extra args pass through to just/Hydra unchanged.
+#
+#   sbatch --array=1-N run_analysis.sh diversity tile_list=tiles.csv year=2020
+#   sbatch run_analysis.sh naturalness-sample-patches split=test
+#   sbatch run_analysis.sh pa-auc run.max_workers=32 run.rh_level_step=5
+#
+# See `just --list` (group evaluation/postprocessing) for the underlying recipes.
+
 source scripts/core/utils.sh
-source scripts/core/run_python.sh
 
 case $1 in
-0)
+diversity)
 # ---------------------------------------
-#   Calculate profile entropy for DK
+#   Per-tile diversity indices
 # ---------------------------------------
-echo "Calculating profile entropy for DK"
-tile_id_file=${HOME}/data/gvs/assets/worklists/dk.txt
-tile_id=$(sed -n "${SLURM_ARRAY_TASK_ID}p" $tile_id_file)
-echo "Processing tile ID: $tile_id"
+# Args: tile_list (default: dk.txt; .csv with "Tile name" column or .txt one per line)
+#       year      (default: 2020)
+tile_list=${HOME}/data/gvs/assets/worklists/dk.txt
 year=2020
-output_dir=${HOME}/data/gvs/products/diversity_indices/${year}/tiles/geotiff
-just create_tile_diversity_maps run.output_dir=${output_dir} run.tile_id=${tile_id} run.year=2020
+product_version=original
+product_format=geotiff
+bin_width=5
+parse_kv_args "${@:2}" || exit $?
+tile_id=$(pick_tile "$tile_list")
+echo "Processing tile ID: $tile_id (year=$year)"
+just generate-tile-diversity-maps run.tile_id=${tile_id} run.year=$year run.product_version=$product_version run.product_format=$product_format run.bin_width=$bin_width || exit $?
 ;;
-
 
 # =======================================
 #   Biome analysis
 # =======================================
-1)
+extract-pred-biome)
 # ---------------------------------------
 #   Extract predictions by tile, for biome analysis
 # ---------------------------------------
-echo "Extracting predictions by tile"
 loc_dir=/projects/dereeco/data/gvs/analysis/biome_anlaysis/random_sample_100000_points_per_biome_by_tile/
 save_dir=/projects/dereeco/data/gvs/analysis/biome_anlaysis/random_sample_100000_points_per_biome_preds
-python -m postprocessing.run run=extract_pred \
-    run.loc_dir=${loc_dir} \
-    run.save_dir=${save_dir}
+just post-extract-pred run.loc_dir=${loc_dir} run.save_dir=${save_dir}
+source scripts/core/run_python.sh
 run_sanity_check check_two_datasets ${loc_dir} ${save_dir} || exit $?
-
 ;;
 
 # =======================================
 #   Naturalness analysis
 # =======================================
-2.0)
+naturalness-prepare-loc)
 # ---------------------------------------
 #   Partition naturalness locations by tile
 # ---------------------------------------
-echo "Partitioning naturalness locations by tile"
-naturalness_csv=${HOME}/data/gvs/downstream_tasks/naturalness/reference_data_set_updated_val.csv
-save_dir=${HOME}/data/gvs/downstream_tasks/naturalness/loc_by_tile_val
-python -m evaluation.run run=prepare_naturalness_loc_parquets run.naturalness_csv=${naturalness_csv} run.save_dir=${save_dir} || exit $?
-# run_sanity_check check_two_datasets ${gedi_ref_dir} ${save_dir} || exit $?
-
+# NOTE: this used to call `python -m evaluation.run run=prepare_naturalness_loc_parquets`,
+# but `evaluation/run.py` no longer exists. The function lives at
+# `evaluation.on_naturalness.prepare_loc_parqs` but has no Hydra entry yet.
+# Wire it up to an entrypoint before using.
+echo "TODO: prepare_loc_parqs is not wired to a Hydra run config — see comment above." >&2
+exit 2
 ;;
 
-2.1)
+naturalness-sample-patches)
 # ---------------------------------------
 #   Sample VSM patches
 # ---------------------------------------
-echo "Sampling VSM patches"
-split=${2:-val}
+# Args: split (default: val)
+split=val
+parse_kv_args "${@:2}" || exit $?
 loc_dir=${HOME}/data/gvs/downstream_tasks/naturalness/loc_by_tile_${split}
 save_dir=${HOME}/data/gvs/downstream_tasks/naturalness/vsm_patches_ps11_${split}
-python -m postprocessing.run run=sample_vsm_patches run.loc_dir=${loc_dir} run.save_dir=${save_dir}  || exit $?
-# run_sanity_check check_two_datasets ${gedi_ref_dir} ${save_dir} || exit $?
+just post-sample-vsm-patches run.loc_dir=${loc_dir} run.save_dir=${save_dir} || exit $?
 ;;
 
-2.2)
+naturalness-vsm-patch-stats)
 # ---------------------------------------
 #   Calculate VSM patch statistics
 # ---------------------------------------
-echo "Calculating VSM patch statistics"
-split=${2:-val}
+# Args: split (default: val)
+split=val
+parse_kv_args "${@:2}" || exit $?
 vsm_patches_dir=${HOME}/data/gvs/downstream_tasks/naturalness/vsm_patches_ps11_${split}
 save_dir=${HOME}/data/gvs/downstream_tasks/naturalness/vsm_patch_stats_ps11_${split}
-python -m evaluation.on_naturalness run=cal_vsm_patch_stats run.vsm_patches_dir=${vsm_patches_dir} run.save_dir=${save_dir}  || exit $?
-# run_sanity_check check_two_datasets ${gedi_ref_dir} ${save_dir} || exit $?
+just eval-cal-vsm-patch-stats run.vsm_patches_dir=${vsm_patches_dir} run.save_dir=${save_dir} || exit $?
 ;;
 
-
-2.3)
+naturalness-sample-points)
 # ---------------------------------------
 #   Sample VSM points
 # ---------------------------------------
-echo "Sampling VSM points"
-split=${2:-test}
-python -m postprocessing.run run=sample_vsm_points run.split=${split}
-# run_sanity_check check_two_datasets ${gedi_ref_dir} ${save_dir} || exit $?
+# Args: split (default: test)
+split=test
+parse_kv_args "${@:2}" || exit $?
+just post-sample-vsm-points run.split=${split}
 ;;
 
 # =======================================
 #   Protected area analysis
 # =======================================
-3)
+pa-auc)
 # ---------------------------------------
 #   Protected area structural analysis (normalized RH profile AUC)
 # ---------------------------------------
 # Samples primary / protected / outside-PA forest points, extracts their 10 m
-# RH profiles per S2 tile, and compares AUC vs RH98 per biome. The per-point
-# profiles are cached to {save_dir}/samples_profiles.parquet — re-running only
-# re-does the analysis/plots (delete that file to re-sample).
+# RH profiles per S2 tile, and compares AUC vs RH98 per biome. Per-point
+# profiles are cached to {save_dir}/samples_profiles.parquet — delete that file
+# to re-sample. I/O-bound (workers wait on network reads), so run.max_workers
+# can exceed --cpus-per-task; bump the SBATCH header if you push it much higher.
 #
-# Args: $2 = max_workers (default 16), $3 = rh_level_step (default 1; use 5 for
-# ~5x fewer file reads at negligible AUC cost). I/O-bound (workers wait on
-# network reads, CPU idle), so max_workers can exceed --cpus-per-task; bump the
-# SBATCH --cpus-per-task / --mem in the header if you push it much higher.
-echo "Protected area AUC analysis"
-max_workers=${2:-16}
-rh_level_step=${3:-1}
-python -m evaluation.protected_area_analysis run=analyze_protected_areas_auc \
-    run.max_workers=${max_workers} \
-    run.rh_level_step=${rh_level_step} || exit $?
+# Hydra overrides passthrough, e.g.:
+#   sbatch run_analysis.sh pa-auc run.max_workers=32 run.rh_level_step=5
+just eval-pa-auc "${@:2}" || exit $?
 ;;
 
 *)
-echo "Invalid option"
+echo "Usage: $0 <task> [args...]"
+echo "Tasks: diversity | extract-pred-biome | naturalness-prepare-loc |"
+echo "       naturalness-sample-patches | naturalness-vsm-patch-stats |"
+echo "       naturalness-sample-points | pa-auc"
 exit 1
 ;;
 esac

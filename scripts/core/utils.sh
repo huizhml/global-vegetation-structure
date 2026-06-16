@@ -46,6 +46,42 @@ get_tile_id_from_txt_file() {
     echo "$tile_id"
 }
 
+parse_kv_args() {
+    # Parse key=value args and assign each into the caller's scope.
+    # Example:  parse_kv_args "$@"   then use $tile_list, $year, ...
+    # Set defaults before calling; only the provided keys get overwritten.
+    local arg key val
+    for arg in "$@"; do
+        if [[ "$arg" != *=* ]]; then
+            echo "parse_kv_args: expected key=value, got '$arg'" >&2
+            return 1
+        fi
+        key=${arg%%=*}
+        val=${arg#*=}
+        if [[ ! "$key" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
+            echo "parse_kv_args: invalid key '$key'" >&2
+            return 1
+        fi
+        printf -v "$key" '%s' "$val"
+    done
+}
+
+pick_tile() {
+    # Pick a tile_id from a worklist by line. Auto-detects format by extension:
+    #   .csv  -> uses the "Tile name" column (header row skipped)
+    #   other -> one tile id per line
+    # Line index defaults to $SLURM_ARRAY_TASK_ID; pass arg 2 to override.
+    local file=$1
+    local line=${2:-${SLURM_ARRAY_TASK_ID:-1}}
+    if [[ "$file" == *.csv ]]; then
+        awk -F',' -v line=$((line + 1)) '
+            NR==1 {for (i=1; i<=NF; i++) if ($i=="Tile name") col=i; next}
+            NR==line {print $col; exit}' "$file"
+    else
+        sed -n "${line}p" "$file"
+    fi
+}
+
 clean_up_local_file() {
     local save_dir=$1
     local tile_id=$2

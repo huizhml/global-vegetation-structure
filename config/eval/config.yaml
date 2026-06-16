@@ -68,6 +68,337 @@ on_als:
 
 
 # =========================================================================
+# evaluation/on_lvis.py
+# =========================================================================
+on_lvis:
+
+  partition_lvis_by_s2_tile:
+    _target_: evaluation.on_lvis.partition_lvis_by_s2_tile
+    target_type: function
+    txt_dir: ${eval_dir}/with_airborne_lidar/LVIS2_Gabon2016/geolocated_surface_elevation/raw
+    s2_grid_file: ${root_data_dir}/state/s2_tiles_with_growing_months.parquet
+    save_dir: ${eval_dir}/with_airborne_lidar/LVIS2_Gabon2016/geolocated_surface_elevation/s2_tiled
+    n_workers: 8
+    rewrite: false
+
+  # Sample each VSM RH raster (2017) at every LVIS shot, per S2 tile.
+  # `aggregate_within_pixel` collapses multi-shot pixels:
+  #   mean     -> LVIS = mean of shots, VSM = pixel value (default)
+  #   max      -> LVIS = max of shots (defensible for top-of-canopy RHs)
+  #   mean_max -> RH95+ use max, others mean (physically motivated split)
+  #   none     -> shot-level pairs (VSM column has duplicates)
+  extract_lvis_vsm_pairs:
+    _target_: evaluation.on_lvis.extract_lvis_vsm_pairs
+    target_type: function
+    aggregate_within_pixel: mean
+    lvis_dir: ${eval_dir}/with_airborne_lidar/LVIS2_Gabon2016/geolocated_surface_elevation/s2_tiled
+    vsm_tile_dir: /projects/dereeco/data/gvs/products/vsm/2017/original/tiles/geotiff
+    save_dir: ${eval_dir}/with_airborne_lidar/LVIS2_Gabon2016/geolocated_surface_elevation/lvis_vsm_paires/agg_${.aggregate_within_pixel}
+    rewrite: false
+
+  # Compute R2 / RMSE / MAE / ME (+ partial_r controlling for LVIS RH98)
+  # for each RH metric across all paired tiles. Wraps the shared
+  # evaluate_on_lvis_pairs core with the VSM column pattern.
+  evaluate_vsm_on_lvis:
+    _target_: evaluation.on_lvis.evaluate_on_lvis_pairs
+    target_type: function
+    aggregate_within_pixel: mean
+    pairs_dir: ${eval_dir}/with_airborne_lidar/LVIS2_Gabon2016/geolocated_surface_elevation/lvis_vsm_paires/agg_${.aggregate_within_pixel}
+    save_dir: ${.pairs_dir}/results
+    # Sensor-specific dispatch into the shared core.
+    pred_pattern: "vsm_RH{lvl}"   # vsm_RH98, vsm_RH100, ... (matches LVIS uppercase)
+    pred_label: VSM
+    pred_color: C1                # right half of split violin
+    output_basename: lvis_vsm     # *_overall_stats.csv, scatter_grid_*.pdf, ...
+    pairs_glob: "eval_lvis_*.parquet"   # extract_lvis_vsm_pairs filename pattern
+    max_distance_m: null          # pixel-aggregated pairs carry no distance col
+    per_tile: true
+    control_rh: RH98          # height control for the partial correlation
+    # Optional pre-stat filter on the TRUE LVIS control_rh column. The CSV
+    # filename gets a `_filter_<control>_gt<min>_lt<max>` suffix so different
+    # bounds don't clobber each other.
+    control_rh_min: null      # e.g. 20 to keep only LVIS RH98 > 20 m
+    control_rh_max: null
+    # nrows x ncols grid of log-normed hexbin scatters, one panel per RH
+    # metric, shared axes + single colorbar. With 23 RH metrics, 4x6 leaves
+    # one cell empty (hidden by hexbin_density_grid).
+    make_plot: true
+    plot_metrics: null        # null = every RH metric in rh_metrics
+    nrows: 4
+    ncols: 6
+    panel_size: 3.0
+    gridsize: 50
+    extent: null              # null = auto, ceiled to next 5 m; or [0,70,0,70]
+    annot_fontsize: 7         # per-panel stats box font size (R2/r/RMSE/ME/pr)
+    # Split violin: one axes, LVIS on the left half / VSM on the right of
+    # each RH metric. Uses the same `plot_metrics` subset as the grid.
+    # violin_sample_size subsamples each (metric, source) before the KDE
+    # so seaborn doesn't choke on millions of paired shots.
+    make_violin: true
+    violin_figsize: null      # null = FIGURE_SIZES['wide'] (14x4); try [16,5]
+    violin_sample_size: 50000 # null = use every paired observation
+    violin_yscale: linear     # linear | symlog (symlog if heights dip <0)
+    violin_random_state: 0
+
+  # ------------------------------------------------------------------
+  # FHD comparison: LVIS L2A footprint-cover product (ORNL DAAC) vs
+  # the VSM-derived per-tile diversity raster. Three-phase pipeline
+  # parallel to the RH pipeline above:
+  #   1. partition_lvis_metrics_by_s2_tile  (CSV -> per-tile parquet)
+  #   2. extract_lvis_vsm_fhd_pairs         (parquet + FHD raster -> pair parquet)
+  #   3. evaluate_vsm_on_lvis_fhd           (pair parquets -> stats CSV)
+  # ------------------------------------------------------------------
+  partition_lvis_metrics_by_s2_tile:
+    _target_: evaluation.on_lvis.partition_lvis_metrics_by_s2_tile
+    target_type: function
+    csv_dir: ${eval_dir}/with_airborne_lidar/LVIS2_Gabon2016/cover_and_vertical_profile/raw
+    s2_grid_file: ${root_data_dir}/state/s2_tiles_with_growing_months.parquet
+    save_dir: ${eval_dir}/with_airborne_lidar/LVIS2_Gabon2016/cover_and_vertical_profile/s2_tiled
+    n_workers: 8
+    rewrite: false
+
+  # Sample VSM diversity-tile band 1 (FHD) at each LVIS shot, per S2 tile.
+  # carry_metrics copies extra LVIS columns through so downstream stats can
+  # partial them out (e.g. ccover) without re-running this step.
+  extract_lvis_vsm_fhd_pairs:
+    _target_: evaluation.on_lvis.extract_lvis_vsm_fhd_pairs
+    target_type: function
+    aggregate_within_pixel: mean    # mean | none
+    fhd_band: 1                     # band 1 = fhd in diversity_maps tiles
+    carry_metrics: [ccover, lai]
+    lvis_metrics_dir: ${eval_dir}/with_airborne_lidar/LVIS2_Gabon2016/cover_and_vertical_profile/s2_tiled
+    vsm_fhd_tile_dir: ${root_data_dir}/products/diversity_indices/2017/original/tiles/cog
+    save_dir: ${eval_dir}/with_airborne_lidar/LVIS2_Gabon2016/cover_and_vertical_profile/lvis_vsm_pairs/agg_${.aggregate_within_pixel}
+    rewrite: false
+
+  # Merge `lvis_fhd` from the FHD pair output back into the RH pair
+  # parquets so the latter carry every LVIS-side metric in one file.
+  # Pure pandas left-join on (tile_id, row, col) — both pair products
+  # aggregate LVIS shots to the same VSM 10 m pixel grid. `vsm_fhd` is
+  # intentionally NOT pulled through.
+  attach_lvis_fhd_to_rh_pairs:
+    _target_: evaluation.on_lvis.attach_lvis_fhd_to_rh_pairs
+    target_type: function
+    link_results: false
+    aggregate_within_pixel: mean
+    rh_pairs_dir: ${eval_dir}/with_airborne_lidar/LVIS2_Gabon2016/geolocated_surface_elevation/lvis_vsm_pairs/agg_${.aggregate_within_pixel}
+    fhd_pairs_dir: ${eval_dir}/with_airborne_lidar/LVIS2_Gabon2016/cover_and_vertical_profile/lvis_vsm_pairs/agg_${.aggregate_within_pixel}
+    # Distinct save_dir keeps the original RH-only pairs intact in case
+    # downstream code reads them.
+    save_dir: ${.rh_pairs_dir}_with_lvis_fhd
+    rh_filename_pattern: "*.parquet"
+    rewrite: false
+
+  evaluate_vsm_on_lvis_fhd:
+    _target_: evaluation.on_lvis.evaluate_vsm_on_lvis_fhd
+    target_type: function
+    aggregate_within_pixel: mean
+    pairs_dir: ${eval_dir}/with_airborne_lidar/LVIS2_Gabon2016/cover_and_vertical_profile/lvis_vsm_pairs/agg_${.aggregate_within_pixel}
+    save_dir: ${.pairs_dir}/results
+    per_tile: true
+    # Optional partial-correlation control. null = plain stats only.
+    # Set to a carried LVIS column (e.g. ccover) to also report partial_r
+    # of (VSM_fhd, LVIS_fhd) controlling for LVIS_<control_metric>.
+    control_metric: null
+    control_min: null
+    control_max: null
+    # Hexbin density scatter (log-normed) saved alongside the stats CSV.
+    # extent=null lets the plot auto-fit; set e.g. [0, 6, 0, 6] for a
+    # fixed axis range when comparing across runs.
+    make_plot: true
+    figsize: [10,10]
+    gridsize: 60
+    extent: null
+
+
+# =========================================================================
+# evaluation/forest_mask.py
+# =========================================================================
+# Per-S2-tile stable-forest mask from JRC TMF AnnualChanges. Used to
+# restrict GEDI-vs-LVIS comparisons (and any cross-year structure
+# evaluation) to pixels whose canopy class was 'undisturbed TMF' (class 1)
+# every Dec from year_start through year_end.
+#
+# JRC TMF only covers the pan-tropical moist belt. Outside it, every
+# pixel will be 0 — swap the asset (and the build helper) for Hansen GFC
+# or a regional product before extending to boreal/temperate tiles.
+forest_mask:
+
+  build_stable_forest_mask:
+    _target_: evaluation.forest_mask.build_stable_forest_mask
+    target_type: function
+    link_results: false   # raw data product, not a browsable artifact
+    meta_file: ${eval_dir}/with_airborne_lidar/meta_lvis_profile.csv
+    s2_grid_file: ${root_data_dir}/state/s2_tiles_with_growing_months.parquet
+    # Any year-stamped VSM tile dir works as the 10 m UTM grid reference
+    # (all VSM tiles share the S2 tile grid by construction). Point at
+    # 2017 for the LVIS-year comparison; switch to 2020 for the GEDI-year
+    # comparison — the resulting mask is bit-identical either way.
+    vsm_ref_tile_dir: ${root_data_dir}/products/vsm/2017/original/tiles/geotiff
+    vsm_ref_filename: RH98_Q1.tif
+    save_dir: ${eval_dir}/with_airborne_lidar/forest_mask_${.year_start}_${.year_end}
+    # Inclusive year window over which TMF class must equal `undisturbed`
+    # for the pixel to count as stable. LVIS Gabon = 2016, GEDI = 2020.
+    year_start: 2016
+    year_end: 2020
+    # JRC TMF AnnualChanges asset. Bump v1_<year> for newer releases.
+    tmf_asset: projects/JRC/TMF/v1_2023/AnnualChanges
+    tmf_undisturbed_class: 1
+    native_scale_m: 30        # JRC TMF native resolution
+    max_workers: 4            # GEE getDownloadURL is rate-limited
+    retries: 3
+    retry_backoff_s: 5
+    rewrite: false
+
+
+# =========================================================================
+# evaluation/lvis_vs_gedi.py
+# =========================================================================
+# Cross-sensor pairing: for every GEDI 2020 shot in stable forest, attach
+# the single nearest LVIS 2016 shot within `max_radius_m`. Output is a
+# per-tile parquet of paired `gedi_rh{lvl}` + `lvis_RH{lvl}` columns,
+# directly consumable by structure_partial_correlation (set
+# true_pattern: "lvis_RH{lvl}", pred_pattern: "gedi_rh{lvl}").
+lvis_vs_gedi:
+
+  extract_lvis_gedi_pairs:
+    _target_: evaluation.lvis_vs_gedi.extract_lvis_gedi_pairs
+    target_type: function
+    link_results: false
+    meta_file: ${eval_dir}/with_airborne_lidar/meta_lvis_profile.csv
+    gedi_dir: ${gedi_dir}/all_valid/2020
+    lvis_dir: ${eval_dir}/with_airborne_lidar/LVIS2_Gabon2016/geolocated_surface_elevation/s2_tiled
+    forest_mask_dir: ${eval_dir}/with_airborne_lidar/forest_mask_2016_2020
+    save_dir: ${eval_dir}/with_airborne_lidar/LVIS2_Gabon2016/geolocated_surface_elevation/lvis_gedi_pairs/Gabon2016_vs_GEDI2020_stable_forest
+    # Max GEDI->nearest-LVIS distance. ~12.5 m = GEDI footprint radius;
+    # tighten to 5 m for overlapping-footprint-only pairs, loosen with
+    # caution since LVIS spacing varies with overflight pattern.
+    max_radius_m: 12.5
+    # Extra GEDI columns to carry through if present; missing ones are
+    # silently dropped. Empty for now because this GEDI vintage hasn't
+    # been enriched with slope/BIOME yet — add them back here once the
+    # prep step writes those columns so structure_partial_correlation
+    # can use slope_lt20 / biome_col.
+    gedi_optional_columns: []
+    max_workers: 4
+    rewrite: false
+
+  # Pool the pair parquets, compute R2 / Pearson r / RMSE / MAE / ME +
+  # partial_r (controls for TRUE LVIS RH98) for each RH metric LVIS
+  # reports. Wraps the shared evaluate_on_lvis_pairs core with the GEDI
+  # column pattern.
+  evaluate_gedi_on_lvis:
+    _target_: evaluation.on_lvis.evaluate_on_lvis_pairs
+    target_type: function
+    pairs_dir: ${eval_dir}/with_airborne_lidar/LVIS2_Gabon2016/geolocated_surface_elevation/lvis_gedi_pairs/Gabon2016_vs_GEDI2020_stable_forest
+    save_dir: ${.pairs_dir}/results
+    # Sensor-specific dispatch into the shared core.
+    pred_pattern: "gedi_rh{lvl}"   # gedi_rh98 — lowercase rh, integer level
+    pred_label: GEDI
+    pred_color: C2                 # keeps LVIS-vs-VSM (C1) and LVIS-vs-GEDI (C2) figs visually distinct
+    output_basename: lvis_gedi
+    pairs_glob: "*.parquet"        # extract_lvis_gedi_pairs writes <tile>.parquet
+    rh_metrics: null               # null = every LVIS percentile (RH10..RH100)
+    per_tile: true
+    control_rh: RH98               # canopy-height control for partial correlation
+    # Pre-stat filters on the pooled pairs. Filename gains a
+    # `_filter_<...>` suffix so different bounds don't clobber each other.
+    control_rh_min: null      # e.g. 20 to keep only LVIS RH98 > 20 m
+    control_rh_max: null
+    # Post-extraction tightening: drop pairs whose match_distance_m
+    # exceeds this. null keeps every pair within the extract radius.
+    max_distance_m: null      # e.g. 5.0 for strict overlap-only stats
+    # nrows x ncols grid of log-normed hexbin scatters, one panel per RH
+    # metric. With 23 LVIS percentiles, 4x6 leaves one cell empty.
+    make_plot: true
+    plot_metrics: null
+    nrows: 4
+    ncols: 6
+    panel_size: 3.0
+    gridsize: 50
+    extent: null              # null = auto-fit, ceiled to next 5 m
+    annot_fontsize: 7         # per-panel stats box font size (R2/r/RMSE/ME/pr)
+    # Split violin: LVIS on left half / GEDI on right half per RH metric.
+    make_violin: true
+    violin_figsize: null      # null = FIGURE_SIZES['wide']
+    violin_sample_size: 50000 # null = use every paired observation
+    violin_yscale: linear     # linear | symlog
+    violin_random_state: 0
+
+  # ------------------------------------------------------------------
+  # Three-sensor extension: append vsm_RH<NN> columns to each LVIS-GEDI
+  # pair parquet so VSM can be evaluated against LVIS on EXACTLY the
+  # same shot population GEDI was evaluated against. Run once per VSM
+  # year (override run.vsm_year=2017 to compare model vs temporal drift).
+  # ------------------------------------------------------------------
+  extract_vsm_on_pair_locations:
+    _target_: evaluation.lvis_vs_gedi.extract_vsm_on_pair_locations
+    target_type: function
+    link_results: false
+    vsm_year: 2020
+    pairs_dir: ${eval_dir}/with_airborne_lidar/LVIS2_Gabon2016/geolocated_surface_elevation/lvis_gedi_pairs/Gabon2016_vs_GEDI2020_stable_forest
+    vsm_tile_dir: ${root_data_dir}/products/vsm/${.vsm_year}/original/tiles/cog
+    # Distinct save_dir per year so 2017 and 2020 runs don't clobber.
+    save_dir: ${.pairs_dir}_with_vsm${.vsm_year}
+    rh_metrics: null          # null = every LVIS percentile (RH10..RH100)
+    max_workers: 4
+    rewrite: false
+
+  # Score VSM against LVIS on the augmented pairs. Same evaluate_on_lvis_pairs
+  # core as evaluate_vsm_on_lvis and evaluate_gedi_on_lvis — the
+  # output_basename embeds year + 'at_gedi_loc' so all three results coexist
+  # in distinct files.
+  evaluate_vsm_on_lvis_at_gedi_loc:
+    _target_: evaluation.on_lvis.evaluate_on_lvis_pairs
+    target_type: function
+    vsm_year: 2020
+    pairs_dir: ${eval_dir}/with_airborne_lidar/LVIS2_Gabon2016/geolocated_surface_elevation/lvis_gedi_pairs/Gabon2016_vs_GEDI2020_stable_forest_with_vsm${.vsm_year}
+    save_dir: ${.pairs_dir}/results
+    pred_pattern: "vsm_RH{lvl}"
+    pred_label: VSM${.vsm_year}
+    pred_color: C1
+    output_basename: lvis_vsm${.vsm_year}_at_gedi_loc
+    pairs_glob: "*.parquet"
+    rh_metrics: null
+    per_tile: true
+    control_rh: RH98
+    control_rh_min: null
+    control_rh_max: null
+    max_distance_m: null
+    make_plot: true
+    plot_metrics: null
+    nrows: 4
+    ncols: 6
+    panel_size: 3.0
+    gridsize: 50
+    extent: null
+    annot_fontsize: 12
+    make_violin: true
+    violin_figsize: null
+    violin_sample_size: 50000
+    violin_yscale: linear
+    violin_random_state: 0
+
+  # ------------------------------------------------------------------
+  # Spatial-join LVIS L2A `fhd` onto each LVIS-GEDI pair: KDTree-find the
+  # nearest L2A shot within `max_radius_m` of the pair's GEDI-center
+  # geometry and copy its fhd. L2 and L2A shots are co-located by
+  # design, so the typical match distance is ~0 m; the script writes
+  # `lvis_fhd_match_distance_m` alongside so coverage gaps are visible.
+  # ------------------------------------------------------------------
+  attach_lvis_fhd_to_lvis_gedi_pairs:
+    _target_: evaluation.lvis_vs_gedi.attach_lvis_fhd_to_lvis_gedi_pairs
+    target_type: function
+    link_results: false
+    pairs_dir: ${eval_dir}/with_airborne_lidar/LVIS2_Gabon2016/geolocated_surface_elevation/lvis_gedi_pairs/Gabon2016_vs_GEDI2020_stable_forest
+    lvis_metrics_dir: ${eval_dir}/with_airborne_lidar/LVIS2_Gabon2016/cover_and_vertical_profile/s2_tiled
+    save_dir: ${.pairs_dir}_with_lvis_fhd
+    max_radius_m: 12.5
+    max_workers: 4
+    rewrite: false
+
+
+# =========================================================================
 # evaluation/diversity_maps.py
 # =========================================================================
 diversity_maps:
@@ -441,4 +772,79 @@ structure_partial_correlation:
     rh98_max: 60
     rh98_bin_width: 2       # metres; bin width for the within-height correlation
     min_bin_samples: 50
+    bootstrap_n: 200        # bootstrap draws per RH98 bin for the violin
+    random_seed: 0
+
+  # Same analysis but on the LVIS-VSM pairs (Gabon2016 vs VSM 2017). The
+  # pair parquets carry `lvis_RH{lvl}` / `vsm_RH{lvl}`; no biome / slope
+  # columns, so the stratified pass and slope filter are off.
+  structure_partial_correlation_on_lvis:
+    _target_: evaluation.structure_partial_correlation.structure_partial_correlation
+    target_type: function
+    aggregate_within_pixel: mean
+    test_data: ${eval_dir}/with_airborne_lidar/LVIS2_Gabon2016/geolocated_surface_elevation/lvis_vsm_pairs/agg_${.aggregate_within_pixel}
+    save_dir: ${.test_data}/results/structure_partial_correlation
+    test_levels: [10, 25, 50, 75, 90]
+    control_level: 98
+    true_pattern: "lvis_RH{lvl}"
+    pred_pattern: "vsm_RH{lvl}"
+    biome_col: null
+    exclude_biomes: []
+    slope_lt20: false
+    rh98_min: 5
+    rh98_max: 60
+    rh98_bin_width: 2
+    min_bin_samples: 50
+    bootstrap_n: 200        # bootstrap draws per RH98 bin for the violin
+    random_seed: 0
+
+  # Same analysis on the LVIS-GEDI pair parquets from
+  # evaluation.lvis_vs_gedi.extract_lvis_gedi_pairs. true = LVIS RH<NN>
+  # (uppercase, reference), pred = GEDI rh<NN> (lowercase). Control =
+  # LVIS RH98 so the partial-r asks "does GEDI add sub-canopy info
+  # beyond canopy top, taking LVIS as truth?". Slope/biome filters off
+  # because this GEDI vintage hasn't been enriched with those columns.
+  structure_partial_correlation_on_lvis_gedi:
+    _target_: evaluation.structure_partial_correlation.structure_partial_correlation
+    target_type: function
+    test_data: ${eval_dir}/with_airborne_lidar/LVIS2_Gabon2016/geolocated_surface_elevation/lvis_gedi_pairs/Gabon2016_vs_GEDI2020_stable_forest
+    save_dir: ${.test_data}/results/structure_partial_correlation
+    test_levels: [10, 25, 50, 75, 90]
+    control_level: 98
+    true_pattern: "lvis_RH{lvl}"
+    pred_pattern: "gedi_rh{lvl}"
+    biome_col: null
+    exclude_biomes: []
+    slope_lt20: false
+    rh98_min: 5
+    rh98_max: 60
+    rh98_bin_width: 2
+    min_bin_samples: 50
+    bootstrap_n: 200
+    random_seed: 0
+
+  # Same analysis on the AUGMENTED LVIS-GEDI+VSM pair parquets from
+  # evaluation.lvis_vs_gedi.extract_vsm_on_pair_locations. true = LVIS,
+  # pred = VSM, control = LVIS RH98. Reads the exact same shot population
+  # that structure_partial_correlation_on_lvis_gedi scores GEDI on, so
+  # the partial-r values are directly comparable between sensors.
+  # Override run.vsm_year=2017 for the LVIS-year-matched comparison.
+  structure_partial_correlation_on_lvis_vsm:
+    _target_: evaluation.structure_partial_correlation.structure_partial_correlation
+    target_type: function
+    vsm_year: 2020
+    test_data: ${eval_dir}/with_airborne_lidar/LVIS2_Gabon2016/geolocated_surface_elevation/lvis_gedi_pairs/Gabon2016_vs_GEDI2020_stable_forest_with_vsm${.vsm_year}
+    save_dir: ${.test_data}/results/structure_partial_correlation
+    test_levels: [10, 25, 50, 75, 90]
+    control_level: 98
+    true_pattern: "lvis_RH{lvl}"
+    pred_pattern: "vsm_RH{lvl}"
+    biome_col: null
+    exclude_biomes: []
+    slope_lt20: false
+    rh98_min: 5
+    rh98_max: 60
+    rh98_bin_width: 2
+    min_bin_samples: 50
+    bootstrap_n: 200
     random_seed: 0
