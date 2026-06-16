@@ -118,20 +118,17 @@ def _pair_nearest(gedi_gdf: gpd.GeoDataFrame, lvis_gdf: gpd.GeoDataFrame,
     gedi_kept = gedi_gdf.loc[matched].reset_index(drop=True)
     lvis_kept = lvis_gdf.iloc[idx[matched]].reset_index(drop=True)
 
-    out = pd.DataFrame()
     # GEDI columns get a `gedi_` prefix, LVIS gets `lvis_` — keeps the
     # uppercase/lowercase distinction visible AND lets
     # structure_partial_correlation use `gedi_rh{lvl}` / `lvis_RH{lvl}`
-    # patterns directly.
-    for col in gedi_kept.columns:
-        if col == 'geometry':
-            continue
-        out[f'gedi_{col}'] = gedi_kept[col].values
-    for col in lvis_kept.columns:
-        if col == 'geometry':
-            continue
-        out[f'lvis_{col}'] = lvis_kept[col].values
-    out['match_distance_m'] = dist[matched].astype(np.float32)
+    # patterns directly. Assemble all columns at once to avoid the
+    # repeated-insert fragmentation warning.
+    cols = {f'gedi_{col}': gedi_kept[col].values
+            for col in gedi_kept.columns if col != 'geometry'}
+    cols.update({f'lvis_{col}': lvis_kept[col].values
+                 for col in lvis_kept.columns if col != 'geometry'})
+    cols['match_distance_m'] = dist[matched].astype(np.float32)
+    out = pd.DataFrame(cols)
     # Output geometry = GEDI shot center in mask CRS (the integration
     # reference). Drop the LVIS coordinate since match_distance_m
     # encodes the offset.

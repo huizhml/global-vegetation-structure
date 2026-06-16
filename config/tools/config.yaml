@@ -74,6 +74,131 @@ tools:
     precision: 2
     drop_cols: null  # e.g. [model_name] to keep only numeric columns for the S column format
 
+  compare_csv_to_latex:
+    _target_: tools.latex_gen.compare_csv_to_latex
+    target_type: function
+    # {source_label: csv_path}; outer header = metric, inner header = source label
+    data_dir: ${root_data_dir}/evaluation/with_airborne_lidar/LVIS2_Gabon2016/geolocated_surface_elevation/lvis_gedi_pairs
+    csv_files:
+      VSM: ${..data_dir}/Gabon2016_vs_GEDI2020_stable_forest_with_vsm2020/results/lvis_vsm2020_at_gedi_loc_overall_stats.csv
+      GEDI: ${..data_dir}/Gabon2016_vs_GEDI2020_stable_forest/results/lvis_gedi_overall_stats.csv
+    output_file: null  # defaults to <first_csv_dir>/compare_<first_stem>.tex
+    precision: 2
+    index_col: 0    # null for single-row stats tables; 0 if first col holds row labels
+    drop_cols: [n, pearson_p, partial_p, mae]     # metric cols to drop before merging
+    metric_order: null # e.g. [R$^2$, RMSE, ME (bias)] to order/subset outer header (post-rename)
+    rename_metrics:    # {csv_col: display_name}
+      r2: R$^2$
+      me: ME
+      rmse: RMSE 
+      # mae: MAE
+      pearson_r: Pearson's r
+      partial_r: Partial r
+    row_labels: null  # keep the rh index (RH10..RH100); set a list only for single-row tables
+
+  # =========================================================================
+  # tools/gedi_penetration_bias.py
+  # =========================================================================
+  # Diagnose whether VSM sheds raw GEDI's low-sensitivity penetration bias,
+  # using LVIS as the independent reference. Reads the LVIS-GEDI-VSM pair
+  # parquets (lvis_RH<NN> / gedi_rh<NN> / vsm_RH<NN> + gedi_sensitivity).
+  #   python -m tools.run run=gedi_penetration_bias
+  gedi_penetration_bias:
+    _target_: tools.gedi_penetration_bias.diagnose_gedi_penetration_bias
+    target_type: function
+    pairs_dir: ${root_data_dir}/evaluation/with_airborne_lidar/LVIS2_Gabon2016/geolocated_surface_elevation/lvis_gedi_pairs/Gabon2016_vs_GEDI2020_stable_forest_with_vsm2020
+    save_dir: ${root_results_dir}/tools/gedi_penetration_bias
+    rh_metrics: [RH25, RH98]   # canonical RH names; all three sensors carry these
+    sensitivity_col: gedi_sensitivity
+    height_control_col: lvis_RH98  # LVIS top-height proxy (no lvis_top_h col); null to skip step 6
+    sensitivity_threshold: 0.95
+    target_n_bins: 8
+    min_bin_n: 200
+    n_boot: 1000
+    height_band: [20.0, 30.0]
+    make_heatmap: true
+    pairs_glob: "*.parquet"
+    random_state: 0
+
+  # =========================================================================
+  # tools/vsm_understory_residual.py
+  # =========================================================================
+  # Falsifiable out-of-fold residual partial-correlation test: does VSM encode
+  # understory structure BEYOND canopy top height + geographic priors? Control
+  # set C = [lvis_RH98, vsm_RH98, lat, lon]; corr(e_V, e_L) reported across a
+  # linear -> spline -> GBM control ladder. Part A = lower RH profile, Part B =
+  # FHD. Reads the LVIS-VSM RH pairs and FHD pairs (agg mean).
+  #   python -m tools.run run=vsm_understory_residual
+  vsm_understory_residual:
+    _target_: tools.vsm_understory_residual.understory_residual_partial_correlation
+    target_type: function
+    # extract_lvis_vsm_pairs writes here (note the `paires` spelling that op
+    # uses); eval_lvis_<tile>.parquet with lvis_RH<NN>/vsm_RH<NN> + geometry.
+    rh_pairs_dir: ${root_data_dir}/evaluation/with_airborne_lidar/LVIS2_Gabon2016/geolocated_surface_elevation/lvis_vsm_pairs/agg_mean
+    # extract_lvis_vsm_fhd_pairs writes here; eval_lvis_fhd_<tile>.parquet with
+    # lvis_fhd/vsm_fhd + tile_id/row/col.
+    fhd_pairs_dir: ${root_data_dir}/evaluation/with_airborne_lidar/LVIS2_Gabon2016/cover_and_vertical_profile/lvis_vsm_pairs/agg_mean
+    save_dir: ${root_results_dir}/tools/vsm_understory_residual
+    rh_test_levels: [10, 15, 20, 25, 30, 50, 75, 98]   # 98 = control anchor (residual ~0)
+    control_level: 98
+    rh_pairs_glob: "*.parquet"
+    fhd_pairs_glob: "eval_lvis_fhd_*.parquet"
+    ladder: [linear, spline, gbm]   # weakest -> hardest; verdict needs all positive
+    low_rh_max: 30                   # highlight/summarize the understory lobe at/below this
+    scatter_level: 25                # e_V vs e_L scatter at this RH level
+    n_splits: 5
+    n_boot: 1000
+    spline_knots: 5
+    spline_degree: 3
+    fhd_min: 0.0                      # keep fhd>fhd_min on both sensors (drops sentinels)
+    fhd_max: null
+    run_part_a: true
+    run_part_b: true
+    random_state: 0
+
+  # =========================================================================
+  # tools/vsm_understory_matched.py
+  # =========================================================================
+  # Matched-grouping test: at matched canopy top height (H_L = lvis_RH98), does
+  # VSM reflect understory differences? Footprints are binned by H_L and split
+  # into high/low understory terciles by the LVIS ratio U_L (independent
+  # grouping var). HEADLINE = the understory NUMERATOR with top height
+  # controlled: rh25 ~ grp + own_rh98 (+spatial) + (1|band), per sensor. GEDI is
+  # the anchor/ceiling (precondition: void if GEDI can't separate the groups).
+  # Also: a strict variant controlling the TRUE top height, an explicit
+  # numerator/denominator decomposition of the old ratio separation, and biome
+  # control (C(biome) if present, else a ~1.5-deg spatial-cell fallback). Reads
+  # the LVIS-GEDI-VSM triple pairs (same source as gedi_penetration_bias).
+  #   python -m tools.run run=vsm_understory_matched
+  vsm_understory_matched:
+    _target_: tools.vsm_understory_matched.matched_understory_separation
+    target_type: function
+    pairs_dir: ${root_data_dir}/evaluation/with_airborne_lidar/LVIS2_Gabon2016/geolocated_surface_elevation/lvis_gedi_pairs/Gabon2016_vs_GEDI2020_stable_forest_with_vsm2020
+    save_dir: ${root_results_dir}/tools/vsm_understory_matched
+    rh_understory: RH25        # understory numerator (RH profile bottom)
+    rh_top: RH98               # top-height denominator + matched-on H_L + covariate
+    pairs_glob: "*.parquet"
+    biome_col: null      # present -> C(biome) version + within-biome refit;
+                               # absent  -> lat/lon replaced by C(cell) fallback
+    spatial_cell_deg: 1.5      # grid-cell size (deg) for the no-biome fallback
+    sensitivity_col: gedi_sensitivity  # Step 5 stratified residual corr; skipped if absent
+    sens_range: [0.95, 1.0]    # clean high-sensitivity window to stratify within
+    n_sens_bins: 6             # equal-count GEDI-sensitivity bins for Step 5
+    rh98_min: 5.0              # keep footprints with ALL three rh98 > this (m)
+    winsor: [0.01, 0.99]       # per-ratio winsorize (decomposition + legacy fig)
+    band_width: 5.0            # fixed top-height band width (m)
+    band_start: 5.0
+    band_top_merge: 50.0       # >= this merged into one open-ended band
+    min_band_n: 200            # min footprints per band (else merge neighbours)
+    min_group_n: 30            # min footprints per high/low group (else drop band)
+    low_q: 0.3333333333333333  # U_L tercile cuts (low<=Q1/3, high>=Q2/3)
+    high_q: 0.6666666666666666
+    within_biome_min_n: 300    # min grouped footprints for a within-biome refit
+    match_topheight_tol: 1.0   # |top-height group diff| (m) above which to flag
+    n_boot: 1000
+    anchor_required: true      # void the test if GEDI can't separate the groups
+    random_state: 0
+
   # =========================================================================
   # tools/annotate_locations_map.py
   # =========================================================================
