@@ -36,6 +36,9 @@ eval-on-div-indices      := "python -m evaluation.on_diversity_indices"
 eval-on-naturalness      := "python -m evaluation.on_naturalness"
 eval-on-glcm-texture     := "python -m evaluation.on_glcm_texture"
 eval-structure-partial   := "python -m evaluation.structure_partial_correlation"
+eval-pa-analysis         := "python -m evaluation.protected_area_analysis"
+eval-forest-mask         := "python -m evaluation.forest_mask"
+eval-lvis-vs-gedi        := "python -m evaluation.lvis_vs_gedi"
 
 # Show all available recipes, grouped
 default:
@@ -259,6 +262,11 @@ post-extract-pred *args:
 post-sample-vsm-patches *args:
     {{post}} run=sample_vsm_patches {{args}}
 
+# Sample VSM points (sparse GEDI subsets)
+[group('postprocessing')]
+post-sample-vsm-points *args:
+    {{post}} run=sample_vsm_points {{args}}
+
 # Check after bias correction
 [group('postprocessing')]
 post-check-after-bias-correction *args:
@@ -402,6 +410,64 @@ eval-div-metrics *args:
 [group('evaluation')]
 eval-structure-partial-correlation *args:
     {{eval-structure-partial}} run=structure_partial_correlation {{args}}
+
+# Same analysis on the LVIS-VSM pair parquets (LVIS = truth, VSM = predicted)
+[group('evaluation')]
+eval-structure-partial-on-lvis *args:
+    {{eval-structure-partial}} run=structure_partial_correlation_on_lvis {{args}}
+
+# Same analysis on the LVIS-GEDI pair parquets (LVIS = truth, GEDI = predicted)
+[group('evaluation')]
+eval-structure-partial-on-lvis-gedi *args:
+    {{eval-structure-partial}} run=structure_partial_correlation_on_lvis_gedi {{args}}
+
+# Same analysis on the LVIS-GEDI+VSM augmented pairs (override run.vsm_year=2017 to match LVIS year)
+[group('evaluation')]
+eval-structure-partial-on-lvis-vsm *args:
+    {{eval-structure-partial}} run=structure_partial_correlation_on_lvis_vsm {{args}}
+
+# Protected-area structural analysis: normalized RH-profile AUC per biome.
+# Caches per-point profiles to {save_dir}/samples_profiles.parquet — delete
+# that file to re-sample. I/O-bound, so run.max_workers can exceed cpus.
+# Common overrides: run.max_workers=16 run.rh_level_step=1
+[group('evaluation')]
+eval-pa-auc *args:
+    {{eval-pa-analysis}} run=analyze_protected_areas_auc {{args}}
+
+# Build per-tile stable-forest mask (JRC TMF) for LVIS/GEDI comparison
+[group('evaluation')]
+eval-build-forest-mask *args:
+    {{eval-forest-mask}} run=build_stable_forest_mask {{args}}
+
+# Pair GEDI 2020 to nearest LVIS 2016 footprint inside the stable-forest mask
+[group('evaluation')]
+eval-pair-lvis-gedi *args:
+    {{eval-lvis-vs-gedi}} run=extract_lvis_gedi_pairs {{args}}
+
+# Evaluate GEDI against LVIS on the pair parquets (RH stats + partial r + plots)
+[group('evaluation')]
+eval-gedi-on-lvis *args:
+    {{eval-lvis-vs-gedi}} run=evaluate_gedi_on_lvis {{args}}
+
+# Sample VSM RH at each LVIS-GEDI pair location (override run.vsm_year=2017 for the LVIS-year run)
+[group('evaluation')]
+eval-extract-vsm-at-pair-loc *args:
+    {{eval-lvis-vs-gedi}} run=extract_vsm_on_pair_locations {{args}}
+
+# Score VSM-at-GEDI-loc against LVIS (override run.vsm_year=2017 for the LVIS-year run)
+[group('evaluation')]
+eval-vsm-on-lvis-at-gedi-loc *args:
+    {{eval-lvis-vs-gedi}} run=evaluate_vsm_on_lvis_at_gedi_loc {{args}}
+
+# Merge lvis_fhd from the existing FHD pair output into the LVIS-VSM RH pairs
+[group('evaluation')]
+eval-attach-lvis-fhd-to-rh-pairs *args:
+    python -m evaluation.on_lvis run=attach_lvis_fhd_to_rh_pairs {{args}}
+
+# Spatial-join lvis_fhd from L2A onto each LVIS-GEDI pair
+[group('evaluation')]
+eval-attach-lvis-fhd-to-lvis-gedi *args:
+    {{eval-lvis-vs-gedi}} run=attach_lvis_fhd_to_lvis_gedi_pairs {{args}}
 
 # Per-biome metrics + per-biome marginal-histogram boxplots
 [group('evaluation')]

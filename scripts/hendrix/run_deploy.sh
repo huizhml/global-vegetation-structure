@@ -56,7 +56,8 @@ run_inference $tile_id $stream_input $save_dir $meta_file $year
 line_num=${SLURM_ARRAY_TASK_ID:-2}
 stream_input=${2:-True}
 repredict_tiles=${3:-False}
-tile_id_file=${root_data_dir}/evaluation/with_airborne_lidar/meta_als.csv
+# tile_id_file=${root_data_dir}/evaluation/with_airborne_lidar/meta_als.csv
+tile_id_file=${root_data_dir}/evaluation/with_airborne_lidar/meta_lvis_profile.csv
 
 read tile_id year <<< $(read_line_from_csv "$tile_id_file" "$line_num")
 
