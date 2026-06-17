@@ -118,7 +118,9 @@ def _load_pairs(pairs_dir: Path, glob: str, rh_under: str, rh_top: str,
                 biome_col: str, sensitivity_col: str) -> tuple:
     """Pool the per-tile triple-sensor pair parquets into a flat frame with the
     six RH columns + lat/lon (geometry reprojected to EPSG:4326 per file) and,
-    if present, `biome` and `sensitivity` columns. Returns
+    if present, `biome` and `sensitivity` columns. Each row is also stamped
+    with `tile` — the parquet's filename stem (a Sentinel-2 MGRS tile id) —
+    which the cluster bootstrap uses as the resampling block. Returns
     (df, has_biome, has_sens). Fails loudly on any missing REQUIRED column;
     biome (change-D fallback) and sensitivity (the stratified step) are
     optional."""
@@ -153,6 +155,9 @@ def _load_pairs(pairs_dir: Path, glob: str, rh_under: str, rh_top: str,
             d['sensitivity'] = g[sensitivity_col].to_numpy()
         d['lon'] = g.geometry.x.to_numpy()
         d['lat'] = g.geometry.y.to_numpy()
+        # S2 MGRS tile id, lifted from the filename so the cluster bootstrap
+        # resamples whole tiles instead of iid footprints.
+        d['tile'] = f.stem
         parts.append(d)
     if not parts:
         raise ValueError(f'All {len(files)} pair parquets under {pairs_dir} '
@@ -193,6 +198,8 @@ def _build_indices(df: pd.DataFrame, rh_under: str, rh_top: str,
 
     res = pd.DataFrame({'lat': out['lat'].to_numpy(),
                         'lon': out['lon'].to_numpy()})
+    if 'tile' in out.columns:
+        res['tile'] = out['tile'].to_numpy()
     res['H_L'] = out[den['LVIS']].to_numpy()
     lo_q, hi_q = winsor
     for s in _SENSORS:
@@ -494,6 +501,178 @@ def _share(num: float, den: float) -> tuple:
 
 
 # ---------------------------------------------------------------------------
+# Block (cluster) bootstrap: one block = one S2 MGRS tile (the parquet stem).
+# Replaces the footprint-level p (e-168) which treats spatially clustered
+# footprints as iid and is anti-conservative.
+# ---------------------------------------------------------------------------
+# Eight statistics stored per iteration, in display order. Six grp coefficients
+# (3 sensors x {base, strict}) plus the two ratios — formed INSIDE the
+# iteration so numerator/denominator covariance propagates automatically
+# instead of being lost to a hard CI division.
+_BOOT_STATS = (
+    'coef_VSM_base', 'coef_GEDI_base', 'coef_LVIS_base',
+    'coef_VSM_strict', 'coef_GEDI_strict', 'coef_LVIS_strict',
+    'ratio_V_G', 'ratio_V_L',
+)
+
+
+def _one_bootstrap_iter(sub_raw: pd.DataFrame, rh_under: str, rh_top: str,
+                        rh98_min: float, winsor: tuple, cell_deg: float,
+                        has_biome: bool, has_sens: bool,
+                        band_width: float, band_start: float,
+                        band_top_merge: float, min_band_n: int,
+                        min_group_n: int, low_q: float, high_q: float,
+                        min_effective_bands: int):
+    """Run the full pipeline (drop RH98<=rh98_min, winsorize U, height bands,
+    U_LVIS terciles, mixed-model fits) on one cluster-bootstrap resample and
+    return the 8-vector of stored statistics. Returns None to signal the
+    iteration was DROPPED (too few qualifying bands); a NaN inside the vector
+    just means that particular sub-statistic could not be computed."""
+    noop = lambda *a, **kw: None
+    try:
+        sub_idx = _build_indices(sub_raw, rh_under, rh_top, rh98_min, winsor,
+                                 cell_deg, has_biome, has_sens, noop)
+    except Exception:
+        return None
+    H = sub_idx['H_L'].to_numpy()
+    if H.size == 0:
+        return None
+    labels, edges = _height_bands(H, band_width, band_start, band_top_merge,
+                                  min_band_n)
+    sub_idx = sub_idx.assign(_band=labels)
+
+    pooled_parts = []
+    for b in range(len(edges) - 1):
+        sub = sub_idx[sub_idx['_band'] == b]
+        if len(sub) < min_band_n:
+            continue
+        ul = sub['U_LVIS'].to_numpy()
+        q_lo, q_hi = np.quantile(ul, [low_q, high_q])
+        hi_mask = ul >= q_hi
+        lo_mask = ul <= q_lo
+        if (int(hi_mask.sum()) < min_group_n
+                or int(lo_mask.sum()) < min_group_n):
+            continue
+        blab = _band_label(edges[b], edges[b + 1])
+        for grp_val, mask in ((1, hi_mask), (0, lo_mask)):
+            gdf = sub[mask]
+            d = {'band': blab, 'grp': grp_val,
+                 'lat': gdf['lat'].to_numpy(), 'lon': gdf['lon'].to_numpy(),
+                 'cell': gdf['cell'].to_numpy()}
+            for s in _SENSORS:
+                d[f'num_{s}'] = gdf[f'num_{s}'].to_numpy()
+                d[f'top_{s}'] = gdf[f'top_{s}'].to_numpy()
+                d[f'U_{s}'] = gdf[f'U_{s}'].to_numpy()
+            if has_biome:
+                d['biome'] = gdf['biome'].to_numpy()
+            pooled_parts.append(pd.DataFrame(d))
+
+    n_eff_bands = len(pooled_parts) // 2          # one band -> two parts (hi, lo)
+    if n_eff_bands < min_effective_bands:
+        return None
+
+    pooled = pd.concat(pooled_parts, ignore_index=True)
+    pooled['lat_z'] = _z(pooled['lat'].to_numpy())
+    pooled['lon_z'] = _z(pooled['lon'].to_numpy())
+    spatial = 'latlon' if has_biome else 'cell'
+
+    coef = {}
+    for s in _SENSORS:
+        m = _fit_numerator(pooled, s, spatial)
+        coef[(s, 'base')] = m.get('coef', np.nan)
+    for s in ('VSM', 'GEDI'):
+        m = _fit_numerator(pooled, s, spatial, add_true98=True)
+        coef[(s, 'strict')] = m.get('coef', np.nan)
+    # LVIS strict == LVIS base (own RH98 IS the true height; collinear).
+    coef[('LVIS', 'strict')] = coef[('LVIS', 'base')]
+
+    cV_s = coef[('VSM', 'strict')]
+    cG_s = coef[('GEDI', 'strict')]
+    cL_b = coef[('LVIS', 'base')]
+    rvg = (cV_s / cG_s if np.isfinite(cV_s) and np.isfinite(cG_s)
+           and abs(cG_s) > 1e-12 else np.nan)
+    rvl = (cV_s / cL_b if np.isfinite(cV_s) and np.isfinite(cL_b)
+           and abs(cL_b) > 1e-12 else np.nan)
+    return np.array([
+        coef[('VSM',  'base')], coef[('GEDI', 'base')], coef[('LVIS', 'base')],
+        coef[('VSM',  'strict')], coef[('GEDI', 'strict')], coef[('LVIS', 'strict')],
+        rvg, rvl,
+    ], dtype=float)
+
+
+def _block_bootstrap_tile(raw: pd.DataFrame, n_boot: int, rh_under: str,
+                          rh_top: str, rh98_min: float, winsor: tuple,
+                          cell_deg: float, has_biome: bool, has_sens: bool,
+                          band_width: float, band_start: float,
+                          band_top_merge: float, min_band_n: int,
+                          min_group_n: int, low_q: float, high_q: float,
+                          min_effective_bands: int,
+                          rng: np.random.Generator, say) -> tuple:
+    """Cluster bootstrap on the S2 tile. Each iteration: pick N_block tiles
+    with replacement (a tile drawn twice -> its rows enter twice), rerun the
+    pipeline on the concatenated rows, store the 8-vector. Returns
+    (draws_df, summary_df, per_block_n)."""
+    if 'tile' not in raw.columns:
+        raise KeyError('raw frame has no `tile` column — _load_pairs needs to '
+                       'stamp the filename stem as tile id.')
+    unique_blocks, inv = np.unique(raw['tile'].to_numpy(), return_inverse=True)
+    block_rows = [np.where(inv == k)[0] for k in range(len(unique_blocks))]
+    per_block_n = pd.DataFrame({
+        'tile': unique_blocks,
+        'n': [len(r) for r in block_rows],
+    }).sort_values('n', ascending=False).reset_index(drop=True)
+    n_blocks = len(unique_blocks)
+    say(f'Block bootstrap unit: S2 tile (filename stem). n_blocks={n_blocks}, '
+        f'total rows={len(raw):,}.')
+    sizes = per_block_n['n'].to_numpy()
+    say(f'  per-tile N: min={int(sizes.min())}, median='
+        f'{int(np.median(sizes))}, max={int(sizes.max())}.')
+    for _, r in per_block_n.iterrows():
+        say(f'    {r["tile"]}: N={int(r["n"]):,}')
+
+    if n_blocks < 2:
+        say('  fewer than 2 tiles — cluster bootstrap not meaningful; '
+            'step skipped.')
+        return None, None, per_block_n
+
+    draws = np.full((n_boot, len(_BOOT_STATS)), np.nan)
+    n_dropped = 0
+    progress = max(1, n_boot // 10)
+    for i in range(n_boot):
+        picks = rng.integers(0, n_blocks, n_blocks)
+        row_idx = np.concatenate([block_rows[k] for k in picks])
+        sub_raw = raw.iloc[row_idx].reset_index(drop=True)
+        res = _one_bootstrap_iter(
+            sub_raw, rh_under, rh_top, rh98_min, winsor, cell_deg, has_biome,
+            has_sens, band_width, band_start, band_top_merge, min_band_n,
+            min_group_n, low_q, high_q, min_effective_bands)
+        if res is None:
+            n_dropped += 1
+        else:
+            draws[i] = res
+        if (i + 1) % progress == 0:
+            say(f'  iter {i + 1}/{n_boot} (dropped so far: {n_dropped})')
+
+    draws_df = pd.DataFrame(draws, columns=list(_BOOT_STATS))
+    rows = []
+    for k in _BOOT_STATS:
+        v = draws_df[k].to_numpy()
+        v = v[np.isfinite(v)]
+        if v.size == 0:
+            rows.append({'stat': k, 'n_valid': 0, 'p2_5': np.nan,
+                         'p50': np.nan, 'p97_5': np.nan, 'p_gt0': np.nan})
+            continue
+        lo, med, hi = np.quantile(v, [0.025, 0.5, 0.975])
+        rows.append({'stat': k, 'n_valid': int(v.size),
+                     'p2_5': float(lo), 'p50': float(med),
+                     'p97_5': float(hi), 'p_gt0': float((v > 0).mean())})
+    summary_df = pd.DataFrame(rows)
+    say(f'  iterations: {n_boot} requested, kept {n_boot - n_dropped}, '
+        f'dropped {n_dropped} (too few effective bands or build failure).')
+    return draws_df, summary_df, per_block_n
+
+
+# ---------------------------------------------------------------------------
 # Figures
 # ---------------------------------------------------------------------------
 def _plot_sens_corr(df: pd.DataFrame, save_path: Path) -> None:
@@ -623,6 +802,9 @@ def matched_understory_separation(
         match_topheight_tol: float = 1.0,
         n_boot: int = 1000,
         anchor_required: bool = True,
+        n_boot_blocks: int = 2000,
+        min_effective_bands: int = 1,
+        enable_block_bootstrap: bool = True,
         random_state: int = 0,
         **kwargs) -> None:
     """Matched-grouping test of whether VSM reflects understory structure at
@@ -671,6 +853,15 @@ def matched_understory_separation(
         n_boot: bootstrap resamples for per-band ΔU CIs. Default 1000.
         anchor_required: if True and the GEDI numerator grp coef is not
             significantly positive, declare the test void and stop. Default True.
+        n_boot_blocks: cluster-bootstrap iterations (one block = one S2 MGRS
+            tile, the parquet filename stem). Each iteration resamples tiles
+            WITH replacement, reruns the whole pipeline on the concatenated
+            rows, stores 6 grp coefs + 2 ratios; report 2.5/50/97.5 percentiles
+            + P(>0) per statistic. Default 2000.
+        min_effective_bands: drop an iteration when fewer qualifying bands
+            survive its resample. Default 1 (OLS on a single band is still a
+            usable draw).
+        enable_block_bootstrap: turn the cluster bootstrap on/off. Default True.
         random_state: RNG seed.
     """
     pairs_dir = Path(pairs_dir).expanduser()
@@ -915,6 +1106,43 @@ def matched_understory_separation(
         say(f'  {s:<4} ΔU={ov[f"dU_{s}"]:+.4f} = num {ov[f"num_term_{s}"]:+.4f} '
             f'+ den {ov[f"den_term_{s}"]:+.4f}  ({share})')
 
+    # --- Step 4F: cluster (block) bootstrap on S2 tile -------------------
+    # The footprint-level p in Step 4 treats spatially clustered footprints as
+    # iid and is implausibly small (e.g. p~e-168). Resample WHOLE S2 tiles
+    # (filename stem) with replacement, rerun the full pipeline inside every
+    # iteration, and report 2.5/50/97.5 percentiles + P(>0) as the bootstrap
+    # sign-consistency replacement for p. Bands and U_LVIS terciles are
+    # recomputed every iteration so the threshold sampling uncertainty enters
+    # the variance — fixing them would underestimate it.
+    boot_summary_df = None
+    if enable_block_bootstrap:
+        say('')
+        say(f'Step 4F: cluster bootstrap on S2 tile, n_boot_blocks='
+            f'{n_boot_blocks}.')
+        draws_df, boot_summary_df, per_block_n = _block_bootstrap_tile(
+            raw, n_boot_blocks, rh_understory, rh_top, rh98_min, winsor,
+            spatial_cell_deg, has_biome, has_sens, band_width, band_start,
+            band_top_merge, min_band_n, min_group_n, low_q, high_q,
+            min_effective_bands, rng, say)
+        per_block_n.to_csv(save_dir / 'block_bootstrap_per_block_n.csv',
+                           index=False)
+        if draws_df is not None:
+            draws_df.to_csv(save_dir / 'block_bootstrap_draws.csv',
+                            index=False)
+            boot_summary_df.to_csv(save_dir / 'block_bootstrap_summary.csv',
+                                   index=False)
+            say('  -> block_bootstrap_draws.csv, block_bootstrap_summary.csv, '
+                'block_bootstrap_per_block_n.csv')
+            say('  bootstrap (2.5 / 50 / 97.5 %; P(>0)):')
+            for _, r in boot_summary_df.iterrows():
+                say(f'    {r["stat"]:<18} '
+                    f'[{r["p2_5"]:+.4f}, {r["p50"]:+.4f}, '
+                    f'{r["p97_5"]:+.4f}]  P(>0)={r["p_gt0"]:.3f}  '
+                    f'n_valid={int(r["n_valid"])}')
+        else:
+            say('  -> block_bootstrap_per_block_n.csv (bootstrap skipped: '
+                'fewer than 2 tiles)')
+
     # --- write tables -----------------------------------------------------
     pb_csv = save_dir / 'per_band_separation.csv'
     per_band.to_csv(pb_csv, index=False)
@@ -996,6 +1224,19 @@ def matched_understory_separation(
     say(f'    effect size: Cohen\'s d={base["VSM"]["cohen_d"]:+.3f} (own-RH98 '
         f'residual); strict coef_VSM/coef_GEDI={ratio_vg:.2f}; '
         f'coef_VSM/coef_LVIS (ceiling)={ratio_vl:.2f}.')
+    say('    (footprint-level p above treats spatially clustered footprints '
+        'as iid and is anti-conservative; the S2-tile cluster bootstrap '
+        'interval and P(>0) below are the honest inference.)')
+    if boot_summary_df is not None:
+        bsum = boot_summary_df.set_index('stat')
+        for k, label in (
+                ('coef_VSM_strict', 'VSM strict grp coef (m)'),
+                ('ratio_V_G',       'ratio VSM_strict / GEDI_strict'),
+                ('ratio_V_L',       'ratio VSM_strict / LVIS_base')):
+            r = bsum.loc[k]
+            say(f'    tile-block bootstrap {label}: median {r["p50"]:+.4f} '
+                f'[{r["p2_5"]:+.4f}, {r["p97_5"]:+.4f}]  P(>0)={r["p_gt0"]:.3f}'
+                f'  (n_valid={int(r["n_valid"])} / {n_boot_blocks})')
     num_share, share_ok = _share(ov['num_term_VSM'], ov['den_term_VSM'])
     if share_ok:
         say(f'(3) Ratio decomposition (VSM): of ΔU={ov["dU_VSM"]:+.4f}, '
@@ -1028,27 +1269,55 @@ def matched_understory_separation(
                'not a penetration artifact.' if stable and range_ok else
                'Interpret the trend with the range-restriction caveat above.'))
 
-    all_pos = all(_sig_pos(m) for _, m in vsm_variants)
-    nontrivial = np.isfinite(ratio_vg) and ratio_vg >= 0.1
+    # Prefer the S2-tile cluster-bootstrap CI for the verdict when available:
+    # sig+ means the 2.5%ile excludes 0 for both VSM base and VSM strict;
+    # nontrivial means the bootstrap median ratio VSM_strict/GEDI_strict>=0.1.
+    if boot_summary_df is not None:
+        bsum = boot_summary_df.set_index('stat')
+
+        def _boot_sig(stat):
+            r = bsum.loc[stat]
+            return bool(np.isfinite(r['p2_5']) and r['p2_5'] > 0)
+
+        all_pos = _boot_sig('coef_VSM_base') and _boot_sig('coef_VSM_strict')
+        med_vg = float(bsum.loc['ratio_V_G', 'p50'])
+        nontrivial = np.isfinite(med_vg) and med_vg >= 0.1
+    else:
+        all_pos = all(_sig_pos(m) for _, m in vsm_variants)
+        nontrivial = np.isfinite(ratio_vg) and ratio_vg >= 0.1
     say('')
     if all_pos and nontrivial:
         bio_clause = ('and for biome' if has_biome
                       else 'and for regional structure (spatial cells)')
+        if boot_summary_df is not None:
+            rvg = bsum.loc['ratio_V_G']
+            recov = (f'recovers {rvg["p50"]:.0%} of the lidar-detectable (GEDI) '
+                     f'understory contrast (tile-block bootstrap 95% CI '
+                     f'[{rvg["p2_5"]:.0%}, {rvg["p97_5"]:.0%}], '
+                     f'P(>0)={rvg["p_gt0"]:.3f})')
+        else:
+            recov = (f'recovers ~{ratio_vg:.0%} of the lidar-detectable (GEDI) '
+                     f'understory contrast')
         say('VERDICT: VSM separates sparse- vs dense-understory canopies '
             '(by LVIS RH25:RH98) at matched '
             "top height; the effect survives controlling for VSM's own and the "
             f'true top height, {bio_clause} — so it is not a denominator '
-            f'artifact or an ecological prior, and recovers ~{ratio_vg:.0%} of '
-            'the lidar-detectable (GEDI) understory contrast. The numerator '
+            f'artifact or an ecological prior, and {recov}. The numerator '
             f'separation is consistent across bands (>0 in '
             f'{base["VSM"]["frac_bands_pos"]:.0%} of them).')
     elif all_pos and not nontrivial:
+        frac = (float(bsum.loc['ratio_V_G', 'p50'])
+                if boot_summary_df is not None else ratio_vg)
         say('VERDICT (WEAK): the VSM numerator grp coefficient stays positive '
             'with a zero-excluding CI across variants, but its magnitude is a '
-            f'negligible fraction ({ratio_vg:.0%}) of the GEDI-detectable '
+            f'negligible fraction ({frac:.0%}) of the GEDI-detectable '
             'contrast — statistically present, practically near-zero.')
     else:
-        collapsed = [tag for tag, m in vsm_variants if not _sig_pos(m)]
+        if boot_summary_df is not None:
+            collapsed = [k for k in ('coef_VSM_base', 'coef_VSM_strict')
+                         if not _boot_sig(k)]
+        else:
+            collapsed = [tag for tag, m in vsm_variants if not _sig_pos(m)]
         den_clause = (f'the ratio ΔU is {1 - num_share:.0%} denominator term, '
                       f'so the earlier ratio separation was largely a '
                       f'denominator artifact'

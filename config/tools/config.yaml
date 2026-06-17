@@ -197,6 +197,76 @@ tools:
     match_topheight_tol: 1.0   # |top-height group diff| (m) above which to flag
     n_boot: 1000
     anchor_required: true      # void the test if GEDI can't separate the groups
+    # --- cluster (block) bootstrap on S2 MGRS tile (parquet filename stem) ---
+    # Replaces the footprint-level p (~e-168, treats clustered footprints as
+    # iid and is anti-conservative) with an honest by-tile CI. Per iteration:
+    # draw N_block tiles WITH replacement, rerun the full pipeline on the
+    # concatenation (drop RH98<=rh98_min, winsorize U, height bands, U_LVIS
+    # terciles, model fits), store 6 grp coefs + 2 ratios; ratios form inside
+    # each iteration so num/den covariance propagates. Bands and terciles are
+    # recomputed every iteration so threshold sampling uncertainty enters the
+    # variance — fixing them would underestimate it.
+    enable_block_bootstrap: true
+    n_boot_blocks: 2000        # cluster-bootstrap iterations
+    min_effective_bands: 1     # drop iteration if fewer qualifying bands
+    random_state: 0
+
+  # =========================================================================
+  # tools/plot_understory_main.py
+  # =========================================================================
+  # Pure replot of the VSM understory two-panel main figure from existing CSVs
+  # (a `vsm_understory_matched` run). Does NOT refit models or rerun the
+  # bootstrap. Reads per_band_separation.csv (panel a), sensitivity_residual_corr
+  # .csv (panel b lines + CI + LVIS resid SD on a twin right axis), and
+  # block_bootstrap_summary.csv (pooled VSM hi-lo contrast median + 95% CI for
+  # the inset annotation). Writes fig_understory_main, _a, _b in PDF/SVG/PNG.
+  #   python -m tools.run run=plot_understory_main
+  plot_understory_main:
+    _target_: tools.plot_understory_main.replot_understory_main
+    target_type: function
+    results_dir: ${root_results_dir}/tools/vsm_understory_matched
+    save_dir: ${root_results_dir}/tools/vsm_understory_matched
+    per_band_csv: per_band_separation.csv
+    sens_csv: sensitivity_residual_corr.csv
+    boot_summary_csv: block_bootstrap_summary.csv
+    # Fallback constants — used only when the corresponding CSV value is
+    # missing. Pooled contrast comes from the tile-block cluster bootstrap.
+    pooled_contrast_m: 1.05
+    pooled_ci: [0.75, 1.27]
+    pooled_lvis_resid_sd: 7.15
+    figsize_main: [12.0, 4.6]
+    figsize_panel: [6.2, 4.6]
+    dpi: 300
+
+  # =========================================================================
+  # tools/understory_calibration.py
+  # =========================================================================
+  # Continuous understory calibration plot. Each instrument's RH25 is
+  # residualized on its OWN RH98 (OLS; switches to natural cubic spline df=4
+  # if the quadratic orthogonality check fails for any instrument). LVIS
+  # residual on x, VSM (red) and GEDI (blue) bin means joined by lines with
+  # tile-block bootstrap CI bands. Headline = slope_vsm/slope_gedi (recovery
+  # of the lidar-detectable understory contrast). Reads the same per-tile
+  # LVIS-GEDI-VSM triple pairs as vsm_understory_matched. Writes
+  # understory_calibration_bins.csv + figs/understory_calibration.{png,pdf}
+  # under save_dir.
+  #   python -m tools.run run=understory_calibration
+  understory_calibration:
+    _target_: tools.understory_calibration.understory_calibration_scatter
+    target_type: function
+    pairs_dir: ${root_data_dir}/evaluation/with_airborne_lidar/LVIS2_Gabon2016/geolocated_surface_elevation/lvis_gedi_pairs/Gabon2016_vs_GEDI2020_stable_forest_with_vsm2020
+    save_dir: ${root_results_dir}/tools/vsm_understory_matched
+    rh_understory: RH25
+    rh_top: RH98
+    pairs_glob: "*.parquet"
+    sensitivity_col: gedi_sensitivity
+    sensitivity_threshold: 0.95      # strict (> 0.95) — matches the spec
+    n_bins: 15                       # equal-count LVIS-residual quantile bins
+    n_boot_blocks: 1000              # tile-block bootstrap iterations
+    quadratic_tol: 0.10              # switch to spline if any |corr(resid, rh98^2)| > this
+    robustness_bins: [12, 20]        # extra bin counts reported in the log
+    fig_subdir: figs                 # PNG/PDF land in <save_dir>/<fig_subdir>
+    dpi: 300
     random_state: 0
 
   # =========================================================================
