@@ -35,6 +35,13 @@ exit_with_error() {
 OUTDIR="${OUTDIR:-.}"
 mkdir -p "$OUTDIR"
 
+# Which batch(es) to download: old (AfriSAR 2016 CSVs), new (Gabon 2023 LVISC2 TXTs), or all.
+BATCH="${BATCH:-all}"
+case "$BATCH" in
+    old|new|all) ;;
+    *) echo "Invalid BATCH='$BATCH' (expected: old | new | all)"; exit 1 ;;
+esac
+
 prompt_credentials
   detect_app_approval() {
     approved=`curl -s -b "$cookiejar" -c "$cookiejar" -L --max-redirs 5 --netrc-file "$netrc" https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/AFLVIS2/1/2016/03/08/LVIS2_Gabon2016_0308_R1808_049095.TXT -w '\n%{http_code}' | tail  -1`
@@ -65,6 +72,9 @@ setup_auth_wget() {
 }
 
 fetch_urls() {
+  # $1: destination directory for this batch (created if missing)
+  dest="${1:-$OUTDIR}"
+  mkdir -p "$dest"
   if command -v curl >/dev/null 2>&1; then
       setup_auth_curl
       while read -r line; do
@@ -74,7 +84,7 @@ fetch_urls() {
         # Strip everything after '?'
         stripped_query_params="${filename%%\?*}"
 
-        curl -f -b "$cookiejar" -c "$cookiejar" -L --netrc-file "$netrc" -g -o "$OUTDIR/$stripped_query_params" -- $line && echo || exit_with_error "Command failed with error. Please retrieve the data manually."
+        curl -f -b "$cookiejar" -c "$cookiejar" -L --netrc-file "$netrc" -g -o "$dest/$stripped_query_params" -- $line && echo || exit_with_error "Command failed with error. Please retrieve the data manually."
       done;
   elif command -v wget >/dev/null 2>&1; then
       # We can't use wget to poke provider server to get info whether or not URS was integrated without download at least one of the files.
@@ -90,14 +100,16 @@ fetch_urls() {
         # Strip everything after '?'
         stripped_query_params="${filename%%\?*}"
 
-        wget --load-cookies "$cookiejar" --save-cookies "$cookiejar" --output-document "$OUTDIR/$stripped_query_params" --keep-session-cookies -- $line && echo || exit_with_error "Command failed with error. Please retrieve the data manually."
+        wget --load-cookies "$cookiejar" --save-cookies "$cookiejar" --output-document "$dest/$stripped_query_params" --keep-session-cookies -- $line && echo || exit_with_error "Command failed with error. Please retrieve the data manually."
       done;
   else
       exit_with_error "Error: Could not find a command-line downloader.  Please install curl or wget"
   fi
 }
 
-fetch_urls <<'EDSCEOF'
+# ---- Batch 1: AfriSAR 2016 LVIS footprint cover (ORNL DAAC CSVs) ----
+[[ "$BATCH" == "old" || "$BATCH" == "all" ]] && \
+fetch_urls "$OUTDIR/AFLVIS2_AfriSAR2016" <<'EDSCEOF'
 https://data.ornldaac.earthdata.nasa.gov/protected/afrisar/AfriSAR_LVIS_Footprint_Cover/data/lvis2_039855_2016030820160308_l2b_covz_e04326_v0100.csv
 https://data.ornldaac.earthdata.nasa.gov/public/afrisar/AfriSAR_LVIS_Footprint_Cover/data/lvis2_039855_2016030820160308_l2b_covz_e04326_v0100.csv.sha256
 https://data.ornldaac.earthdata.nasa.gov/protected/afrisar/AfriSAR_LVIS_Footprint_Cover/data/lvis2_041404_2016030820160308_l2b_covz_e04326_v0100.csv
@@ -644,4 +656,173 @@ https://data.ornldaac.earthdata.nasa.gov/protected/afrisar/AfriSAR_LVIS_Footprin
 https://data.ornldaac.earthdata.nasa.gov/public/afrisar/AfriSAR_LVIS_Footprint_Cover/data/lvis2_048720_2016022020160220_l2b_paiz_e04326_v0100.csv.sha256
 https://data.ornldaac.earthdata.nasa.gov/protected/afrisar/AfriSAR_LVIS_Footprint_Cover/data/lvis2_045137_2016022020160220_l2b_covz_e04326_v0100.csv
 https://data.ornldaac.earthdata.nasa.gov/public/afrisar/AfriSAR_LVIS_Footprint_Cover/data/lvis2_045137_2016022020160220_l2b_covz_e04326_v0100.csv.sha256
+EDSCEOF
+
+# ---- Batch 2: Gabon 2023 LVIS Classic L2 (NSIDC LVISC2 TXTs) ----
+[[ "$BATCH" == "new" || "$BATCH" == "all" ]] && \
+fetch_urls "$OUTDIR/LVISC2_Gabon2023" <<'EDSCEOF'
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/31/LVISC2_Gabon2023_0531_R2507_065090.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/31/LVISC2_Gabon2023_0531_R2507_064197.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/31/LVISC2_Gabon2023_0531_R2507_062959.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/31/LVISC2_Gabon2023_0531_R2507_061969.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/31/LVISC2_Gabon2023_0531_R2507_061535.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/31/LVISC2_Gabon2023_0531_R2507_060908.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/31/LVISC2_Gabon2023_0531_R2507_060458.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/31/LVISC2_Gabon2023_0531_R2507_060058.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/31/LVISC2_Gabon2023_0531_R2507_059181.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/31/LVISC2_Gabon2023_0531_R2507_058733.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/31/LVISC2_Gabon2023_0531_R2507_058237.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/31/LVISC2_Gabon2023_0531_R2507_057499.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/31/LVISC2_Gabon2023_0531_R2507_056533.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/31/LVISC2_Gabon2023_0531_R2507_056120.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/31/LVISC2_Gabon2023_0531_R2507_052902.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/31/LVISC2_Gabon2023_0531_R2507_051969.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/30/LVISC2_Gabon2023_0530_R2507_067383.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/30/LVISC2_Gabon2023_0530_R2507_066884.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/30/LVISC2_Gabon2023_0530_R2507_066434.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/30/LVISC2_Gabon2023_0530_R2507_065327.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/30/LVISC2_Gabon2023_0530_R2507_064462.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/30/LVISC2_Gabon2023_0530_R2507_063420.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/30/LVISC2_Gabon2023_0530_R2507_062718.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/30/LVISC2_Gabon2023_0530_R2507_062131.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/30/LVISC2_Gabon2023_0530_R2507_060834.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/30/LVISC2_Gabon2023_0530_R2507_060281.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/30/LVISC2_Gabon2023_0530_R2507_059394.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/30/LVISC2_Gabon2023_0530_R2507_058610.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/30/LVISC2_Gabon2023_0530_R2507_057111.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/30/LVISC2_Gabon2023_0530_R2507_056117.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/30/LVISC2_Gabon2023_0530_R2507_055337.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/30/LVISC2_Gabon2023_0530_R2507_053929.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/30/LVISC2_Gabon2023_0530_R2507_053290.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/30/LVISC2_Gabon2023_0530_R2507_051445.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/29/LVISC2_Gabon2023_0529_R2507_063513.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/29/LVISC2_Gabon2023_0529_R2507_058393.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/29/LVISC2_Gabon2023_0529_R2507_057432.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/29/LVISC2_Gabon2023_0529_R2507_056679.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/29/LVISC2_Gabon2023_0529_R2507_056046.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/29/LVISC2_Gabon2023_0529_R2507_054755.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/29/LVISC2_Gabon2023_0529_R2507_053680.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/29/LVISC2_Gabon2023_0529_R2507_053005.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/27/LVISC2_Gabon2023_0527_R2507_067237.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/27/LVISC2_Gabon2023_0527_R2507_065424.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/27/LVISC2_Gabon2023_0527_R2507_063950.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/27/LVISC2_Gabon2023_0527_R2507_063074.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/27/LVISC2_Gabon2023_0527_R2507_062285.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/27/LVISC2_Gabon2023_0527_R2507_061318.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/27/LVISC2_Gabon2023_0527_R2507_060282.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/27/LVISC2_Gabon2023_0527_R2507_059321.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/27/LVISC2_Gabon2023_0527_R2507_058152.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/27/LVISC2_Gabon2023_0527_R2507_057361.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/27/LVISC2_Gabon2023_0527_R2507_056406.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/27/LVISC2_Gabon2023_0527_R2507_055234.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/27/LVISC2_Gabon2023_0527_R2507_053908.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/27/LVISC2_Gabon2023_0527_R2507_053009.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/25/LVISC2_Gabon2023_0525_R2507_066984.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/25/LVISC2_Gabon2023_0525_R2507_066273.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/25/LVISC2_Gabon2023_0525_R2507_065848.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/25/LVISC2_Gabon2023_0525_R2507_065339.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/25/LVISC2_Gabon2023_0525_R2507_064939.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/25/LVISC2_Gabon2023_0525_R2507_064270.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/25/LVISC2_Gabon2023_0525_R2507_063868.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/25/LVISC2_Gabon2023_0525_R2507_062975.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/25/LVISC2_Gabon2023_0525_R2507_062573.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/25/LVISC2_Gabon2023_0525_R2507_061681.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/25/LVISC2_Gabon2023_0525_R2507_061255.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/25/LVISC2_Gabon2023_0525_R2507_060410.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/25/LVISC2_Gabon2023_0525_R2507_059528.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/25/LVISC2_Gabon2023_0525_R2507_059096.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/25/LVISC2_Gabon2023_0525_R2507_058274.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/25/LVISC2_Gabon2023_0525_R2507_057743.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/25/LVISC2_Gabon2023_0525_R2507_056817.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/25/LVISC2_Gabon2023_0525_R2507_055938.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/25/LVISC2_Gabon2023_0525_R2507_055383.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/25/LVISC2_Gabon2023_0525_R2507_054437.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/25/LVISC2_Gabon2023_0525_R2507_053767.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/25/LVISC2_Gabon2023_0525_R2507_053225.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/25/LVISC2_Gabon2023_0525_R2507_052589.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/25/LVISC2_Gabon2023_0525_R2507_051970.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/24/LVISC2_Gabon2023_0524_R2507_064860.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/24/LVISC2_Gabon2023_0524_R2507_064286.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/24/LVISC2_Gabon2023_0524_R2507_063751.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/24/LVISC2_Gabon2023_0524_R2507_063216.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/24/LVISC2_Gabon2023_0524_R2507_062736.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/24/LVISC2_Gabon2023_0524_R2507_062334.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/24/LVISC2_Gabon2023_0524_R2507_061344.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/24/LVISC2_Gabon2023_0524_R2507_060849.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/24/LVISC2_Gabon2023_0524_R2507_060447.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/24/LVISC2_Gabon2023_0524_R2507_060035.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/24/LVISC2_Gabon2023_0524_R2507_059634.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/24/LVISC2_Gabon2023_0524_R2507_058394.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/24/LVISC2_Gabon2023_0524_R2507_057991.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/24/LVISC2_Gabon2023_0524_R2507_057573.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/24/LVISC2_Gabon2023_0524_R2507_057100.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/24/LVISC2_Gabon2023_0524_R2507_056437.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/24/LVISC2_Gabon2023_0524_R2507_055402.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/24/LVISC2_Gabon2023_0524_R2507_055001.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/24/LVISC2_Gabon2023_0524_R2507_054593.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/24/LVISC2_Gabon2023_0524_R2507_054110.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/24/LVISC2_Gabon2023_0524_R2507_053438.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/24/LVISC2_Gabon2023_0524_R2507_052886.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/24/LVISC2_Gabon2023_0524_R2507_052407.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/24/LVISC2_Gabon2023_0524_R2507_051927.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/24/LVISC2_Gabon2023_0524_R2507_051121.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/23/LVISC2_Gabon2023_0523_R2507_064210.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/23/LVISC2_Gabon2023_0523_R2507_063461.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/23/LVISC2_Gabon2023_0523_R2507_062546.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/23/LVISC2_Gabon2023_0523_R2507_062074.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/23/LVISC2_Gabon2023_0523_R2507_061382.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/23/LVISC2_Gabon2023_0523_R2507_060774.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/23/LVISC2_Gabon2023_0523_R2507_058254.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/23/LVISC2_Gabon2023_0523_R2507_057810.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/23/LVISC2_Gabon2023_0523_R2507_056931.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/23/LVISC2_Gabon2023_0523_R2507_056460.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/23/LVISC2_Gabon2023_0523_R2507_055500.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/23/LVISC2_Gabon2023_0523_R2507_054425.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/23/LVISC2_Gabon2023_0523_R2507_053908.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/23/LVISC2_Gabon2023_0523_R2507_052980.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/23/LVISC2_Gabon2023_0523_R2507_051924.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/23/LVISC2_Gabon2023_0523_R2507_051285.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/23/LVISC2_Gabon2023_0523_R2507_050476.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/23/LVISC2_Gabon2023_0523_R2507_049931.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/22/LVISC2_Gabon2023_0522_R2507_062852.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/22/LVISC2_Gabon2023_0522_R2507_062275.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/22/LVISC2_Gabon2023_0522_R2507_061570.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/22/LVISC2_Gabon2023_0522_R2507_061027.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/22/LVISC2_Gabon2023_0522_R2507_059866.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/22/LVISC2_Gabon2023_0522_R2507_058794.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/22/LVISC2_Gabon2023_0522_R2507_058318.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/22/LVISC2_Gabon2023_0522_R2507_057435.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/22/LVISC2_Gabon2023_0522_R2507_056391.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/22/LVISC2_Gabon2023_0522_R2507_055550.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/22/LVISC2_Gabon2023_0522_R2507_054315.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/22/LVISC2_Gabon2023_0522_R2507_053339.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/22/LVISC2_Gabon2023_0522_R2507_052223.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/22/LVISC2_Gabon2023_0522_R2507_051132.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/22/LVISC2_Gabon2023_0522_R2507_049690.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/22/LVISC2_Gabon2023_0522_R2507_048035.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/20/LVISC2_Gabon2023_0520_R2507_061375.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/20/LVISC2_Gabon2023_0520_R2507_060873.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/20/LVISC2_Gabon2023_0520_R2507_059704.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/20/LVISC2_Gabon2023_0520_R2507_059299.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/20/LVISC2_Gabon2023_0520_R2507_058311.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/20/LVISC2_Gabon2023_0520_R2507_057479.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/20/LVISC2_Gabon2023_0520_R2507_057059.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/20/LVISC2_Gabon2023_0520_R2507_056130.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/20/LVISC2_Gabon2023_0520_R2507_055255.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/20/LVISC2_Gabon2023_0520_R2507_054818.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/20/LVISC2_Gabon2023_0520_R2507_053769.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/20/LVISC2_Gabon2023_0520_R2507_052868.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/20/LVISC2_Gabon2023_0520_R2507_051930.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/20/LVISC2_Gabon2023_0520_R2507_051090.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/20/LVISC2_Gabon2023_0520_R2507_050473.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/20/LVISC2_Gabon2023_0520_R2507_047909.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/20/LVISC2_Gabon2023_0520_R2507_046890.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/19/LVISC2_Gabon2023_0519_R2507_060498.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/19/LVISC2_Gabon2023_0519_R2507_059665.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/19/LVISC2_Gabon2023_0519_R2507_058739.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/19/LVISC2_Gabon2023_0519_R2507_057974.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/19/LVISC2_Gabon2023_0519_R2507_057068.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/19/LVISC2_Gabon2023_0519_R2507_056190.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/19/LVISC2_Gabon2023_0519_R2507_055579.TXT
+https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/LVIS/LVISC2/1/2023/05/19/LVISC2_Gabon2023_0519_R2507_054965.TXT
 EDSCEOF

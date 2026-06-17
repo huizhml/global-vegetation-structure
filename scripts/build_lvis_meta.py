@@ -8,16 +8,16 @@ from pathlib import Path
 import pandas as pd
 
 BY_TILE_DIR = Path(
-    '~/data/gvs/evaluation/with_airborne_lidar/LVIS2_Gabon2016_by_s2_tile'
+    '/projects/dereeco/data/gvs/evaluation/with_airborne_lidar/LVIS2_Gabon2023/geolocated_surface_elevation/s2_tiled'
 ).expanduser()
-OUT_FILE = BY_TILE_DIR.parent / 'meta_lvis_profile.csv'
+OUT_FILE = BY_TILE_DIR.parent / 'meta_lvis2023_profile.csv'
 
 tiles = sorted(p.stem for p in BY_TILE_DIR.glob('*.parquet'))
 df = pd.DataFrame({
     'Country': 'Gabon',
     'Tile name': tiles,
-    'Year': 2016,
-    'Ours': 2017,
+    'Year': 2023,
+    'Ours': 2023,
 })
 df.to_csv(OUT_FILE, index=False)
 print(f'Wrote {len(df)} rows to {OUT_FILE}')

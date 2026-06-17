@@ -270,6 +270,152 @@ tools:
     random_state: 0
 
   # =========================================================================
+  # tools/vsm_profile_shape.py
+  # =========================================================================
+  # Does VSM encode vertical profile SHAPE beyond canopy-top height? LVIS over
+  # Gabon is the independent reference; profiles are normalized by their own
+  # RH98 so the question is strictly shape, not height. Four parts:
+  #   1) normalized RH25/50/75 + full-profile shape RMSE (LVIS vs VSM),
+  #   2) height-only baseline (RF: RH98 -> normalized LVIS profile) vs VSM,
+  #   3) residuals after regressing RH_x on RH98 (corr of LVIS vs VSM residuals),
+  #   4) height-bin comparison of the normalized metrics.
+  # Reads the LVIS-GEDI-VSM triple pairs (same source as vsm_understory_matched),
+  # using only lvis_RH<NN> / vsm_RH<NN>.
+  #   python -m tools.run run=vsm_profile_shape
+  vsm_profile_shape:
+    _target_: tools.vsm_profile_shape.vsm_profile_shape_analysis
+    target_type: function
+    pairs_dir: ${root_data_dir}/evaluation/with_airborne_lidar/LVIS2_Gabon2016/geolocated_surface_elevation/lvis_gedi_pairs/Gabon2016_vs_GEDI2020_stable_forest_with_vsm2020
+    save_dir: ${root_results_dir}/tools/vsm_profile_shape
+    pairs_glob: "*.parquet"
+    # LVIS shape grid: RH10..RH95 every 5 m (LVIS is NOT recorded at every
+    # percentile). RH96-RH100 left out (too close to the RH98 normalizer).
+    shape_levels: [15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95]
+    rh98_min: 5.0              # keep footprints with BOTH sensors' RH98 > this (m)
+    test_size: 0.3             # held-out fraction (of tiles if group_split, else footprints)
+    group_split: true          # split train/test by S2 tile (no tile straddles); guards spatial leakage
+    n_estimators: 300          # trees in the RandomForest models
+    rf_min_samples_leaf: 50    # regularize RFs (single RH98 feature overfits at leaf=1 under spatial split)
+    height_bin_edges: [10.0, 20.0, 30.0, 40.0, 50.0]  # last opens to +inf
+    random_state: 0
+
+  # =========================================================================
+  # tools/subcanopy_classify.py
+  # =========================================================================
+  # Do GEDI and VSM carry LVIS-defined lower/sub-canopy structure AFTER canopy
+  # top height is controlled? Falsifiable classification test: bin footprints by
+  # LVIS RH98, label dense (top 30%) vs sparse (bottom 30%) by LVIS_sub =
+  # LVIS_RH<num>/RH98 WITHIN each bin (so the label is height-independent), then
+  # classify the label from each sensor's height-only / shape-only / height+shape
+  # (+optional extended FHD/ENL/CR) features under spatially independent CV
+  # (GroupKFold by S2 tile = parquet stem, or leave-one-tile-out). Headline =
+  # Delta_AUC of height+shape over height-only, per sensor; GEDI vs VSM signal
+  # strength. Repeated for LVIS_sub = RH25/RH98 and RH50/RH98. Reads the same
+  # LVIS-GEDI-VSM triple pairs as vsm_understory_matched.
+  #   python -m tools.run run=subcanopy_classify
+  subcanopy_classify:
+    _target_: tools.subcanopy_classify.subcanopy_classification_analysis
+    target_type: function
+    pairs_dir: ${root_data_dir}/evaluation/with_airborne_lidar/LVIS2_Gabon2016/geolocated_surface_elevation/lvis_gedi_pairs/Gabon2016_vs_GEDI2020_stable_forest_with_vsm2020
+    save_dir: ${root_results_dir}/tools/subcanopy_classify
+    pairs_glob: "*.parquet"
+    sub_definitions: [25, 50]      # LVIS_sub numerators: RH25/RH98 and RH50/RH98
+    height_bin_edges: [10.0, 20.0, 30.0, 40.0, 50.0]  # last opens to +inf
+    tercile_q: 0.30                # top 30% dense / bottom 30% sparse / mid discarded
+    min_bin_n: 100                 # drop a height bin with fewer footprints
+    rh98_min: 5.0                  # keep footprints with ALL sensors' RH98 > this (m)
+    classifier: random_forest      # 'random_forest' or 'logreg' (same for all sets)
+    cv_scheme: group_kfold         # 'group_kfold' or 'leave_one_tile_out'
+    n_splits: 5                    # GroupKFold folds (capped at n tiles)
+    n_estimators: 300
+    rf_min_samples_leaf: 20
+    perbin_min_n: 60               # min OOF footprints for a per-height-bin metric
+    random_state: 0
+
+  # =========================================================================
+  # tools/subcanopy_separation.py
+  # =========================================================================
+  # Descriptive (no classifier) sister to subcanopy_classify: how far apart do
+  # the LVIS-defined DENSE vs SPARSE classes sit on the SAME normalized metric
+  # RH<num>/RH98, per LVIS RH98 height bin and per sensor (LVIS/GEDI/VSM)?
+  # Labels are LVIS terciles WITHIN each RH98 bin (height-stratified). Reports
+  # mean/median dense & sparse, delta_mean/delta_median, Cohen's d and the
+  # preservation ratio delta_sensor/delta_LVIS, for RH25/RH98, RH50/RH98 and
+  # RH75/RH98. Reads the same LVIS-GEDI-VSM triple pairs as vsm_understory_matched.
+  #   python -m tools.run run=subcanopy_separation
+  subcanopy_separation:
+    _target_: tools.subcanopy_separation.subcanopy_separation_analysis
+    target_type: function
+    pairs_dir: ${root_data_dir}/evaluation/with_airborne_lidar/LVIS2_Gabon2016/geolocated_surface_elevation/lvis_gedi_pairs/Gabon2016_vs_GEDI2020_stable_forest_with_vsm2020
+    save_dir: ${root_results_dir}/tools/subcanopy_separation
+    pairs_glob: "*.parquet"
+    sub_definitions: [25, 50, 75]  # RH25/RH98, RH50/RH98, RH75/RH98
+    height_bin_edges: [10.0, 20.0, 30.0, 40.0, 50.0]  # last opens to +inf
+    tercile_q: 0.30                # top 30% dense / bottom 30% sparse / mid discarded
+    min_bin_n: 100                 # drop a height bin with fewer footprints
+    min_group_n: 30                # min dense/sparse footprints for a sensor/bin stat
+    rh98_min: 5.0                  # keep footprints with ALL sensors' RH98 > this (m)
+
+  # =========================================================================
+  # tools/subcanopy_matched_residual.py
+  # =========================================================================
+  # How much LVIS-defined lower-canopy structural separation survives canopy-top
+  # height control, and how much do GEDI and VSM preserve? Headline metric is the
+  # understory ratio U = RH25/RH98. Four parts:
+  #   A) height-match diagnostic: U high/low terciles WITHIN broad LVIS RH98 bins,
+  #      report dRH98 per bin (small => the original figure was already matched),
+  #   B) strict 1:1 nearest-neighbour matching on LVIS RH98 (|dRH98| < match_tol
+  #      caliper) to make canopy-top height effectively identical across classes,
+  #   C) class separation on the matched pairs: per band dU, Cohen's d and the
+  #      preservation ratio dU_sensor/dU_LVIS, + a two-panel figure,
+  #   D) residual robustness: fit f:RH98->RH25 on all valid LVIS (random_forest
+  #      or gam spline), residualize every sensor, class by LVIS-residual
+  #      terciles, report dResidual + preservation, + a residual figure.
+  # Reads the same LVIS-GEDI-VSM triple pairs as vsm_understory_matched.
+  #   python -m tools.run run=subcanopy_matched_residual
+  subcanopy_matched_residual:
+    _target_: tools.subcanopy_matched_residual.subcanopy_matched_residual_analysis
+    target_type: function
+    pairs_dir: ${root_data_dir}/evaluation/with_airborne_lidar/LVIS2_Gabon2016/geolocated_surface_elevation/lvis_gedi_pairs/Gabon2016_vs_GEDI2020_stable_forest_with_vsm2020
+    save_dir: ${root_results_dir}/tools/subcanopy_matched_residual
+    pairs_glob: "*.parquet"
+    num_level: 25                  # U = RH25/RH98 understory ratio
+    # 5 m-wide RH98 bins from 15 m: 15-20,20-25,...,45-50,50+ (last opens to +inf).
+    height_bin_edges: [15.0, 20.0, 25.0, 30.0, 35.0, 40.0, 45.0, 50.0]
+    tercile_q: 0.30                # high = top 30%, low = bottom 30%, mid discarded
+    match_tol: 0.5                 # Part B caliper on |dRH98| (m) for a 1:1 match
+    min_bin_n: 100                 # drop an RH98 bin with fewer footprints
+    min_group_n: 30                # min high/low footprints for a per-band stat
+    rh98_min: 5.0                  # keep footprints with ALL sensors' RH98 > this (m)
+    resid_model: random_forest     # Part D f:RH98->RH25 — 'random_forest' or 'gam'
+    n_estimators: 300
+    rf_min_samples_leaf: 50        # single RH98 feature overfits at leaf=1
+    spline_knots: 5                # knots for the 'gam' spline basis
+    random_state: 0
+    complexity_col: lvis_COMPLEXITY  # Part E: corr(R_LVIS, complexity) by dense/sparse
+
+  # =========================================================================
+  # tools/subcanopy_sensitivity_strata.py
+  # =========================================================================
+  subcanopy_sensitivity_strata:
+    _target_: tools.subcanopy_sensitivity_strata.subcanopy_sensitivity_strata_analysis
+    target_type: function
+    pairs_dir: ${root_data_dir}/evaluation/with_airborne_lidar/LVIS2_Gabon2016/geolocated_surface_elevation/lvis_gedi_pairs/Gabon2016_vs_GEDI2020_stable_forest_with_vsm2020
+    save_dir: ${root_results_dir}/tools/subcanopy_sensitivity_strata
+    pairs_glob: "*.parquet"
+    num_level: 25                  # lower-canopy RH numerator residualised vs RH98
+    # GEDI sensitivity bins: 0.95-0.97, 0.97-0.98, 0.98-0.99, 0.99-1.00.
+    sens_bin_edges: [0.95, 0.97, 0.98, 0.99, 1.00]
+    tercile_q: 0.30                # high = top 30%, low = bottom 30%, mid discarded
+    min_group_n: 30                # min high/low footprints per sensitivity bin
+    rh98_min: 5.0                  # keep footprints with ALL sensors' RH98 > this (m)
+    resid_model: random_forest     # f:RH98->RH25 — 'random_forest' or 'gam'
+    n_estimators: 300
+    rf_min_samples_leaf: 50        # single RH98 feature overfits at leaf=1
+    spline_knots: 5                # knots for the 'gam' spline basis
+    random_state: 0
+
+  # =========================================================================
   # tools/annotate_locations_map.py
   # =========================================================================
   annotate_locations_map:

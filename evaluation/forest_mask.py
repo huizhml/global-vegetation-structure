@@ -138,7 +138,7 @@ def build_stable_forest_mask(
     """Build a 0/1 stable-forest GeoTIFF per S2 tile listed in `meta_file`.
 
     Args:
-        meta_file: CSV with a `Tile name` column (e.g. meta_lvis_profile.csv).
+        meta_file: CSV with a `Tile name` column (e.g. meta_lvis2016_profile.csv).
         s2_grid_file: parquet with `Name` + `geometry` columns covering all
             tiles in the meta CSV (EPSG:4326, or with a recoverable CRS).
         vsm_ref_tile_dir: dir with one subdir per S2 tile holding the VSM

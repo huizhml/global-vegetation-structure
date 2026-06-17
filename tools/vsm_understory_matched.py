@@ -66,7 +66,7 @@ Ecology control (change D)
     ecological structure nonlinearly.
 
 Data: per-tile LVIS-GEDI-VSM pair parquets from
-`evaluation/lvis_vs_gedi.extract_vsm_on_pair_locations`
+`evaluation/on_lvis.extract_vsm_on_pair_locations`
 (`Gabon2016_vs_GEDI2020_stable_forest_with_vsm2020/<tile>.parquet`), columns
 `lvis_RH<NN>` (uppercase) / `gedi_rh<NN>` (lowercase) / `vsm_RH<NN>` (uppercase)
 + optional `gedi_BIOME` + geometry (GEDI shot centre in per-tile UTM, reprojected
@@ -89,7 +89,7 @@ from const import FIGURE_SIZES, FONT_SIZES
 
 # Three sensors keyed by the label used in figures/tables and the (numerator,
 # denominator) column-name templates. GEDI uses lowercase dense `rh<NN>`; LVIS
-# and VSM use uppercase sparse `RH<NN>` (see lvis_vs_gedi._sensor_cols).
+# and VSM use uppercase sparse `RH<NN>` (see on_lvis._sensor_cols).
 _SENSORS = ('LVIS', 'VSM', 'GEDI')
 _SENSOR_COLOR = {'LVIS': 'C2', 'VSM': 'C3', 'GEDI': 'C0'}
 
