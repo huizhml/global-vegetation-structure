@@ -15,7 +15,7 @@ Context (for reading the output, not the code):
     height) in the low-sensitivity regime.
 
 Data: per-tile LVIS-GEDI-VSM pair parquets from
-`evaluation/lvis_vs_gedi.extract_vsm_on_pair_locations`
+`evaluation/on_lvis.extract_vsm_on_pair_locations`
 (`Gabon2016_vs_GEDI2020_stable_forest_with_vsm2020/<tile>.parquet`). Column
 naming (note the case split between sensors):
   - LVIS RH : `lvis_RH25`, `lvis_RH98`   (uppercase, sparse percentiles)
