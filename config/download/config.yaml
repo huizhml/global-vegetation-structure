@@ -26,8 +26,9 @@ download:
     target_type: class
     target_method: download
     func_args: {}
-    location_files: ~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_cal/original/2020/*.parquet
-    save_dir: ~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_cal/original_with_sota_chms/2020
+    sensitivity_threshold: 0.95
+    location_files: ~/data/gvs/gedi/veg_sensitivity_${sens_label:${.sensitivity_threshold}}/subset_cal/original/2020/*.parquet
+    save_dir: ~/data/gvs/gedi/veg_sensitivity_${sens_label:${.sensitivity_threshold}}/subset_cal/original_with_sota_chms/2020
     n_parallel: 60
     rewrite: false
     debug: false
@@ -71,10 +72,14 @@ download:
     target_method: download_all_valid
     func_args: {}
     year: 2020
+    # null = no sensitivity filter; numeric = sensitivity >= threshold.
+    # save_dir folder name (`veg_sensitivity_<label>`) is derived via the
+    # `sens_label` resolver registered in download/run.py.
+    sensitivity_threshold: null
     n_parallel: 100
-    gedi_table_index_file: ~/data/gvs/gedi/l2a_orbit_table/l2a_orbit_table_2020.parquet
-    save_dir: ~/data/gvs/gedi/veg_sensitivity_gt0p95/all_valid/2020
-    s2_table_file: ~/data/gvs/state/s2_tiles_with_growing_months.parquet
+    gedi_table_index_file: ~/data/gvs/gedi/l2a_orbit_table/l2a_orbit_table_${.year}.parquet
+    save_dir: ~/data/gvs/gedi/veg_sensitivity_${sens_label:${.sensitivity_threshold}}/all_valid/${.year}
+    s2_grid_file: ~/data/gvs/state/s2_tiles_with_growing_months.parquet
 
   add_slope:
     _target_: download.products.gedi.GEDI
@@ -82,9 +87,10 @@ download:
     target_method: add_slope
     func_args: {}
     year: 2020
-    location_dir: ~/data/gvs/gedi/veg_sensitivity_gt0p95/all_valid/2020
+    sensitivity_threshold: 0.95
+    location_dir: ~/data/gvs/gedi/veg_sensitivity_${sens_label:${.sensitivity_threshold}}/all_valid/2020
     dem_meta_file: ~/data/gvs/assets/dem/cop-dem-glo-30_items.parquet
-    save_dir: ~/data/gvs/gedi/veg_sensitivity_gt0p95/all_valid_with_slope/2020
+    save_dir: ~/data/gvs/gedi/veg_sensitivity_${sens_label:${.sensitivity_threshold}}/all_valid_with_slope/2020
 
   check_slope_distribution:
     _target_: download.products.gedi.GEDI
@@ -92,8 +98,9 @@ download:
     target_method: check_slope_distribution
     func_args: {}
     year: 2020
+    sensitivity_threshold: 0.95
     deploy_status_dir: ~/data/gvs/state
-    input_dir: ~/data/gvs/gedi/veg_sensitivity_gt0p95/all_valid_with_slope/2020
+    input_dir: ~/data/gvs/gedi/veg_sensitivity_${sens_label:${.sensitivity_threshold}}/all_valid_with_slope/2020
 
   get_used_gedi_points:
     _target_: download.products.gedi.GEDI
@@ -118,7 +125,8 @@ download:
   dedup_shots:
     _target_: download.products.gedi.dedup_shots
     target_type: function
-    root_dir: ~/data/gvs/gedi/veg_sensitivity_gt0p95
+    sensitivity_threshold: 0.95
+    root_dir: ~/data/gvs/gedi/veg_sensitivity_${sens_label:${.sensitivity_threshold}}
     split: test
     year: 2020
     data_name: original_with_sota_chms_biome
