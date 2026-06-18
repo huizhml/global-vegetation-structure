@@ -1,6 +1,7 @@
 import os
 import ee
 import json
+import shutil
 import logging
 from typing import List
 from pathlib import Path
@@ -166,13 +167,14 @@ class GEDI(DaskDownloader):
     GEDI_START = pd.Timestamp('2018-01-01')
     _ee_initialized = False
 
-    def __init__(self, year=2019, 
+    def __init__(self, year=2019,
                  # all needed
-                 save_dir: str = None, 
+                 save_dir: str = None,
                  # original download
-                 mgrs_file: str = 'GEDI/mgrs_with_count_and_orbits.parquet', 
+                 mgrs_file: str = 'GEDI/mgrs_with_count_and_orbits.parquet',
                  # download all valid
                  s2_grid_file: str = None,
+                 gedi_table_index_file: str = None,
                  # add slope
                  location_dir: str = None,
                  dem_meta_file: str = None,
@@ -183,6 +185,7 @@ class GEDI(DaskDownloader):
                  # optional
                  flag_dir: str = None,
                  key_file: str = None, npartitions=100,
+                 sensitivity_threshold: float = 0.95,
                  n_parallel=40, row_group_size=100, random_state: int = 42, rewrite: bool = False, **kwargs):
         """
         Initializes a GEDI object.
@@ -195,6 +198,7 @@ class GEDI(DaskDownloader):
         super().__init__(n_parallel=n_parallel, max_retries=3, **kwargs)
         self.mgrs_file = mgrs_file
         self.s2_grid_file = s2_grid_file
+        self.gedi_table_index_file = gedi_table_index_file
         self.location_dir = location_dir
         self.dem_meta_file = dem_meta_file
         self.deploy_status_dir = deploy_status_dir
@@ -202,14 +206,24 @@ class GEDI(DaskDownloader):
         self.used_parq_dir = used_parq_dir
         self.save_dir = Path(save_dir).expanduser()
         self.save_dir.mkdir(exist_ok=True, parents=True)
-        
-        self.flag_dir = Path(flag_dir).expanduser()
-        self.flag_dir.mkdir(exist_ok=True, parents=True)
+
+        # flag_dir is only used by the legacy download_zone path; other methods
+        # (e.g. download_all_valid) don't need it.
+        if flag_dir is not None:
+            self.flag_dir = Path(flag_dir).expanduser()
+            self.flag_dir.mkdir(exist_ok=True, parents=True)
+        else:
+            self.flag_dir = None
         self.npartitions = npartitions
         self.n_parallel = n_parallel
         self.row_group_size = row_group_size
         self.year = year
-        self.filter = 'quality_flag==1 && degrade_flag==0 && region_class>0 && leaf_off_flag!=1 && sensitivity>=0.95'
+        self.sensitivity_threshold = sensitivity_threshold
+        base_filter = 'quality_flag==1 && degrade_flag==0 && region_class>0 && leaf_off_flag!=1'
+        self.filter = (
+            f'{base_filter} && sensitivity>={sensitivity_threshold}'
+            if sensitivity_threshold is not None else base_filter
+        )
         self.random_state = random_state
         self.rewrite = rewrite
         self.key_file = key_file
@@ -304,81 +318,138 @@ class GEDI(DaskDownloader):
 
     def download_all_valid(self):
         '''
-        Find the orbit id from the growing season for each S2 tile
-        Each orbit records ~1.5 hours of GEDI footprints
-        And download all valid GEDI points for the S2 tile
-        Ags:
-            * s2_grid_file: the path to the S2 table file, should have columns: Name, geometry, growing_months
+        Resume-aware per-orbit pipeline.
 
+        Pivots from the old per-tile loop (one GEE call per (tile, orbit) pair)
+        to one GEE call per orbit serving all overlapping pending tiles. Skips
+        tiles whose final parquet already exists & is valid.
+
+        Phase 1 (GEE-bound, parallel): fetch each pending orbit once filtered to
+                the union of pending tile geoms it covers, sjoin locally, dedup
+                each shot to its canonical (alphabetically-first Name) pending
+                tile to avoid S2-overlap duplicates, stage per-tile slices to
+                save_dir/.staging/<tile>/<orbit>.parquet.
+        Phase 2 (local CPU, parallel): per pending tile, concat all staging
+                slices into save_dir/<tile>.parquet and remove the staging dir.
+
+        Args (via __init__ / yaml):
+            * s2_grid_file: S2 tile table with columns Name, geometry, growing_months
+            * gedi_table_index_file: GEDI orbit index (downloaded if missing)
         '''
         cluster = LocalCluster()
         client = Client(cluster)  # timeout
         print(client)
+
         gedi_table_index_file = Path(self.gedi_table_index_file).expanduser()
-        self.gedi_table_index = download_gedi_table_index(year=self.year, out_file=gedi_table_index_file)
-        self.gedi_table_index = self.gedi_table_index.drop(columns=['system:index', 'time_end'])
-        self.gedi_table_index['month'] = self.gedi_table_index['time_start'].str[5:7]
-        self.gedi_table_index['month'] = self.gedi_table_index['month'].astype(int)
-        self.gedi_table_index.set_crs(epsg=4326, inplace=True)
+        gedi_index = download_gedi_table_index(year=self.year, out_file=gedi_table_index_file)
+        gedi_index = gedi_index.drop(columns=['system:index', 'time_end'])
+        gedi_index['month'] = gedi_index['time_start'].str[5:7].astype(int)
+        gedi_index = gedi_index.set_crs(epsg=4326)
 
         s2_grid_file = Path(self.s2_grid_file).expanduser()
         s2_table = gpd.read_parquet(s2_grid_file)
-        tasks = []
-        for idx, row in s2_table.iterrows():
-            tasks.append(self.get_orbit_for_one_s2_tile(row))
-        self.schedule_tasks(delayed_tasks=tasks)
+
+        existing = {p.stem for p in self.save_dir.glob('*.parquet') if is_parquet_ok(p)}
+        pending_tiles = s2_table[~s2_table['Name'].isin(existing)].reset_index(drop=True)
+        print(f'{len(existing)} tiles done, {len(pending_tiles)} pending')
+        if len(pending_tiles) == 0:
+            print('All tiles done.')
+            return
+
+        # Spatial join (pending tiles × orbits) + growing-month filter, in one pass
+        pairs = gpd.sjoin(
+            pending_tiles[['Name', 'geometry', 'growing_months']],
+            gedi_index[['table_id', 'month', 'geometry']],
+            predicate='intersects', how='inner')
+        in_growing = pairs.apply(
+            lambda r: r['month'] in {int(m) for m in r['growing_months']}, axis=1)
+        pairs = pairs[in_growing]
+        if len(pairs) == 0:
+            print('No (pending_tile, orbit) pairs in growing months.')
+            return
+        print(f'{pairs["table_id"].nunique()} orbits to fetch covering pending tiles')
+
+        self.staging_dir = self.save_dir / '.staging'
+        self.staging_dir.mkdir(exist_ok=True, parents=True)
+
+        orbit_tasks = []
+        for orbit_id, group in pairs.groupby('table_id'):
+            tile_subset = group[['Name', 'geometry']].drop_duplicates('Name').reset_index(drop=True)
+            tile_subset = gpd.GeoDataFrame(tile_subset, geometry='geometry', crs='EPSG:4326')
+            orbit_tasks.append(self.fetch_orbit(orbit_id, tile_subset))
+        print(f'Phase 1: scheduling {len(orbit_tasks)} orbit fetches')
+        self.schedule_tasks(delayed_tasks=orbit_tasks)
+
+        merge_tasks = [self.merge_tile(name) for name in pending_tiles['Name'].unique()]
+        print(f'Phase 2: scheduling {len(merge_tasks)} tile merges')
+        self.schedule_tasks(delayed_tasks=merge_tasks)
+
+        flag_dir = self.staging_dir / '.orbit_done'
+        if flag_dir.exists():
+            shutil.rmtree(flag_dir)
+        if self.staging_dir.exists() and not any(self.staging_dir.iterdir()):
+            self.staging_dir.rmdir()
 
     @dask.delayed
-    def get_orbit_for_one_s2_tile(self, s2_tile: pd.DataFrame):
+    @retry(requests.HTTPError, tries=10, delay=1)
+    def fetch_orbit(self, orbit_id: str, pending_tiles: gpd.GeoDataFrame):
         '''
-        Find the orbit id from the growing season for each S2 tile
-        Each orbit records ~1.5 hours of GEDI footprints
-        Ags:
-            * s2_tile: the S2 tile dataframe
+        Fetch one GEDI orbit (filtered to union of pending tile geoms),
+        assign each shot to its canonical pending tile (alphabetically-first
+        Name to dedupe across S2 overlap), and stage per-tile slices.
         '''
-        file = self.save_dir / f'{s2_tile["Name"]}.parquet'
-        if file.exists() and not self.rewrite and is_parquet_ok(file):
-            print(f'{file} exists and is ok')
+        orbit_key = orbit_id.split('/')[-1]
+        done_flag = self.staging_dir / '.orbit_done' / orbit_key
+        if done_flag.exists() and not self.rewrite:
             return
-        # !!!! inside intersects it has to be a geometry object, otherwise it will try to match the index!!!
-        orbits_intersects_tile = self.gedi_table_index[self.gedi_table_index.intersects(s2_tile['geometry'])]
-        if len(orbits_intersects_tile) == 0:
-            return
-        growing_months = s2_tile['growing_months']
-        growing_months = [int(i) for i in growing_months]
-        orbits_in_growing_months = orbits_intersects_tile[orbits_intersects_tile['month'].isin(growing_months)]
-        data = []
-        for orbit_id in orbits_in_growing_months['table_id']:
-            fc = ee.FeatureCollection(orbit_id)
-            geom = shapely_to_geojson(s2_tile['geometry'])
-            fc = fc.filterBounds(geom).filter(self.filter).filter(ee.Filter.inList('pft_class', list(range(1, 9))))
-            fc = ee_fc_to_gpd(fc)
-            if fc is None:
-                continue
-            # print(f'Found {len(fc)} GEDI points for {orbit_id}')
-            data.append(fc)
-        if len(data) == 0:
-            print(f'No GEDI points found for {s2_tile["Name"]}')
-            return
-        data = pd.concat(data)
-        data = data.reset_index(drop=True)
-        data['system:index'] = data['system:index'].astype(str)
-        data.to_parquet(file)
-        print(f'Saved {len(data)} GEDI points for {s2_tile["Name"]} after filtering')
+        done_flag.parent.mkdir(exist_ok=True, parents=True)
 
-        # if self.exclude_used_gedi_points:
-        #     used_gedi_points_file = self.used_gedi_points_dir / f'{s2_tile["Name"]}.parquet'
-        #     used_gedi_points = gpd.read_parquet(used_gedi_points_file, columns=['geometry'])
-        #     data = data[~data.geometry.isin(used_gedi_points['geometry'])]
+        union_geom = pending_tiles.geometry.unary_union
+        fc = (ee.FeatureCollection(orbit_id)
+              .filterBounds(shapely_to_geojson(union_geom))
+              .filter(self.filter)
+              .filter(ee.Filter.inList('pft_class', list(range(1, 9)))))
+        points = ee_fc_to_gpd(fc)
+        if points is None or len(points) == 0:
+            done_flag.touch()
+            return
 
-        # if len(data) > self.correction_number_per_tile:
-        #     print(
-        #         f'Sampling {self.correction_number_per_tile} GEDI points from {len(data)} GEDI points for {s2_tile["Name"]}')
-        #     data = data.sample(self.correction_number_per_tile)
-        # data = data.reset_index(drop=True)
-        # data['system:index'] = data['system:index'].astype(str)
-        # data.to_parquet(file)
-        # print(f'Saved {len(data)} GEDI points for {s2_tile["Name"]} for GVS correction')
+        if points.crs is None:
+            points = points.set_crs(epsg=4326)
+        joined = gpd.sjoin(
+            points, pending_tiles[['Name', 'geometry']],
+            predicate='intersects', how='inner')
+        # Canonical assignment: each shot to its alphabetically-first matched tile
+        joined = (joined.sort_values('Name')
+                        .drop_duplicates(subset=['shot_number'], keep='first')
+                        .drop(columns=['index_right']))
+
+        for tile_name, slice_df in joined.groupby('Name'):
+            slice_df = slice_df.drop(columns=['Name']).reset_index(drop=True)
+            if 'system:index' in slice_df.columns:
+                slice_df['system:index'] = slice_df['system:index'].astype(str)
+            out = self.staging_dir / tile_name / f'{orbit_key}.parquet'
+            out.parent.mkdir(exist_ok=True, parents=True)
+            slice_df.to_parquet(out)
+
+        done_flag.touch()
+
+    @dask.delayed
+    def merge_tile(self, tile_name: str):
+        '''Concat all staging slices for one tile into the final parquet.'''
+        out = self.save_dir / f'{tile_name}.parquet'
+        if out.exists() and is_parquet_ok(out) and not self.rewrite:
+            return
+        tile_staging = self.staging_dir / tile_name
+        if not tile_staging.exists():
+            return
+        parts = sorted(tile_staging.glob('*.parquet'))
+        if not parts:
+            return
+        df = pd.concat([gpd.read_parquet(p) for p in parts], ignore_index=True)
+        df.to_parquet(out)
+        shutil.rmtree(tile_staging)
+        print(f'Saved {len(df)} GEDI points for {tile_name}')
 
     def add_slope(self):
         '''
@@ -494,7 +565,7 @@ class GEDI(DaskDownloader):
         after_slope_filter = after_slope_filter.rename(columns={'count': f'gedi_count_after_slope_filter_{self.year}'})
         s2_df = s2_df.join(after_slope_filter)
         s2_df[f'gedi_count_after_slope_filter_{self.year}'] = s2_df[f'gedi_count_after_slope_filter_{self.year}'].fillna(0).astype(int)
-        s2_df.to_parquet(latest_s2_file.with_stem(f'deploy_status_{datetime.now().strftime('%Y-%m-%dT%H')}'))
+        s2_df.to_parquet(latest_s2_file.with_stem(f'deploy_status_{datetime.now().strftime("%Y-%m-%dT%H")}'))
         return 
 
 

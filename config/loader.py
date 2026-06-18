@@ -6,6 +6,19 @@ from omegaconf import MISSING, OmegaConf
 from hydra.core.config_store import ConfigStore
 
 
+# Custom OmegaConf resolvers used by op configs. Registered at import time so
+# any entrypoint that imports `config.loader` (i.e. anything calling `register()`)
+# gets them without having to remember to re-register per entrypoint.
+def _sens_label(threshold):
+    # null threshold -> "all"; 0.95 -> "gt0p95"; matches legacy folder naming.
+    if threshold is None:
+        return 'all'
+    return f'gt{f"{threshold:g}".replace(".", "p")}'
+
+
+OmegaConf.register_new_resolver('sens_label', _sens_label, replace=True)
+
+
 def _split_shared_and_ops(d: dict) -> tuple[dict, dict]:
     """Split a YAML mapping into (shared_scalars, op_dicts)."""
     shared = {k: v for k, v in d.items() if not isinstance(v, dict)}
