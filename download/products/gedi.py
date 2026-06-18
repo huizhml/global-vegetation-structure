@@ -1,7 +1,6 @@
 import os
 import ee
 import json
-import shutil
 import logging
 from typing import List
 from pathlib import Path
@@ -318,22 +317,34 @@ class GEDI(DaskDownloader):
 
     def download_all_valid(self):
         '''
-        Resume-aware per-orbit pipeline.
+        Per-tile pipeline: one task per S2 tile, each task makes a small GEE
+        call per overlapping orbit (filterBounds = single tile polygon).
 
-        Pivots from the old per-tile loop (one GEE call per (tile, orbit) pair)
-        to one GEE call per orbit serving all overlapping pending tiles. Skips
-        tiles whose final parquet already exists & is valid.
+        Why per-tile and not per-orbit
+        ------------------------------
+        A per-orbit refactor was tried (one GEE call per orbit, filterBounds =
+        bbox of all overlapping pending tiles, then local sjoin to split per
+        tile). It was ~5–10x SLOWER in practice. Measured timings:
 
-        Phase 1 (GEE-bound, parallel): fetch each pending orbit once filtered to
-                the union of pending tile geoms it covers, sjoin locally, dedup
-                each shot to its canonical (alphabetically-first Name) pending
-                tile to avoid S2-overlap duplicates, stage per-tile slices to
-                save_dir/.staging/<tile>/<orbit>.parquet.
-        Phase 2 (local CPU, parallel): per pending tile, concat all staging
-                slices into save_dir/<tile>.parquet and remove the staging dir.
+            orbit X (96 tiles, 71k pts): gee=251s sjoin=0.2s write=1.7s
+            orbit Y (54 tiles, 77k pts): gee=252s sjoin=0.3s write=1.3s
+            orbit Z (30 tiles, 62k pts): gee=256s sjoin=0.2s write=0.9s
+
+        Two compounding causes:
+          1. bbox(union of tiles) for orbits crossing continents ≈ whole region
+             → GEE returns the full orbit's points, not the subset we need;
+          2. GEE has a large per-request fixed cost that's worse to amortize
+             into a few big calls than into many small parallel calls — small
+             single-tile filterBounds calls (5-vertex polygon, ~few k pts)
+             are fast and parallelize well across workers.
+
+        Per-tile keeps GEE happy: small payload, simple filter polygon, lots
+        of small tasks. Downside: S2 overlap regions produce duplicate shots
+        across tile parquets — use `dedup_shots` as a post-processing pass
+        if a globally-deduped dataset is needed.
 
         Args (via __init__ / yaml):
-            * s2_grid_file: S2 tile table with columns Name, geometry, growing_months
+            * s2_grid_file: S2 table with columns Name, geometry, growing_months
             * gedi_table_index_file: GEDI orbit index (downloaded if missing)
         '''
         cluster = LocalCluster()
@@ -349,107 +360,113 @@ class GEDI(DaskDownloader):
         s2_grid_file = Path(self.s2_grid_file).expanduser()
         s2_table = gpd.read_parquet(s2_grid_file)
 
+        # Skip tiles already produced — keeps re-runs cheap.
         existing = {p.stem for p in self.save_dir.glob('*.parquet') if is_parquet_ok(p)}
-        pending_tiles = s2_table[~s2_table['Name'].isin(existing)].reset_index(drop=True)
-        print(f'{len(existing)} tiles done, {len(pending_tiles)} pending')
-        if len(pending_tiles) == 0:
+        pending = s2_table[~s2_table['Name'].isin(existing)].reset_index(drop=True)
+        print(f'{len(existing)} tiles done, {len(pending)} pending')
+        if len(pending) == 0:
             print('All tiles done.')
             return
 
-        # Spatial join (pending tiles × orbits) + growing-month filter, in one pass
+        # One-shot sjoin (pending × orbits) + growing-month filter, replaces the
+        # per-tile linear intersects() scan over the full orbit index (was
+        # O(N_pending × N_orbits) Python ops; now one R-tree sjoin).
         pairs = gpd.sjoin(
-            pending_tiles[['Name', 'geometry', 'growing_months']],
+            pending[['Name', 'geometry', 'growing_months']],
             gedi_index[['table_id', 'month', 'geometry']],
             predicate='intersects', how='inner')
         in_growing = pairs.apply(
             lambda r: r['month'] in {int(m) for m in r['growing_months']}, axis=1)
         pairs = pairs[in_growing]
-        if len(pairs) == 0:
-            print('No (pending_tile, orbit) pairs in growing months.')
-            return
-        print(f'{pairs["table_id"].nunique()} orbits to fetch covering pending tiles')
+        orbits_per_tile = pairs.groupby('Name')['table_id'].apply(list).to_dict()
 
-        self.staging_dir = self.save_dir / '.staging'
-        self.staging_dir.mkdir(exist_ok=True, parents=True)
-
-        orbit_tasks = []
-        for orbit_id, group in pairs.groupby('table_id'):
-            tile_subset = group[['Name', 'geometry']].drop_duplicates('Name').reset_index(drop=True)
-            tile_subset = gpd.GeoDataFrame(tile_subset, geometry='geometry', crs='EPSG:4326')
-            orbit_tasks.append(self.fetch_orbit(orbit_id, tile_subset))
-        print(f'Phase 1: scheduling {len(orbit_tasks)} orbit fetches')
-        self.schedule_tasks(delayed_tasks=orbit_tasks)
-
-        merge_tasks = [self.merge_tile(name) for name in pending_tiles['Name'].unique()]
-        print(f'Phase 2: scheduling {len(merge_tasks)} tile merges')
-        self.schedule_tasks(delayed_tasks=merge_tasks)
-
-        flag_dir = self.staging_dir / '.orbit_done'
-        if flag_dir.exists():
-            shutil.rmtree(flag_dir)
-        if self.staging_dir.exists() and not any(self.staging_dir.iterdir()):
-            self.staging_dir.rmdir()
+        tasks = []
+        for _, row in pending.iterrows():
+            orbit_ids = orbits_per_tile.get(row['Name'], [])
+            if not orbit_ids:
+                continue  # no orbit in this tile's growing season
+            tasks.append(self.get_orbit_for_one_s2_tile(row, orbit_ids))
+        print(f'Scheduling {len(tasks)} tile fetches')
+        self.schedule_tasks(delayed_tasks=tasks)
 
     @dask.delayed
-    @retry(requests.HTTPError, tries=10, delay=1)
-    def fetch_orbit(self, orbit_id: str, pending_tiles: gpd.GeoDataFrame):
+    def get_orbit_for_one_s2_tile(self, s2_tile: pd.Series, orbit_ids: list):
         '''
-        Fetch one GEDI orbit (filtered to union of pending tile geoms),
-        assign each shot to its canonical pending tile (alphabetically-first
-        Name to dedupe across S2 overlap), and stage per-tile slices.
-        '''
-        orbit_key = orbit_id.split('/')[-1]
-        done_flag = self.staging_dir / '.orbit_done' / orbit_key
-        if done_flag.exists() and not self.rewrite:
-            return
-        done_flag.parent.mkdir(exist_ok=True, parents=True)
+        Download all valid GEDI shots for one S2 tile across its pre-computed
+        list of overlapping growing-season orbits.
 
-        union_geom = pending_tiles.geometry.unary_union
+        Args:
+            * s2_tile: row from the S2 table (Name, geometry, growing_months)
+            * orbit_ids: list of GEE FeatureCollection IDs already filtered to
+                tiles this orbit intersects AND the tile's growing months
+                (computed once in download_all_valid via sjoin).
+        '''
+        file = self.save_dir / f'{s2_tile["Name"]}.parquet'
+        if file.exists() and not self.rewrite and is_parquet_ok(file):
+            print(f'{file} exists and is ok')
+            return
+        data = []
+        geom = shapely_to_geojson(s2_tile['geometry'])
+        for orbit_id in orbit_ids:
+            fc = (ee.FeatureCollection(orbit_id)
+                  .filterBounds(geom)
+                  .filter(self.filter)
+                  .filter(ee.Filter.inList('pft_class', list(range(1, 9)))))
+            fc = ee_fc_to_gpd(fc)
+            if fc is None:
+                continue
+            data.append(fc)
+        if len(data) == 0:
+            print(f'No GEDI points found for {s2_tile["Name"]}')
+            return
+        data = pd.concat(data)
+        data = data.reset_index(drop=True)
+        data['system:index'] = data['system:index'].astype(str)
+        data.to_parquet(file)
+        print(f'Saved {len(data)} GEDI points for {s2_tile["Name"]} after filtering')
+
+    # --- Orphaned helpers from the per-orbit refactor (see download_all_valid
+    # docstring for why that approach was abandoned). Kept in case a future
+    # attempt revisits orbit-level fetches with a smarter strategy (precise
+    # union polygon push to GEE, batched tile clusters, etc.). Not currently
+    # called from anywhere.
+    @retry(requests.HTTPError, tries=6, delay=2, backoff=2, max_delay=60)
+    def _download_region(self, orbit_id: str, bounds):
+        '''Download orbit shots whose footprint intersects the given bbox
+        (minx, miny, maxx, maxy). Retries with exponential backoff to ride
+        out transient EE export-capacity errors.'''
+        region = ee.Geometry.Rectangle(list(bounds))
         fc = (ee.FeatureCollection(orbit_id)
-              .filterBounds(shapely_to_geojson(union_geom))
+              .filterBounds(region)
               .filter(self.filter)
               .filter(ee.Filter.inList('pft_class', list(range(1, 9)))))
-        points = ee_fc_to_gpd(fc)
-        if points is None or len(points) == 0:
-            done_flag.touch()
-            return
+        return ee_fc_to_gpd(fc)
 
-        if points.crs is None:
-            points = points.set_crs(epsg=4326)
-        joined = gpd.sjoin(
-            points, pending_tiles[['Name', 'geometry']],
-            predicate='intersects', how='inner')
-        # Canonical assignment: each shot to its alphabetically-first matched tile
-        joined = (joined.sort_values('Name')
-                        .drop_duplicates(subset=['shot_number'], keep='first')
-                        .drop(columns=['index_right']))
-
-        for tile_name, slice_df in joined.groupby('Name'):
-            slice_df = slice_df.drop(columns=['Name']).reset_index(drop=True)
-            if 'system:index' in slice_df.columns:
-                slice_df['system:index'] = slice_df['system:index'].astype(str)
-            out = self.staging_dir / tile_name / f'{orbit_key}.parquet'
-            out.parent.mkdir(exist_ok=True, parents=True)
-            slice_df.to_parquet(out)
-
-        done_flag.touch()
-
-    @dask.delayed
-    def merge_tile(self, tile_name: str):
-        '''Concat all staging slices for one tile into the final parquet.'''
-        out = self.save_dir / f'{tile_name}.parquet'
-        if out.exists() and is_parquet_ok(out) and not self.rewrite:
-            return
-        tile_staging = self.staging_dir / tile_name
-        if not tile_staging.exists():
-            return
-        parts = sorted(tile_staging.glob('*.parquet'))
-        if not parts:
-            return
-        df = pd.concat([gpd.read_parquet(p) for p in parts], ignore_index=True)
-        df.to_parquet(out)
-        shutil.rmtree(tile_staging)
-        print(f'Saved {len(df)} GEDI points for {tile_name}')
+    def _download_orbit(self, orbit_id: str, bounds, depth: int = 0, max_depth: int = 6):
+        '''Download an orbit's shots over `bounds`, recursively splitting the
+        bbox into quadrants when EE cannot materialize the table (e.g. HTTP 500
+        "No space left on device" from an export too large for EE scratch).'''
+        try:
+            return self._download_region(orbit_id, bounds)
+        except requests.HTTPError:
+            if depth >= max_depth:
+                raise
+            minx, miny, maxx, maxy = bounds
+            midx, midy = (minx + maxx) / 2, (miny + maxy) / 2
+            quads = [
+                (minx, miny, midx, midy),
+                (midx, miny, maxx, midy),
+                (minx, midy, midx, maxy),
+                (midx, midy, maxx, maxy),
+            ]
+            frames = []
+            for q in quads:
+                df = self._download_orbit(orbit_id, q, depth + 1, max_depth)
+                if df is not None and len(df):
+                    frames.append(df)
+            if not frames:
+                return None
+            return pd.concat(frames, ignore_index=True)
 
     def add_slope(self):
         '''
