@@ -20,7 +20,7 @@ from rasterio.transform import rowcol
 import rasterio
 from concurrent.futures import ThreadPoolExecutor
 
-from const import MAX_HEIGHT_METERS, VSM_NODATA, FIGURE_SIZES, set_plot_fonts, fewer_ticks
+from const import MAX_HEIGHT_METERS, VSM_NODATA, FIGURE_SIZES, FONT_SIZES, set_plot_fonts, fewer_ticks
 
 set_plot_fonts()
 
@@ -407,6 +407,199 @@ def plot_biome_samples(gdf_dissolved, points_gdf, save_path=None, figsize=FIGURE
         plt.savefig(save_path, dpi=200, bbox_inches="tight")
     plt.close()
     
+
+def plot_bars_frames(summary_file: str, per_class_file: str, all_cms_file: str,
+                     save_dir: str, groups: tuple[str] = None, metric: str = 'F1',
+                     avg: str = 'macro', baseline_name: str = 'rh98',
+                     reveal_groups: list[list[str]] = None,
+                     reveal_steps: list[int] = None, start_empty: bool = True,
+                     show_improve: bool = True, improve_style: str = 'hatch',
+                     hatch: str = '////', show_legend: bool = True,
+                     dpi: int = 160, transparent: bool = True, **kwargs):
+    '''
+    Render `evaluation.on_naturalness.plot_bars` as a sequence of cumulative
+    "reveal" frames for a Google-Slides / Keynote click-to-build animation:
+    each frame draws one more model-group (one extra coloured bar per category)
+    on top of a fixed geometry, so the PNGs overlay pixel-for-pixel and clicking
+    advances frame_00 -> frame_01 -> ... .
+
+    Mirrors plot_bars's data prep, ALS-first reordering, ALL/forest-type
+    separator, baseline-lightening and legend exactly — the only difference is
+    that un-revealed groups (and their legend swatches) are withheld/faded.
+    Colours are pinned from the prop cycle up front so a group keeps the same
+    colour across every frame even before it appears.
+
+    Args:
+        summary_file/per_class_file/all_cms_file: same artifacts plot_results
+            reads (logistic_regression_*.csv / .npz).
+        save_dir: frames are written to
+            {save_dir}/barframes_{metric}_{avg}_baseline_{baseline_name}/frame_XX.png
+        groups: model keys, in bar order (same as plot_bars/plot_results).
+            Optional/ignored when reveal_groups is given (it sets the order).
+        metric/avg/baseline_name: as in plot_bars.
+        reveal_groups: list of model-key lists — one click reveals one inner
+            list. This is the recommended, edit-friendly way to control the
+            animation; it also fixes the bar order (its flattened concatenation
+            becomes `groups`). Example reveal order rh98 -> the four diversity
+            variants together -> key_rhs -> everything else:
+                [[rh98],
+                 [rh98_fhd, rh98_enl2d, rh98_cr, rh98_fhd_enl1d_enl2d_cr],
+                 [key_rhs],
+                 [rh98_s2, full_profile, full_profile_s2]]
+        reveal_steps: lower-level alternative to reveal_groups — cumulative
+            #groups shown per frame against `groups` order, e.g. [1, 5, 6, 9].
+            Ignored if reveal_groups is set. Default (neither given) reveals one
+            group per click: [0,1,..,N] (or [1,..,N] if start_empty=False).
+        start_empty: include a frame_00 with only axes/legend scaffold.
+        show_improve: split each bar into a baseline part and a gain-over-
+            baseline part so the improvement stands out.
+        improve_style: how to render the gain part when show_improve —
+            'hatch' (default): solid baseline + the gain hatched on top;
+            'lighten': full-colour gain on a lightened baseline (plot_bars look).
+        hatch: hatch pattern used by improve_style='hatch' (e.g. '////', 'xx').
+        transparent: save PNGs with a transparent background (for slide overlay).
+    Returns:
+        list[Path] of the frames written, in order.
+    '''
+    from matplotlib.patches import Patch
+    # Reuse the canonical metadata/helpers — no duplication. Imported lazily
+    # (not at module top) to avoid a circular import, since on_naturalness
+    # imports this module.
+    from evaluation.on_naturalness import (
+        LAND_USE_NAMES, MODEL_NAMES, add_accuracy_from_cms, _lighten,
+    )
+
+    set_plot_fonts(label=16, annot=16, legend=14, ticks=14)
+    assert avg in ['macro', 'weighted']
+    assert improve_style in ['hatch', 'lighten'], improve_style
+    save_dir = Path(save_dir).expanduser()
+    out_dir = save_dir / f'barframes_{metric}_{avg}_baseline_{baseline_name}'
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    all_cms = np.load(Path(all_cms_file).expanduser())
+    summary_df = pd.read_csv(Path(summary_file).expanduser(), index_col=0)
+    per_class_df = pd.read_csv(Path(per_class_file).expanduser(), index_col=0)
+    labels = [v['short_name'] for v in LAND_USE_NAMES.values()]
+    summary_df, per_class_df = add_accuracy_from_cms(summary_df, per_class_df, all_cms, labels)
+
+    mask = summary_df.Metric == f'{avg} avg'
+    summary_df = summary_df.loc[mask, [metric]]
+    per_class_df = per_class_df.loc[:, ['Class', metric]]
+
+    # reveal_groups (list of model-key lists) is the high-level control: it
+    # fixes the bar order (flattened) AND the per-click chunks. Falls back to
+    # reveal_steps (cumulative counts) or one-group-per-click.
+    if reveal_groups is not None:
+        reveal_groups = [list(chunk) for chunk in reveal_groups]
+        groups = [g for chunk in reveal_groups for g in chunk]
+        counts = np.cumsum([len(chunk) for chunk in reveal_groups]).tolist()
+        reveal_steps = ([0] + counts) if start_empty else counts
+    if groups is None:
+        raise ValueError('pass either `groups` or `reveal_groups`')
+
+    forest_types = [c['short_name'] for c in LAND_USE_NAMES.values()]
+    n_models = len(groups)
+
+    # Build values dict: model_name -> per-class values + ALL (same as plot_bars)
+    values_dict = {}
+    for model_name in groups:
+        values_dict[model_name] = (
+            per_class_df.loc[model_name, metric].values.tolist()
+            + [summary_df.loc[model_name, metric]]
+        )
+
+    # ALL first, then forest types by Land_use_ID (identical to plot_bars)
+    manual_order_ids = [11, 20, 53, 31, 32, 40, 0]
+    land_use_ids = list(LAND_USE_NAMES.keys())
+    manual_indices = [land_use_ids.index(_id) for _id in manual_order_ids]
+    all_index = len(forest_types)
+    reorder_indices = [all_index] + manual_indices
+    forest_types = [forest_types[i] for i in manual_indices]
+    for m in values_dict:
+        values_dict[m] = [values_dict[m][i] for i in reorder_indices]
+
+    class_names = ['ALL'] + forest_types
+    baseline_vals = np.array(values_dict[baseline_name])
+
+    # Fixed geometry (computed once -> every frame shares it)
+    bar_width = 0.5
+    group_spacing = 0.5
+    all_gap = n_models * bar_width
+    x_pos = np.arange(len(class_names)) * (n_models * bar_width + group_spacing)
+    x_pos[1:] = x_pos[1:] + all_gap
+    sep_x = (x_pos[0] + (n_models - 1) * bar_width + bar_width / 2 + x_pos[1] - bar_width / 2) / 2
+    x_lim = (x_pos[0] - bar_width, x_pos[-1] + n_models * bar_width)
+
+    # Pin a stable colour per group from the prop cycle, so a group keeps its
+    # colour across frames even before it is revealed.
+    cycle = plt.rcParams['axes.prop_cycle'].by_key()['color']
+    group_colors = [cycle[i % len(cycle)] for i in range(n_models)]
+
+    if reveal_steps is None:
+        reveal_steps = list(range(0 if start_empty else 1, n_models + 1))
+    figsize = kwargs.get('figsize', FIGURE_SIZES['panel'])
+
+    def _draw(reveal: int, frame_idx: int):
+        fig, ax = plt.subplots(figsize=figsize)
+        for i, model_name in enumerate(groups):
+            if i >= reveal:
+                continue
+            values = np.array(values_dict[model_name])
+            offsets = x_pos + i * bar_width
+            color = group_colors[i]
+            if show_improve and model_name != baseline_name:
+                base_part = np.minimum(values, baseline_vals)
+                if improve_style == 'hatch':
+                    # Solid baseline, with the gain hatched on top (white lines
+                    # over the model colour) — the requested slide look.
+                    ax.bar(offsets, base_part, bar_width, color=color,
+                           label=MODEL_NAMES[model_name]['name'])
+                    ax.bar(offsets, values - base_part, bar_width, bottom=base_part,
+                           color=color, hatch=hatch, edgecolor='white', linewidth=0.0)
+                else:  # 'lighten'
+                    ax.bar(offsets, values, bar_width, color=color,
+                           label=MODEL_NAMES[model_name]['name'])
+                    ax.bar(offsets, base_part, bar_width, color=_lighten(color))
+            else:
+                ax.bar(offsets, values, bar_width, color=color,
+                       label=MODEL_NAMES[model_name]['name'])
+
+        ax.axvline(sep_x, color='gray', linestyle='--', linewidth=1.5)
+        ax.set_xticks(x_pos + bar_width * (n_models - 1) / 2)
+        ax.set_xticklabels(class_names, fontsize=FONT_SIZES['ticks'], rotation=45, ha='center')
+        ax.set_ylabel(f'{metric}', fontsize=FONT_SIZES['label'])
+        ax.tick_params(axis='y', labelsize=FONT_SIZES['ticks'])
+        ax.set_xlim(*x_lim)
+        ax.set_ylim(0, 1.01)
+        fewer_ticks(ax, axis='y')
+        ax.grid(axis='y', alpha=0.3)
+
+        leg = None
+        if show_legend:
+            # Always lay out all N entries (faded until revealed) so the figure
+            # bbox — and thus the saved crop — is identical on every frame.
+            faded = 0.15
+            handles = [Patch(facecolor=group_colors[i], label=MODEL_NAMES[g]['name'],
+                             alpha=1.0 if i < reveal else faded)
+                       for i, g in enumerate(groups)]
+            leg = ax.legend(handles=handles, loc='lower center',
+                            bbox_to_anchor=(0.5, 1.02), ncol=3,
+                            fontsize=FONT_SIZES['legend'], frameon=False)
+            leg.set_in_layout(False)
+            # Fade the label text too, so un-revealed entries dim with their swatch.
+            for i, txt in enumerate(leg.get_texts()):
+                txt.set_alpha(1.0 if i < reveal else faded)
+        plt.tight_layout()
+        out_path = out_dir / f'frame_{frame_idx:02d}.png'
+        plt.savefig(out_path, dpi=dpi, bbox_inches='tight', transparent=transparent,
+                    bbox_extra_artists=None if leg is None else [leg])
+        plt.close()
+        return out_path
+
+    frames = [_draw(reveal, k) for k, reveal in enumerate(reveal_steps)]
+    print(f'wrote {len(frames)} frames -> {out_dir}')
+    return frames
+
 
 def _sample_tile(item, xs, ys, indices):
     """Read land cover values for points falling within one tile."""

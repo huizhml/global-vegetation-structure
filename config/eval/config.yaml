@@ -477,6 +477,28 @@ utils:
     s2_tile_file: ${root_data_dir}/state/s2_tiles_with_growing_months.parquet
     save_dir: ${root_data_dir}/analysis/biome_anlaysis/random_sample_100000_points_per_biome_veg_by_tile
 
+  # Click-to-build (slide animation) version of on_naturalness.plot_bars:
+  # one transparent PNG per reveal step under {save_dir}/barframes_*/frame_XX.png
+  plot_bars_frames:
+    _target_: evaluation.utils.plot_bars_frames
+    target_type: function
+    root_dir: ${nat_dir}/results_from_vsm_2017/cnn_results
+    summary_file: ${.root_dir}/cnn_summary_reports.csv
+    per_class_file: ${.root_dir}/cnn_per_class_reports.csv
+    all_cms_file: ${.root_dir}/cnn_confusion_matrices.npz
+    save_dir: ${.root_dir}
+    baseline_name: rh98
+    metric: F1
+    figsize: [12, 5]
+    improve_style: hatch          # 'hatch' (gain hatched) or 'lighten'
+    # Each inner list = one click. Edit freely to regroup the reveal; the
+    # flattened order also sets the left-to-right bar order.
+    reveal_groups:
+      - [rh98]
+      - [rh98_fhd, rh98_enl2d, rh98_cr, rh98_fhd_enl1d_enl2d_cr]
+      - [key_rhs]
+      - [rh98_s2, full_profile, full_profile_s2]
+
 
 # =========================================================================
 # evaluation/on_diversity_indices.py
