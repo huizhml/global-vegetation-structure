@@ -17,6 +17,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import xgboost as xgb
 import warnings
+from matplotlib.ticker import MultipleLocator
 from evaluation.utils import load_vsm_naturalness
 from evaluation.diversity_maps import _chunk_diversity
 from const import VSM_NODATA, KEY_RHS_EVAL, FONT_SIZES, FIGURE_SIZES, set_plot_fonts, fewer_ticks
@@ -49,7 +50,7 @@ MODEL_NAMES = {
     'key_rhs':                 {'name': 'RH98 + RH25, RH50, RH75, RH90, RH95', 'run_id': '5pf9gyse'},
     'rh98_fhd_enl1d_enl2d_cr': {'name': 'RH98 + FHD + ENL1D + ENL2D + CR',     'run_id': '5kk3oo0i'},
     'rh98_center':             {'name': 'RH98 (w/o spatial context)',          'run_id': None},
-    'full_profile_center':     {'name': 'Full Profile (w/o spatial context)',  'run_id': None},
+    'full_profile_center':     {'name': 'Full Profile (center pixel)',  'run_id': None},
     'full_profile_s2':         {'name': 'Full Profile + S2',                   'run_id': 'e1y9vkez'},
 }
 
@@ -123,7 +124,7 @@ def _lighten(color, amount=0.55):
     return (r + (1 - r) * amount, g + (1 - g) * amount, b + (1 - b) * amount)
 
 
-def plot_bars(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, groups: tuple[str], metric: str='Recall', avg:str='macro', baseline_name: str='rh98', save_dir: str=None, show_improve: bool=True, show_legend: bool=True, include_alpha_em: bool=False, **kwargs):
+def plot_bars(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, groups: tuple[str], metric: str='Recall', avg:str='macro', baseline_name: str='rh98', save_dir: str=None, show_improve: bool=True, show_legend: bool=True, include_alpha_em: bool=False, annotate_models: tuple=('rh98_s2', 'full_profile_s2'), **kwargs):
     '''
     Plot the summary reports
     Args:
@@ -180,7 +181,7 @@ def plot_bars(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, groups: tupl
 
     fig, ax = plt.subplots(figsize=kwargs.get('figsize', FIGURE_SIZES['panel']))
     if baseline_name == 'full_profile_center':
-        MODEL_NAMES['full_profile']['name'] = 'Full profile (w/ spatial context)'
+        MODEL_NAMES['full_profile']['name'] = 'Full Profile with spatial context'
     # First pass: draw bars, collect annotations
     annotations = {j: [] for j in range(len(class_names))}
 
@@ -188,25 +189,39 @@ def plot_bars(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, groups: tupl
         values = np.array(values_dict[model_name])
         offsets = x_pos + i * bar_width
 
-        # Full bar in the model's color (also sets the legend swatch). The gain
-        # over baseline keeps this full color; the baseline part is overdrawn in
-        # a lighter shade so the improvement stands out.
-        bars = ax.bar(offsets, values, bar_width, label=MODEL_NAMES[model_name]['name'])
+        # Full bar in the model's color (also sets the legend swatch); the gain
+        # over baseline is overlaid with a white hatch so the improvement stands out.
+        ax.bar(offsets, values, bar_width, label=MODEL_NAMES[model_name]['name'])
 
         if show_improve and model_name != baseline_name:
             improvement = np.maximum(values - baseline_vals, 0)
             base_part = np.minimum(values, baseline_vals)
-            light = _lighten(bars.patches[0].get_facecolor())
-            ax.bar(offsets, base_part, bar_width, color=light,
-                   zorder=bars.patches[0].get_zorder())
+            ax.bar(offsets, improvement, bar_width, bottom=base_part,
+                   color='none', edgecolor='white', hatch='///',
+                   linewidth=0.5)
 
-            for j, imp in enumerate(improvement):
-                if imp > 0:
-                    annotations[j].append((offsets[j], values[j], f"+{imp:.2f}"))
+            # full_profile_center baseline annotates every model (unchanged);
+            # other baselines only annotate the requested models.
+            annotate_this = (baseline_name == 'full_profile_center'
+                             or annotate_models is None
+                             or model_name in annotate_models)
+            if annotate_this:
+                for j, imp in enumerate(improvement):
+                    if imp > 0:
+                        annotations[j].append((offsets[j], values[j], f"+{imp:.2f}"))
 
     # Second pass: resolve label overlaps within each group
-    if show_improve and baseline_name == 'full_profile_center':
-        min_gap = 0.04
+    if show_improve:
+        # Lift the labels higher and space them further apart when only the two
+        # S2 models are annotated; keep the tuned values for full_profile_center.
+        if baseline_name == 'full_profile_center':
+            base_offset, min_gap = 0.01, 0.04
+        else:
+            base_offset, min_gap = 0.06, 0.09
+        # Tallest bar in each group, so labels can be lifted clear of every bar
+        # (not just their own) and stop overlapping neighbouring bars.
+        group_max = [max(values_dict[m][j] for m in groups)
+                     for j in range(len(class_names))]
         for j in range(len(class_names)):
             labels = annotations[j]
             if not labels:
@@ -214,7 +229,10 @@ def plot_bars(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, groups: tupl
             labels.sort(key=lambda t: t[1])
             y_positions = []
             for k, (lx, ly, txt) in enumerate(labels):
-                desired_y = ly + 0.01
+                # full_profile_center keeps its per-bar baseline; other baselines
+                # anchor above the tallest bar in the group.
+                anchor = ly if baseline_name == 'full_profile_center' else group_max[j]
+                desired_y = anchor + base_offset
                 if y_positions:
                     desired_y = max(desired_y, y_positions[-1] + min_gap)
                 y_positions.append(desired_y)
@@ -233,8 +251,13 @@ def plot_bars(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, groups: tupl
     ax.set_xticklabels(class_names, fontsize=FONT_SIZES['ticks'], rotation=45, ha='center')
     ax.set_ylabel(f'{metric}', fontsize=FONT_SIZES['label'])
     ax.tick_params(axis='y', labelsize=FONT_SIZES['ticks'])
-    ax.set_ylim(0, 1.01 )
+    ax.set_ylim(0, 1.05)
     fewer_ticks(ax, axis='y')
+    # Denser gridlines without extra labelled ticks: put unlabelled minor ticks
+    # every 0.1 (marks hidden) and draw the grid on them in addition to majors.
+    
+    ax.yaxis.set_minor_locator(MultipleLocator(0.2))
+    ax.tick_params(axis='y', which='minor', length=0)
     leg = None
     if show_legend:
         if baseline_name == 'full_profile_center':
@@ -242,7 +265,8 @@ def plot_bars(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, groups: tupl
         else:
             leg = ax.legend(loc='lower center', bbox_to_anchor=(0.5, 1.02), ncol=3, fontsize=FONT_SIZES['legend'], frameon=False)
             leg.set_in_layout(False)  # keep tight_layout from shrinking the axes to fit the legend
-    ax.grid(axis='y', alpha=0.3)
+    ax.grid(axis='y', which='major', alpha=0.3)
+    ax.grid(axis='y', which='minor', alpha=0.2, linewidth=0.5)
     plt.tight_layout()
     # bbox_extra_artists forces the (in_layout=False) legend back into the saved
     # bbox, so it isn't cropped by bbox_inches='tight'.

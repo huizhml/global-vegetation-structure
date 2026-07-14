@@ -11,8 +11,7 @@ import dask
 from dask.distributed import Client, LocalCluster
 
 from download.core import DaskDownloader
-from download.core.utils import authenticate, check_unfinished_files 
-authenticate()
+from download.core.utils import ensure_authenticated, check_unfinished_files
 
 def set_fc_properties(row):
     geom = row.geometry
@@ -33,15 +32,17 @@ class SOTAChmDownloader(DaskDownloader):
         n_parallel: The number of parallel tasks to download the SOTA CHM data.
         debug: Whether to print debug information.
     """
-    _ee_initialized = False
-    
-    def __init__(self, 
+    def __init__(self,
                  location_files: str=None,
-                 save_dir: str=None, 
-                 n_parallel: int=100,  
+                 save_dir: str=None,
+                 n_parallel: int=100,
                  rewrite: bool=False,
+                 key_file: str=None,
                  debug: bool=False, **kwargs):
         super().__init__(n_parallel=n_parallel, max_retries=3, **kwargs)
+        self.key_file = key_file
+        # Authenticate before building any ee.ImageCollection below.
+        self._ensure_authenticated()
         self.rewrite = rewrite
         self.debug = debug
         self.save_dir = Path(save_dir).expanduser()
@@ -53,14 +54,14 @@ class SOTAChmDownloader(DaskDownloader):
         self.canopy_height_umd = ee.ImageCollection("users/potapovpeter/GEDI_V27")
         self.canopy_height_meta = ee.ImageCollection("projects/meta-forest-monitoring-okw37/assets/CanopyHeight")
         self.canopy_height_eth = ee.Image('users/nlang/ETH_GlobalCanopyHeight_2020_10m_v1').rename('RH98_ETH')
-        self._ensure_authenticated()
 
     def _ensure_authenticated(self):
-        """Ensures Earth Engine is initialized exactly once per process."""
-        if not SOTAChmDownloader._ee_initialized:
-            authenticate()  # Your existing utility function
-            # Or directly: ee.Initialize(project='your-project')
-            SOTAChmDownloader._ee_initialized = True
+        """Initialize Earth Engine in the current process with this run's key_file.
+
+        Must be called from inside worker tasks too — dask workers are separate
+        processes that don't run __init__.
+        """
+        ensure_authenticated(self.key_file)
 
     def download(self):
         cluster = LocalCluster()
@@ -75,6 +76,7 @@ class SOTAChmDownloader(DaskDownloader):
     @dask.delayed
     @retry(requests.HTTPError, tries=10, delay=1)
     def download_file(self, file: Path):
+        self._ensure_authenticated()  # runs on a worker process; ensure this run's key
         output_file = self.save_dir / f'{file.stem}.parquet'
         if output_file.exists() and not self.rewrite:
             print(f'{output_file} exists, skipping')

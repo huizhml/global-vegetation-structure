@@ -77,6 +77,7 @@ download:
     # `sens_label` resolver registered in download/run.py.
     sensitivity_threshold: null
     n_parallel: 100
+    key_file: keys/private-key.json
     gedi_table_index_file: ~/data/gvs/gedi/l2a_orbit_table/l2a_orbit_table_${.year}.parquet
     save_dir: ~/data/gvs/gedi/veg_sensitivity_${sens_label:${.sensitivity_threshold}}/all_valid/${.year}
     s2_grid_file: ~/data/gvs/state/s2_tiles_with_growing_months.parquet

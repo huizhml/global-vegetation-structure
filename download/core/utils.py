@@ -255,21 +255,45 @@ def get_geom_for_countries(countries_file: str, world_countries_shp: str=None):
     return countries_df
 
 
-def authenticate():
+def authenticate(key_file: str = None):
     """
-    Authenticates the Earth Engine service using the key file specified in the env variable.
+    Authenticates the Earth Engine service using the given key file.
 
-    If the environment variable 'KEY_FILE' is set, it will be used as the path to the key file.
-    Otherwise, the default path 'keys/private-key.json' will be used.
+    Resolution order for the key file:
+    1. The `key_file` argument, if provided (lets different runs use different keys).
+    2. The environment variable 'KEY_FILE', if set.
+    3. The default path 'keys/private-key.json'.
 
     """
-    key_file = os.environ.get('KEY_FILE')
+    key_file = key_file or os.environ.get('KEY_FILE')
     key_file = key_file or 'keys/private-key.json'
+    key_file = os.path.expanduser(key_file)
     print('Authenticating from', key_file)
     key = json.load(open(key_file))
     credentials = ee.ServiceAccountCredentials(key['client_email'], key_file)
     ee.Initialize(credentials, url='https://earthengine-highvolume.googleapis.com')
     print('Authenticated Earth Engine successfully')
+
+
+# Which key_file the *current process* is authenticated with. Module-level so it
+# is per-process: the main process and each dask worker process track their own
+# state independently. A class/instance flag would instead be pickled to workers
+# as already-initialized, leaving workers on whatever key an import side effect
+# happened to set (e.g. a module-level authenticate() with the default key).
+_PROCESS_EE_KEY = '__unauthenticated__'
+
+
+def ensure_authenticated(key_file: str = None):
+    """Initialize Earth Engine in the current process with `key_file`, once.
+
+    Re-authenticates only when this process is not already on `key_file`, so it
+    is cheap to call repeatedly — including from inside dask worker tasks, which
+    run in separate processes that never executed the constructor.
+    """
+    global _PROCESS_EE_KEY
+    if _PROCESS_EE_KEY != key_file:
+        authenticate(key_file)
+        _PROCESS_EE_KEY = key_file
 
 def get_tile_by_id(tile_id):
     """

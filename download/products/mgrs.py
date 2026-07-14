@@ -8,7 +8,7 @@ import pandas as pd
 import dask.dataframe as dd
 import dask_geopandas as dgd
 
-from download.core.utils import authenticate
+from download.core.utils import ensure_authenticated
 
 logger = logging.getLogger(__name__)
 
@@ -73,9 +73,7 @@ class MGRS:
         update_mgrs(mgrs_df, missing_file:Path)
             Update the MGRS data to include all GEDI assets.
     """
-    _ee_initialized = False
-
-    def __init__(self, mgrs_file:str,zone_count_tmp:str=None, version:int=1, missing_file:str=None, gee_asset:str=None, use_dask:bool=False, npartitions=60, **kwargs):
+    def __init__(self, mgrs_file:str,zone_count_tmp:str=None, version:int=1, missing_file:str=None, gee_asset:str=None, use_dask:bool=False, npartitions=60, key_file:str=None, **kwargs):
         """
         Initialize the MGRS object.
 
@@ -93,14 +91,16 @@ class MGRS:
         self.npartitions = npartitions
         self.missing_file = missing_file
         self.version = version
+        self.key_file = key_file
         self._ensure_authenticated()
 
     def _ensure_authenticated(self):
-        """Ensures Earth Engine is initialized exactly once per process."""
-        if not MGRS._ee_initialized:
-            authenticate()  # Your existing utility function
-            # Or directly: ee.Initialize(project='your-project')
-            MGRS._ee_initialized = True
+        """Initialize Earth Engine in the current process with this run's key_file.
+
+        Must be called from inside worker tasks too — dask workers are separate
+        processes that don't run __init__.
+        """
+        ensure_authenticated(self.key_file)
 
     def get_mgrs(self):
         """
@@ -171,6 +171,7 @@ class MGRS:
 
 
     def _add_gedi_count(self, row):
+        self._ensure_authenticated()  # may run on a worker process; ensure this run's key
         zone_file = self.zone_count_tmp / f'{row["MGRS_UTM"]}.csv'
         # if zone_file.exists():
         #     row = pd.read_csv(zone_file)

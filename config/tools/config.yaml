@@ -346,7 +346,7 @@ tools:
   subcanopy_separation:
     _target_: tools.subcanopy_separation.subcanopy_separation_analysis
     target_type: function
-    pairs_dir: ${root_data_dir}/evaluation/with_airborne_lidar/LVIS2_Gabon2016/geolocated_surface_elevation/lvis_gedi_pairs/Gabon2016_vs_GEDI2020_stable_forest_with_vsm2020
+    pairs_dir: ${root_data_dir}/evaluation/with_airborne_lidar/LVIS2_Gabon2023/geolocated_surface_elevation/lvis_gedi_pairs/Gabon2023_vs_GEDI2024_stable_forest_with_vsm2023
     save_dir: ${root_results_dir}/tools/subcanopy_separation
     pairs_glob: "*.parquet"
     sub_definitions: [25, 50, 75]  # RH25/RH98, RH50/RH98, RH75/RH98

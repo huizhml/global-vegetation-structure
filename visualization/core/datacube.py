@@ -41,7 +41,7 @@ REGIONS = {
         "z_spacing": 6.0,
         "aspect_ratio": 2.0,
         "scalar_bar": {
-            "position_x": 0.04, "position_y": 0.6,
+            "position_x": 0.04, "position_y": 0.5,
             "height": 0.22, "width": 0.03,
             "label_font_size": 72, "n_labels": 2,
         },

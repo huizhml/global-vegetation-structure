@@ -11,12 +11,11 @@ from dask.distributed import Client, LocalCluster
 import requests
 from io import StringIO
 from pathlib import Path
-from download.core.utils import authenticate
+from download.core.utils import ensure_authenticated
 from download.core.utils import get_s2_tiles_by_landmass
 
 from dotenv import load_dotenv
 load_dotenv()
-# authenticate()
 
 def drop_z(x, y, z=None):
     return (x, y)
@@ -34,22 +33,22 @@ class GrowingSeason:
     default_end_north = pd.to_datetime('2020-10-30')
     default_onset_south = pd.to_datetime('2020-10-01')
     default_end_south = pd.to_datetime('2021-04-30')
-    _ee_initialized = False
-
-    def __init__(self, year, asset_id:str=None, save_dir:str=None, **kwargs):
+    def __init__(self, year, asset_id:str=None, save_dir:str=None, key_file:str=None, **kwargs):
         self.year = year
         self.offset = (year - 2000) * 366
         self.base_date = pd.Timestamp(f'{year}-01-01')
         self.asset_id = asset_id
         self.save_dir = Path(save_dir).expanduser()
+        self.key_file = key_file
         self._ensure_authenticated()
 
     def _ensure_authenticated(self):
-        """Ensures Earth Engine is initialized exactly once per process."""
-        if not GrowingSeason._ee_initialized:
-            authenticate()  # Your existing utility function
-            # Or directly: ee.Initialize(project='your-project')
-            GrowingSeason._ee_initialized = True
+        """Initialize Earth Engine in the current process with this run's key_file.
+
+        Must be called from inside worker tasks too — dask workers are separate
+        processes that don't run __init__.
+        """
+        ensure_authenticated(self.key_file)
 
     def get_growing_months_per_tile(self):
         '''Number of growing pixels for each month has been aggregated to Sentinel-2 tile in GEE'''
@@ -122,6 +121,7 @@ class GrowingSeason:
     
     @dask.delayed
     def agg_growing_season_per_tile_from_viirs(self, tile, data):
+        self._ensure_authenticated()  # may run on a worker process; ensure this run's key
         geometry = transform(drop_z, tile.geometry)
         geojson_poly = mapping(geometry)
         ee_geometry = ee.Geometry(geojson_poly)

@@ -27,7 +27,7 @@ from shapely.geometry import box
 from dask.distributed import Client, LocalCluster
 
 from download.core import DaskDownloader
-from download.core.utils import authenticate, shapely_to_geojson, ee_fc_to_gpd, get_aux_df, row_to_stac_item, get_patch, get_epsg_from_tile, buffer_and_snap_bounds, get_total_bounds, check_unfinished_files, read_parquets_with_file_name
+from download.core.utils import authenticate, ensure_authenticated, shapely_to_geojson, ee_fc_to_gpd, get_aux_df, row_to_stac_item, get_patch, get_epsg_from_tile, buffer_and_snap_bounds, get_total_bounds, check_unfinished_files, read_parquets_with_file_name
 from download.core.constants import dtypes
 load_dotenv()
 
@@ -164,7 +164,6 @@ class GEDI(DaskDownloader):
     # this is obtained from the total number of points we want to sample per year(75M) and the total landmass in the world
     nSampledPerKm2 = 0.7033933006651656
     GEDI_START = pd.Timestamp('2018-01-01')
-    _ee_initialized = False
 
     def __init__(self, year=2019,
                  # all needed
@@ -226,18 +225,21 @@ class GEDI(DaskDownloader):
         self.random_state = random_state
         self.rewrite = rewrite
         self.key_file = key_file
-        
+
         self._ensure_authenticated()
 
     def _ensure_authenticated(self):
-        """Ensures Earth Engine is initialized exactly once per process."""
-        if not GEDI._ee_initialized:
-            authenticate()  # Your existing utility function
-            # Or directly: ee.Initialize(project='your-project')
-            GEDI._ee_initialized = True
+        """Initialize Earth Engine in the current process with this run's key_file.
+
+        Must be called from inside worker tasks too — dask workers are separate
+        processes that don't run __init__, and importing the package can
+        authenticate them with the default key as a side effect.
+        """
+        ensure_authenticated(self.key_file)  # per-run key file, falls back to env/default
 
     @dask.delayed
     def download_zone(self, zone):
+        self._ensure_authenticated()  # runs on a worker process; ensure this run's key
         print('downloading ', zone['MGRS_UTM'])
         if zone[f'count_{self.year}'] == 0:
             logger.info(f"no GEDI points in {zone['MGRS_UTM']}")
@@ -401,6 +403,7 @@ class GEDI(DaskDownloader):
                 tiles this orbit intersects AND the tile's growing months
                 (computed once in download_all_valid via sjoin).
         '''
+        self._ensure_authenticated()  # runs on a worker process; ensure this run's key
         file = self.save_dir / f'{s2_tile["Name"]}.parquet'
         if file.exists() and not self.rewrite and is_parquet_ok(file):
             print(f'{file} exists and is ok')

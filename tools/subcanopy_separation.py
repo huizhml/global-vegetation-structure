@@ -26,8 +26,9 @@ classes sit on the SAME normalized metric RH<num>/RH98.
   5. Repeat the whole thing for each numerator in `sub_definitions`
      (default RH25/RH98, RH50/RH98, RH75/RH98).
 
-Deliverables (per definition + pooled): grouped sparse-vs-dense violin/box plots
-per sensor, bar plots of delta across height bins for LVIS/GEDI/VSM, a tidy
+Deliverables (per definition + pooled): per-height-bin grouped box plots with
+the three LVIS classes (sparse/mid/dense) on the x axis and GEDI vs VSM as
+grouped boxes, bar plots of delta across height bins for LVIS/GEDI/VSM, a tidy
 summary CSV and a markdown summary table + conclusion.md.
 
 Reads the same LVIS-GEDI-VSM triple pairs as `vsm_understory_matched`
@@ -53,7 +54,11 @@ _SENSORS = ('lvis', 'gedi', 'vsm')
 # Default sub-canopy numerators: RH25/RH98, RH50/RH98, RH75/RH98.
 _DEFAULT_DEFS = (25, 50, 75)
 _SENSOR_COLOR = {'lvis': 'C2', 'gedi': 'C0', 'vsm': 'C3'}
-_CLASS_COLOR = {'sparse': '#6baed6', 'dense': '#08519c'}
+# Sensors shown as grouped boxes in the per-height-bin box plots.
+_PLOT_SENSORS = ('gedi', 'vsm')
+# LVIS classes kept on the x axis: bottom q sparse, middle band median, top q
+# dense (so unlike the dense/sparse stats, the middle is NOT discarded here).
+_TRI_CLASSES = ('sparse', 'mid', 'dense')
 
 
 # ---------------------------------------------------------------------------
@@ -138,66 +143,103 @@ def _separation_rows(labelled: pd.DataFrame, num_level: int, def_tag: str,
 # ---------------------------------------------------------------------------
 # Figures
 # ---------------------------------------------------------------------------
-def _plot_violins(labelled: pd.DataFrame, num_level: int, def_tag: str,
-                  safe_tag: str, min_group_n: int, save_path: Path) -> None:
-    """Grouped sparse-vs-dense violins of RH<num>/RH98 across LVIS RH98 height
-    bins, one panel per sensor."""
-    is_dense = labelled['label'].to_numpy() == 1
-    bins = labelled['height_bin'].to_numpy()
-    bin_order = list(dict.fromkeys(bins))
+def _make_tri_labels(df: pd.DataFrame, num_level: int, height_edges: tuple,
+                     q: float, min_bin_n: int) -> pd.DataFrame:
+    """Like `_make_labels` but keeps the middle band as a third class instead of
+    discarding it. Adds `height_bin` and `tri_class` in {'sparse','mid',
+    'dense'}, taking the q / 1-q quantiles of LVIS_RH<num>/LVIS_RH98 WITHIN each
+    LVIS RH98 height bin (so the split is independent of canopy-top height)."""
+    out = df.copy()
+    top = out[_rh_col('lvis', _TOP)].to_numpy()
+    num = out[_rh_col('lvis', num_level)].to_numpy()
+    out['lvis_sub'] = num / top
 
-    fig, axes = plt.subplots(1, len(_SENSORS),
-                             figsize=FIGURE_SIZES['panel'], sharey=True)
-    for ax, s in zip(np.atleast_1d(axes), _SENSORS):
-        top = labelled[_rh_col(s, _TOP)].to_numpy(float)
-        num = labelled[_rh_col(s, num_level)].to_numpy(float)
+    edges = list(height_edges) + [np.inf]
+    out['height_bin'] = ''
+    out['tri_class'] = ''
+    for i in range(len(edges) - 1):
+        lo, hi = edges[i], edges[i + 1]
+        m = (top >= lo) & (top < hi)
+        label = f'{lo:g}+' if not np.isfinite(hi) else f'{lo:g}-{hi:g}'
+        if int(m.sum()) < min_bin_n:
+            continue
+        sub = out.loc[m, 'lvis_sub']
+        qlo, qhi = sub.quantile(q), sub.quantile(1 - q)
+        out.loc[m, 'height_bin'] = label
+        out.loc[m & (out['lvis_sub'] <= qlo), 'tri_class'] = 'sparse'
+        out.loc[m & (out['lvis_sub'] >= qhi), 'tri_class'] = 'dense'
+        out.loc[m & (out['lvis_sub'] > qlo) & (out['lvis_sub'] < qhi),
+                'tri_class'] = 'mid'
+    return out[out['tri_class'] != ''].reset_index(drop=True)
+
+
+def _safe_bin(label: str) -> str:
+    """Filesystem-safe version of a height-bin label ('10-20'->'10_20',
+    '50+'->'50plus')."""
+    return label.replace('+', 'plus').replace('-', '_')
+
+
+def _plot_boxes_per_bin(tri: pd.DataFrame, num_level: int, def_tag: str,
+                        safe_tag: str, min_group_n: int, save_dir: Path,
+                        say) -> None:
+    """One box-plot figure per LVIS RH98 height bin: x axis = LVIS class
+    (sparse / median / dense), with GEDI and VSM RH<num>/RH98 as grouped boxes."""
+    bin_order = list(dict.fromkeys(tri['height_bin']))
+    cls_arr = tri['tri_class'].to_numpy()
+    bin_arr = tri['height_bin'].to_numpy()
+    # Each sensor's own normalized sub-canopy metric.
+    metric = {}
+    for s in _PLOT_SENSORS:
+        top = tri[_rh_col(s, _TOP)].to_numpy(float)
+        num = tri[_rh_col(s, num_level)].to_numpy(float)
         with np.errstate(divide='ignore', invalid='ignore'):
-            m = np.where(top > 0, num / top, np.nan)
+            metric[s] = np.where(top > 0, num / top, np.nan)
+
+    n_sensors = len(_PLOT_SENSORS)
+    width = 0.8 / n_sensors
+    for b in bin_order:
+        in_bin = bin_arr == b
         positions, data, colors = [], [], []
-        xticks, xticklabels = [], []
-        for i, b in enumerate(bin_order):
-            in_bin = bins == b
-            for off, (cls, mask) in zip(
-                    (-0.18, 0.18),
-                    (('sparse', in_bin & ~is_dense), ('dense', in_bin & is_dense))):
-                vals = m[mask]
+        for i, cls in enumerate(_TRI_CLASSES):
+            for k, s in enumerate(_PLOT_SENSORS):
+                vals = metric[s][in_bin & (cls_arr == cls)]
                 vals = vals[np.isfinite(vals)]
                 if len(vals) < min_group_n:
                     continue
-                positions.append(i + off)
+                positions.append(i + (k - (n_sensors - 1) / 2) * width)
                 data.append(vals)
-                colors.append(_CLASS_COLOR[cls])
-            xticks.append(i)
-            xticklabels.append(b)
-        if data:
-            parts = ax.violinplot(data, positions=positions, widths=0.32,
-                                  showmeans=False, showmedians=True,
-                                  showextrema=False)
-            for body, c in zip(parts['bodies'], colors):
-                body.set_facecolor(c)
-                body.set_edgecolor('none')
-                body.set_alpha(0.8)
-            if 'cmedians' in parts:
-                parts['cmedians'].set_color('k')
-                parts['cmedians'].set_linewidth(1.2)
-        ax.set_xticks(xticks)
-        ax.set_xticklabels(xticklabels, fontsize=FONT_SIZES['ticks'], rotation=0)
-        ax.set_xlabel('LVIS RH98 bin (m)', fontsize=FONT_SIZES['label'])
-        ax.set_title(s.upper(), fontsize=FONT_SIZES['title'])
+                colors.append(_SENSOR_COLOR[s])
+        if not data:
+            say(f'  [{def_tag}] bin {b:>7}: no class/sensor group passed '
+                f'min_group_n={min_group_n} -> no box plot.')
+            continue
+
+        fig, ax = plt.subplots(figsize=FIGURE_SIZES['medium'])
+        bp = ax.boxplot(data, positions=positions, widths=width * 0.9,
+                        patch_artist=True, showfliers=False,
+                        medianprops=dict(color='k', linewidth=1.2))
+        for patch, c in zip(bp['boxes'], colors):
+            patch.set_facecolor(c)
+            patch.set_alpha(0.8)
+            patch.set_edgecolor('k')
+        ax.set_xticks(range(len(_TRI_CLASSES)))
+        ax.set_xticklabels(_TRI_CLASSES, fontsize=FONT_SIZES['ticks'])
+        ax.set_xlim(-0.5, len(_TRI_CLASSES) - 0.5)
+        ax.set_xlabel('LVIS class', fontsize=FONT_SIZES['label'])
+        ax.set_ylabel(f'RH{num_level}/RH98', fontsize=FONT_SIZES['label'])
+        ax.set_title(f'{def_tag} — LVIS RH98 {b} m', fontsize=FONT_SIZES['title'])
+        handles = [plt.Line2D([0], [0], marker='s', ls='', markersize=10,
+                              markerfacecolor=_SENSOR_COLOR[s],
+                              markeredgecolor='k', label=s.upper())
+                   for s in _PLOT_SENSORS]
+        ax.legend(handles=handles, fontsize=FONT_SIZES['legend'],
+                  loc='upper left')
         ax.grid(True, axis='y', ls='--', alpha=0.4)
         ax.set_axisbelow(True)
-    np.atleast_1d(axes)[0].set_ylabel(f'RH{num_level}/RH98',
-                                      fontsize=FONT_SIZES['label'])
-    handles = [plt.Line2D([0], [0], marker='s', ls='', markersize=10,
-                          markerfacecolor=_CLASS_COLOR[c], markeredgecolor='none',
-                          label=c) for c in ('sparse', 'dense')]
-    np.atleast_1d(axes)[-1].legend(handles=handles, fontsize=FONT_SIZES['legend'],
-                                   loc='upper right', title='LVIS class')
-    fig.suptitle(f'Dense vs sparse sub-canopy separation — {def_tag}',
-                 fontsize=FONT_SIZES['title'])
-    fig.tight_layout()
-    fig.savefig(save_path, bbox_inches='tight', dpi=150)
-    plt.close(fig)
+        fig.tight_layout()
+        fig.savefig(save_dir / f'box_{safe_tag}_{_safe_bin(b)}.png',
+                    bbox_inches='tight', dpi=150)
+        plt.close(fig)
 
 
 def _plot_delta_bars(sep: pd.DataFrame, def_tag: str, metric: str,
@@ -269,8 +311,11 @@ def _run_one_definition(df: pd.DataFrame, num_level: int, height_edges: tuple,
                 f'd_med={r["delta_median"]:+.3f} | Cohen_d={r["cohens_d"]:+.2f} '
                 f'| preserve(mean)={r["preservation_mean"]:.2f}')
 
-    _plot_violins(labelled, num_level, def_tag, safe_tag, min_group_n,
-                  save_dir / f'violin_{safe_tag}.png')
+    # Box plots: keep all three LVIS classes (sparse/median/dense) on the x axis
+    # and group GEDI vs VSM, one figure per LVIS RH98 height bin.
+    tri = _make_tri_labels(df, num_level, height_edges, tercile_q, min_bin_n)
+    _plot_boxes_per_bin(tri, num_level, def_tag, safe_tag, min_group_n,
+                        save_dir, say)
     _plot_delta_bars(sep, def_tag, 'mean', save_dir / f'delta_mean_{safe_tag}.png')
     _plot_delta_bars(sep, def_tag, 'median',
                      save_dir / f'delta_median_{safe_tag}.png')
@@ -380,7 +425,7 @@ def subcanopy_separation_analysis(
                 f'mean|Cohen d|={sub["cohens_d"].abs().mean():.2f}')
 
     say('')
-    say('Outputs: separation_metrics.csv, violin_sub*.png, '
+    say('Outputs: separation_metrics.csv, box_sub*_<bin>.png, '
         'delta_mean_sub*.png, delta_median_sub*.png, conclusion.md')
     (save_dir / 'conclusion.md').write_text('\n'.join(report) + '\n')
     print(f'\n-> {save_dir / "conclusion.md"}')

@@ -4,7 +4,7 @@
 ##SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
-#SBATCH --time=3-00:00:00
+#SBATCH --time=2-00:00:00
 #SBATCH --job-name=download_gedi
 #SBATCH --output=./logs/%x-%A_%a.out
 #SBATCH --error=./logs/%x-%A_%a.err
@@ -27,7 +27,7 @@ download)
 parse_kv_args "${@:2}" || exit $?
 # year=${year:-2020}
 
-python -m download.run run=download_all_valid_gedi run.year=$year
+python -m download.run run=download_all_valid_gedi run.year=$year run.key_file=$key_file
 
 ;;
 *)

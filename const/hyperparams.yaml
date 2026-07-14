@@ -102,7 +102,7 @@ font_sizes:
   ticks:    12   # x/y tick numbers, colorbar ticks fall back to this
   label:    18   # axis labels (set_xlabel/set_ylabel)
   title:    18   # axes titles and figure suptitles
-  annot:    18   # in-axes text / annotate / ax.text default
+  annot:    16   # in-axes text / annotate / ax.text default
   legend:   12   # legend entries
   colorbar: 18   # colorbar label
 
