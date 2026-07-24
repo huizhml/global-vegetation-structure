@@ -9,7 +9,7 @@ case $1 in
 # =======================================
 #    Translate all tif files in a directory to COG, save to the same directory
 # =======================================
-tif_dir=${HOME}/data/gvs/evaluation/with_airborne_lidar/ALS_MaxGEDIFootprint_GSD10m
+tif_dir=${HOME}/data/gvs/evaluation/with_airborne_lidar/rh98_processed_to_footprint25m/ALS_MaxGEDIFootprint_GSD10m
 warn "Don't run this repeatedly, it doesn't differentiate .cog.tif and .tif"
 tif_files=$(find $tif_dir -type f -name "*.tif")
 for tif_file in $tif_files; do

@@ -191,7 +191,8 @@ def plot_bars(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, groups: tupl
 
         # Full bar in the model's color (also sets the legend swatch); the gain
         # over baseline is overlaid with a white hatch so the improvement stands out.
-        ax.bar(offsets, values, bar_width, label=MODEL_NAMES[model_name]['name'])
+        bars = ax.bar(offsets, values, bar_width, label=MODEL_NAMES[model_name]['name'])
+        bar_color = bars[0].get_facecolor()
 
         if show_improve and model_name != baseline_name:
             improvement = np.maximum(values - baseline_vals, 0)
@@ -208,7 +209,8 @@ def plot_bars(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, groups: tupl
             if annotate_this:
                 for j, imp in enumerate(improvement):
                     if imp > 0:
-                        annotations[j].append((offsets[j], values[j], f"+{imp:.2f}"))
+                        # Carry the bar colour so the label matches its own bar.
+                        annotations[j].append((offsets[j], values[j], f"+{imp:.2f}", bar_color))
 
     # Second pass: resolve label overlaps within each group
     if show_improve:
@@ -228,7 +230,7 @@ def plot_bars(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, groups: tupl
                 continue
             labels.sort(key=lambda t: t[1])
             y_positions = []
-            for k, (lx, ly, txt) in enumerate(labels):
+            for k, (lx, ly, txt, _) in enumerate(labels):
                 # full_profile_center keeps its per-bar baseline; other baselines
                 # anchor above the tallest bar in the group.
                 anchor = ly if baseline_name == 'full_profile_center' else group_max[j]
@@ -236,12 +238,13 @@ def plot_bars(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, groups: tupl
                 if y_positions:
                     desired_y = max(desired_y, y_positions[-1] + min_gap)
                 y_positions.append(desired_y)
-            for k, (lx, ly, txt) in enumerate(labels):
+            for k, (lx, ly, txt, color) in enumerate(labels):
                 label_y = y_positions[k]
-                ax.text(lx, label_y, txt, ha='center', va='bottom', fontsize=FONT_SIZES['annot'])
+                ax.text(lx, label_y, txt, ha='center', va='bottom',
+                        fontsize=FONT_SIZES['annot'], color=color)
                 if label_y - ly > 0.02:
                     ax.plot([lx, lx], [ly, label_y],
-                            color='gray', linewidth=0.5, alpha=0.5)
+                            color=color, linewidth=0.5, alpha=0.5)
 
     # Vertical separator between ALL (first group) and the forest types
     sep_x = (x_pos[0] + (n_models - 1) * bar_width + bar_width / 2 + x_pos[1] - bar_width / 2) / 2
