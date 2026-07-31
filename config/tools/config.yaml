@@ -430,3 +430,43 @@ tools:
     label_fontsize: 9
     pad_deg: 2.0
     dpi: 200
+
+  # =========================================================================
+  # tools/stac_cog_audit.py
+  # =========================================================================
+  # The 2020 collection's items point at three different roots (one root per
+  # item), so which tiles still need a COG can only be answered from the item
+  # JSONs. Writes the two tile worklists the SLURM array is sized off:
+  #   python -m tools.run run=stac_cog_audit
+  stac_cog_audit:
+    _target_: tools.stac_cog_audit.audit_stac_cog
+    target_type: function
+    catalog: ~/data/gvs/products/gvsm_stac_catalog/vsm_local_masked
+    product_root: ~/data/gvs/products/vsm/2020
+    out_dir: ~/data/gvs/assets/worklists
+    src_root: masked/tiles/geotiff   # items here are the ones needing a COG
+    cog_root: masked/tiles/cog       # where their COG copy belongs
+    # Q1-first rollout: a tile counts as done when its RH*_Q1 COGs are there.
+    asset_glob: "RH*_Q1.tif"
+    prefix: masked_2020_q1
+    workers: 32
+
+  # =========================================================================
+  # tools/stac_retarget.py
+  # =========================================================================
+  # After a COG pass, point the item hrefs at the converted copies. Only moves
+  # an asset when its COG exists, so a Q1-first rollout leaves Q0/Q2 pointing
+  # at geotiff/ until they are converted too. Dry run by default:
+  #   python -m tools.run run=stac_retarget                  # report only
+  #   python -m tools.run run=stac_retarget run.dry_run=false
+  stac_retarget:
+    _target_: tools.stac_retarget.retarget_stac_assets
+    target_type: function
+    catalog: ~/data/gvs/products/gvsm_stac_catalog/vsm_local_masked
+    product_root: ~/data/gvs/products/vsm/2020
+    src_root: masked/tiles/geotiff
+    dst_root: masked/tiles/cog
+    asset_glob: "RH*_Q1.tif"
+    backup_dir: null          # null -> <catalog>_backup next to the collection
+    dry_run: true
+    workers: 32

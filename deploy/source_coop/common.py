@@ -15,9 +15,13 @@ import os
 import subprocess
 import sys
 import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, List, Optional, Tuple
+from fnmatch import fnmatch
+from functools import lru_cache
+from pathlib import Path
+from typing import Any, Dict, Generator, List, Optional, Tuple
 
 import boto3
 from boto3.s3.transfer import TransferConfig
@@ -189,7 +193,40 @@ def drain(body, chunk_bytes: int = 8 * 1024 * 1024) -> int:
         total += len(chunk)
 
 
+def src_kind(cfg: DictConfig) -> str:
+    """源端类型:s3(LUMI-O)、local(本地目录)或 stac(STAC collection)。
+
+    2020 年的数据在 hendrix 本地盘上,2024 年的在 LUMI-O 对象存储上。目标端和
+    所有运维逻辑(凭证窗口、multipart、断点续传)完全一样,只有"从哪读"不同,
+    所以做成一个开关而不是两套代码。
+
+    stac 是 local 的一个变体:2020 年的 tile 分散在三个不同的 root 下
+    (original/tiles/cog、original/tiles/geotiff、masked/tiles/geotiff),
+    只有 item JSON 知道每个 tile 的文件到底在哪,所以不能用一个 dir + glob 去
+    扫 —— 那样会挑错副本。
+    """
+    return cfg.src.get("kind", "s3") if "src" in cfg else "s3"
+
+
 def build_src(cfg: DictConfig, workers: int = 32):
+    """建立源端客户端。本地目录 / STAC 不需要客户端,返回 None。"""
+    kind = src_kind(cfg)
+    if kind == "local":
+        root = Path(cfg.src.dir).expanduser()
+        if not root.is_dir():
+            raise RuntimeError(f"源目录不存在: {root}")
+        return None
+
+    if kind == "stac":
+        base = Path(cfg.src.catalog).expanduser()
+        if not base.is_dir():
+            raise RuntimeError(f"STAC collection 目录不存在: {base}")
+        return None
+
+    return _build_src_s3(cfg, workers)
+
+
+def _build_src_s3(cfg: DictConfig, workers: int = 32):
     """源端凭证从 rclone 配置读取,不另外维护一份。"""
     try:
         dump = subprocess.check_output(["rclone", "config", "dump"], text=True)
@@ -314,6 +351,201 @@ def list_source(src, bucket: str, prefix: str,
     return out
 
 
+def list_local(root: str, pattern: str = "**/*.tif",
+               budget_bytes: Optional[int] = None) -> List[Tuple[str, int]]:
+    """列举本地目录。返回 (相对路径, 字节数),相对路径直接就是目标端的 key 尾部。
+
+    排序是为了可重复:同一个目录两次列举顺序一致,断点续传和基准采样才可比。
+    """
+    base = Path(root).expanduser()
+    if not base.is_dir():
+        raise RuntimeError(f"源目录不存在: {base}")
+
+    out: List[Tuple[str, int]] = []
+    total = 0
+    for path in sorted(base.glob(pattern)):
+        if not path.is_file():
+            continue
+        size = path.stat().st_size
+        if size == 0:
+            continue
+        out.append((path.relative_to(base).as_posix(), size))
+        total += size
+        if budget_bytes is not None and total >= budget_bytes:
+            return out
+    return out
+
+
+@lru_cache(maxsize=4)
+def _stac_item_ids(catalog: str) -> Dict[str, str]:
+    """扫一遍 collection 目录,返回 tile -> item_id(按 tile 排序插入)。
+
+    item 目录名就是 item id,形如 <TILE>_<YEAR>(42RUR_2020),里面放着同名的
+    <item_id>.json。tile 取第一个下划线之前的部分 —— 目标端的布局是
+    <dst.prefix>/<tile>/<文件名>,年份已经在 dst.prefix 里了,不能再带一次。
+
+    缓存住是因为这个目录有一万八千个条目,而 open_source 每传一个对象都要用它
+    把 key 还原成绝对路径。
+    """
+    base = Path(catalog).expanduser()
+    if not base.is_dir():
+        raise RuntimeError(f"STAC collection 目录不存在: {base}")
+
+    out: Dict[str, str] = {}
+    for entry in sorted(base.iterdir()):
+        if not entry.is_dir():
+            continue
+        tile = entry.name.split("_", 1)[0]
+        if tile in out:
+            raise RuntimeError(
+                f"同一个 tile 在 collection 里出现两次: {out[tile]} / {entry.name};"
+                "目标端 key 是 <tile>/<文件名>,会互相覆盖")
+        out[tile] = entry.name
+    if not out:
+        raise RuntimeError(f"STAC collection 目录下没有 item: {base}")
+    return out
+
+
+@lru_cache(maxsize=64)
+def _stac_assets(catalog: str, item_id: str) -> Dict[str, str]:
+    """一个 item 的 <文件名> -> 绝对路径。
+
+    按文件名而不是 asset key 建索引:key 是目标端 <tile>/<文件名>,这样即使某天
+    asset key 和文件名不再一一对应也不会错位。href 是 file:// URI。
+
+    maxsize=64 够用:列举是按 tile 排好序的,传输也照这个顺序提交,同一时刻在飞
+    的 item 不会超过线程数。
+    """
+    path = Path(catalog).expanduser() / item_id / f"{item_id}.json"
+    try:
+        with open(path) as fh:
+            item = json.load(fh)
+    except OSError as exc:
+        raise RuntimeError(f"读不到 STAC item {path}: {exc}")
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"STAC item 不是合法 JSON {path}: {exc}")
+
+    assets: Dict[str, str] = {}
+    for asset in item.get("assets", {}).values():
+        href = asset.get("href", "")
+        if not href:
+            continue
+        if href.startswith("file://"):
+            href = href[len("file://"):]
+        elif "://" in href:
+            raise RuntimeError(
+                f"{path} 里的 asset 不是本地文件: {href}(只支持 file://)")
+        assets[os.path.basename(href)] = href
+    return assets
+
+
+def stac_path(catalog: str, key: str) -> Path:
+    """把 <tile>/<文件名> 还原成磁盘上的绝对路径。"""
+    tile, _, name = key.partition("/")
+    item_id = _stac_item_ids(catalog).get(tile)
+    if item_id is None:
+        raise RuntimeError(f"STAC collection 里没有 tile {tile}({catalog})")
+    assets = _stac_assets(catalog, item_id)
+    if name not in assets:
+        raise RuntimeError(f"STAC item {item_id} 里没有 asset {name}")
+    return Path(assets[name])
+
+
+def list_stac(catalog: str, pattern: str = "*.tif",
+              budget_bytes: Optional[int] = None) -> List[Tuple[str, int]]:
+    """列举 STAC collection 里的 asset。返回 (<tile>/<文件名>, 字节数)。
+
+    pattern 是对文件名(不是整条路径)做 fnmatch,分位数分批上传就靠它:
+    RH*_Q1.tif 只挑中位数那一档。
+
+    大小只能 stat 出来 —— item JSON 里没有 file:size。缺文件不中断整次列举
+    (一万八千个 item,为一个坏 href 全盘停掉不划算),但会在结尾汇总告警,
+    漏掉的东西必须让人看见。
+    """
+    if "/" in pattern:
+        # kind=local 的默认值是 **/*.tif,直接拿来 fnmatch 文件名会一个都匹配
+        # 不上,然后当成"源端是空的"退出 —— 这种静默的空跑必须拦住。
+        raise RuntimeError(
+            f"kind=stac 的 glob 匹配的是 asset 文件名,不能带 '/':{pattern!r}"
+            "(整档用 '*.tif',分位数用 'RH*_Q1.tif')")
+
+    out: List[Tuple[str, int]] = []
+    total = 0
+    missing: List[str] = []
+    for tile, item_id in _stac_item_ids(catalog).items():
+        for name, path in sorted(_stac_assets(catalog, item_id).items()):
+            if not fnmatch(name, pattern):
+                continue
+            try:
+                size = os.stat(path).st_size
+            except OSError:
+                missing.append(path)
+                continue
+            if size == 0:
+                missing.append(path)
+                continue
+            out.append((f"{tile}/{name}", size))
+            total += size
+            if budget_bytes is not None and total >= budget_bytes:
+                return out
+
+    if missing:
+        print(f"[warn] STAC 里有 {len(missing)} 个 asset 在磁盘上缺失或为空,"
+              f"已跳过。前 3 个: {missing[:3]}", file=sys.stderr)
+    return out
+
+
+def list_source_items(cfg: DictConfig, src,
+                      budget_bytes: Optional[int] = None
+                      ) -> List[Tuple[str, int]]:
+    """按源端类型列举。上层不用关心是本地盘、STAC 还是 LUMI-O。"""
+    kind = src_kind(cfg)
+    if kind == "local":
+        return list_local(cfg.src.dir, cfg.src.get("glob", "**/*.tif"),
+                          budget_bytes)
+    if kind == "stac":
+        return list_stac(cfg.src.catalog, cfg.src.get("glob", "*.tif"),
+                         budget_bytes)
+    return list_source(src, cfg.src.bucket, cfg.src.prefix, budget_bytes)
+
+
+def source_label(cfg: DictConfig) -> str:
+    """给日志和报错用的源端描述。"""
+    kind = src_kind(cfg)
+    if kind == "local":
+        return f"{cfg.src.dir}/{cfg.src.get('glob', '**/*.tif')}"
+    if kind == "stac":
+        return f"{cfg.src.catalog}[{cfg.src.get('glob', '*.tif')}]"
+    return f"s3://{cfg.src.bucket}/{cfg.src.prefix}"
+
+
+@contextmanager
+def open_source(cfg: DictConfig, src,
+                key: str) -> Generator[Tuple[Any, int], None, None]:
+    """打开一个源端对象,yield (可读文件对象, botocore 重试次数)。
+
+    local 给的是真实文件句柄(可 seek,s3transfer 走更省事的分片路径);
+    s3 给的是 get_object 的 StreamingBody(不可 seek)。两边都必须关闭 ——
+    StreamingBody 不关会把连接池占住,几十万个对象之后就挂死。
+    """
+    kind = src_kind(cfg)
+    if kind in ("local", "stac"):
+        path = (Path(cfg.src.dir).expanduser() / key if kind == "local"
+                else stac_path(cfg.src.catalog, key))
+        fh = open(path, "rb")
+        try:
+            yield fh, 0
+        finally:
+            fh.close()
+    else:
+        got = src.get_object(Bucket=cfg.src.bucket, Key=key)
+        body = got["Body"]
+        try:
+            yield body, retry_count(got)
+        finally:
+            body.close()
+
+
 def delete_prefix(cfg: DictConfig, prefix: str) -> int:
     """删除某前缀下所有对象。基准测试清理用。
 
@@ -357,6 +589,7 @@ def delete_prefix(cfg: DictConfig, prefix: str) -> int:
 __all__ = [
     "NONRETRYABLE", "CountingStream", "CredInfo", "StateWriter", "build_cfg",
     "build_dst", "build_src", "boto_config", "delete_prefix", "drain",
-    "list_source", "load_lines", "map_key", "normalize_cfg_prefixes",
-    "normalize_prefix", "retry_count", "transfer_config",
+    "list_local", "list_source", "list_source_items", "list_stac", "load_lines",
+    "map_key", "normalize_cfg_prefixes", "normalize_prefix", "open_source",
+    "retry_count", "source_label", "src_kind", "stac_path", "transfer_config",
 ]

@@ -31,8 +31,25 @@
 #  ---------------------------------------------------------------------------
 #  ONE-TIME SETUP
 #  ---------------------------------------------------------------------------
+#    0. source-coop CLI. The prebuilt Linux binaries need glibc >= 2.35, so on
+#       an older host (hendrix is RHEL 8 / glibc 2.28) the installer refuses and
+#       you build it: rustup + `cargo install --path .` from the release
+#       source.tar.gz, with the Linux `keyring` backend dropped from Cargo.toml
+#       (no libdbus headers) AND cache.rs forced to the file cache — with no
+#       keyring backend the crate defaults to an in-memory MOCK store whose
+#       writes silently succeed, so the token would not survive the process.
 #    1. source-coop login --duration 12h   # 12 h is the max; the token is
 #                                          # cached under ~/.cache/source-coop/
+#       ON A LOGIN NODE, PASS -v. login serves the OAuth callback on
+#       127.0.0.1:<port> and shells out to a browser; it only prints the URL if
+#       that shell-out FAILS. xdg-open exists on the cluster and exits 0 without
+#       doing anything, so plain `login` just hangs with no link. `-v` prints the
+#       authorization URL unconditionally, before the browser attempt:
+#           ssh -L 8765:127.0.0.1:8765 hendrix2      # NOT the round-robin alias
+#           source-coop login -v --port 8765 --duration 12h
+#       then open the printed URL in the local browser. The tunnel must reach the
+#       SAME node the login runs on — a second ssh through a round-robin gate
+#       alias can land elsewhere and the callback is delivered to the wrong host.
 #    2. ~/.aws/config profile (once):
 #         [profile source-coop]
 #         credential_process = source-coop creds
@@ -64,7 +81,7 @@
 #  lowercased): 60UUD -> 60u, 32MRE -> 32m.
 #
 #  Destination on source.coop — organised by version / year / tile:
-#      ${SC_DEST_ROOT}/${SC_VERSION}/<year>/<tile>/RH{n}_Q{q}.tif
+#      ${SC_DEST_ROOT}/<year>/<tile>/RH{n}_Q{q}.tif
 #
 #  ---------------------------------------------------------------------------
 #  Configure via env vars (sensible defaults):
@@ -73,7 +90,6 @@
 #      SC_AWS_PROFILE aws profile for source.coop          default source-coop
 #      SC_SRC_REMOTE  lumi-o rclone remote (NO bucket)     default lumi-465002698-private
 #      SC_DEST_ROOT   source.coop product root             default s3://geoai-ucph/gvsm/
-#      SC_VERSION     first dest path segment              default original
 #      SC_ENDPOINT    source.coop endpoint                 default https://data.source.coop
 #      SC_REGION      default us-west-2
 #      SC_STAGE_DIR   local scratch for staging            default /tmp/sc_stage
@@ -84,7 +100,6 @@ SC_AWS=${SC_AWS:-aws}
 SC_AWS_PROFILE=${SC_AWS_PROFILE:-source-coop}
 SC_SRC_REMOTE=${SC_SRC_REMOTE:-lumi-465002698-private}
 SC_DEST_ROOT=${SC_DEST_ROOT:-s3://geoai-ucph/gvsm/}
-SC_VERSION=${SC_VERSION:-original}
 SC_ENDPOINT=${SC_ENDPOINT:-https://data.source.coop}
 SC_REGION=${SC_REGION:-us-west-2}
 SC_STAGE_DIR=${SC_STAGE_DIR:-/tmp/sc_stage}
@@ -141,10 +156,10 @@ _sc_dest_bucket() {
 }
 
 _sc_dest_key() {
-    # Destination key under the product root for a version/year/tile.
-    #   60UUD 2024 -> original/2024/60UUD   (version = SC_VERSION)
+    # Destination key under the product root for a year/tile.
+    #   60UUD 2024 -> 2024/60UUD
     local tile=$1 year=$2
-    echo "${SC_VERSION}/${year}/${tile}"
+    echo "${year}/${tile}"
 }
 
 _sc_dest_url() {

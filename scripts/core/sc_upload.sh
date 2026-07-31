@@ -21,7 +21,7 @@
 #  the tile id, e.g. 60UUD -> 60u):
 #    ${SC_SRC_REMOTE}:<zoneband>-<YEAR>/<TILE_ID>/RH{n}_Q{q}.tif
 #  Destination layout on source.coop:
-#    ${SC_DEST_ROOT}/${SC_VERSION}/<YEAR>/<TILE_ID>/RH{n}_Q{q}.tif
+#    ${SC_DEST_ROOT}/<YEAR>/<TILE_ID>/RH{n}_Q{q}.tif
 #
 #  Usage (source the file, then call the functions):
 #      source scripts/core/sc_upload.sh
@@ -39,7 +39,7 @@
 #
 #  Config via env vars (shared defaults come from source_coop_utils.sh):
 #      SC_RCLONE / SC_AWS / SC_AWS_PROFILE / SC_SRC_REMOTE / SC_DEST_ROOT
-#      SC_VERSION / SC_ENDPOINT / SC_REGION / SC_STAGE_DIR
+#      SC_ENDPOINT / SC_REGION / SC_STAGE_DIR
 #      SC_TRANSFERS   default 16   (rclone parallel downloads from lumi-o)
 #      SC_AWS_CONC    default 16   (aws s3 max_concurrent_requests on upload)
 #      SC_QUIET       default ""   (set to 1 to reduce tool output)
@@ -125,14 +125,14 @@ _sc_stage_upload_verify() {
 # ---- public: upload one tile (all RHs) ------------------------------------
 
 sc_upload_tile() {
-    # Upload every COG of ONE tile to ${SC_DEST_ROOT}/${SC_VERSION}/${YEAR}/${TILE}/.
+    # Upload every COG of ONE tile to ${SC_DEST_ROOT}/${YEAR}/${TILE}/.
     # Usage: sc_upload_tile <TILE_ID> [YEAR]
     _sc_check_src_remote || return 1
     _sc_check_dest_root  || return 1
     local tile=${1:?Usage: sc_upload_tile <TILE_ID> [YEAR]}
     local year=${2:-2024}
 
-    echo ">>> upload tile ${tile} (${year}, ${SC_VERSION})"
+    echo ">>> upload tile ${tile} (${year})"
     echo "    $(_sc_src_tile "${tile}" "${year}")  ->  $(_sc_dest_url "${tile}" "${year}")/"
     _sc_stage_upload_verify "${tile}" "${year}" '*.tif' "${tile}"
     local rc=$?
@@ -152,7 +152,7 @@ sc_upload_rh() {
     local year=${2:-2024}
     local name="RH${rh}_Q*.tif"
 
-    echo ">>> upload RH${rh} (${year}, ${SC_VERSION}) across all tiles on ${SC_SRC_REMOTE}"
+    echo ">>> upload RH${rh} (${year}) across all tiles on ${SC_SRC_REMOTE}"
     local tiles; tiles=$(sc_list_src_tiles "${year}")
     if [ -z "${tiles}" ]; then
         echo "ERROR: no tiles found for ${year} on ${SC_SRC_REMOTE}" >&2
