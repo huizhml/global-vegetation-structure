@@ -51,29 +51,73 @@ run_inference() {
 
 }
 
+# GeoTIFF -> COG for one tile.
+#   run_translate <TILE_ID> [YEAR] [VARIANT] [PROFILE]
+# VARIANT is the product flavour under products/vsm/<year>: `original` or
+# `masked`. It reads <variant>/tiles/geotiff/<tile> and writes
+# <variant>/tiles/cog/<tile>.
+#
+# PROFILE must stay LERC_ZSTD to match the COGs already in
+# original/tiles/cog (LERC_ZSTD, 1024 blocks, 5 NEAREST overviews, lossless
+# because rio-cogeo is called with MAX_Z_ERROR=0). The op's own default is
+# plain ZSTD, which produces ~40% larger files -- that is how the one
+# already-converted masked tile (60WVT) ended up different from every
+# original/ COG, so pass it explicitly rather than relying on the default.
 run_translate() {
     local tile_id=$1
-    local year=$2
+    local year=${2:-2020}
+    local variant=${3:-original}
+    local profile=${4:-LERC_ZSTD}
 
     printf '>%.0s' {1..10}
-    echo "Translating predictions for tile $tile_id in year $year"
-    scr_dir=${HOME}/data/gvs/predictions/${year}/original/tiles/geotiff/${tile_id}
-    dst_dir=${HOME}/data/gvs/predictions/${year}/original/tiles/cog/${tile_id}
+    echo "Translating $variant predictions for tile $tile_id in year $year"
+    local base=${HOME}/data/gvs/products/vsm/${year}/${variant}/tiles
+    local scr_dir=${base}/geotiff/${tile_id}
+    local dst_dir=${base}/cog/${tile_id}
     if [ -d $scr_dir ]; then
         echo "Source directory $scr_dir exists"
     else
         echo "Source directory $scr_dir does not exist"
         return 1
     fi
-    python -m postprocessing.run run=translate_predictions run.src_dir=$scr_dir run.dst_dir=$dst_dir
+
+    # Skip tiles a previous array task already finished. The conversion is
+    # 1.7M files across 5674 tiles, so re-running the whole array to pick up
+    # stragglers has to be cheap.
+    local n_src=$(ls -1 ${scr_dir}/*.tif 2>/dev/null | wc -l)
+    local n_dst=$(ls -1 ${dst_dir}/*.tif 2>/dev/null | wc -l)
+    if [ "$n_dst" -ge "$n_src" ] && [ "$n_src" -gt 0 ]; then
+        echo "Tile $tile_id already has $n_dst/$n_src COGs, skipping"
+        printf '>%.0s' {1..10}
+        return 0
+    fi
+
+    # SLURM inherits the submitting shell's env (--export=ALL), so submitting
+    # without an activated env leaves $CONDA_PREFIX empty and python resolves to
+    # the system 3.6 -- 5674 array tasks all failing the same way.
+    if [ -z "${CONDA_PREFIX}" ]; then
+        echo "CONDA_PREFIX is empty: activate the env before submitting (conda activate inference)" >&2
+        return 1
+    fi
+
+    # Non-interactive shells do not get the env's activate hooks, and without
+    # PROJ_DATA the PROJ database cannot be opened -- EPSG:32660 then fails to
+    # resolve and the CRS written into the COG is degraded. Silent, and it
+    # would hit every file in the array.
+    export PROJ_DATA=${PROJ_DATA:-${CONDA_PREFIX}/share/proj}
+
+    python -m postprocessing.run run=translate_predictions \
+        run.src_dir=$scr_dir run.dst_dir=$dst_dir run.profile=$profile
     exit_status=$?
     if [ $exit_status -ne 0 ]; then
         echo "Translation command failed with exit status $exit_status for tile $tile_id"
     else
         echo "Translation command completed successfully"
-        touch ${translate_flag}
+        # Only submit.sh sets translate_flag; bare `touch` errors without it.
+        [ -n "${translate_flag}" ] && touch "${translate_flag}"
     fi
     printf '>%.0s' {1..10}
+    return $exit_status
 }
 
 read_line_from_txt() {

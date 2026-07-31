@@ -26,7 +26,7 @@ deploy:
   # .done / .failed 里,重跑自动跳过已完成的 key。
   #   python -m deploy.run run=sc_upload run.mode=selftest   # 先自检
   #   python -m deploy.run run=sc_upload run.src.bucket=32m-2024 \
-  #       run.src.prefix=32MNC/ run.dst.prefix=gvsm/original/2024/32MNC/ \
+  #       run.src.prefix=32MNC/ run.dst.prefix=gvsm/2024/32MNC/ \
   #       run.state_prefix=$PWD/state/32MNC run.workers=64
   sc_upload:
     _target_: deploy.source_coop.upload.upload_to_source_coop
@@ -38,9 +38,22 @@ deploy:
       prefix: ""
       rclone_remote: lumi-465002698-private   # 凭证从 rclone config dump 读
       region: us-east-1
+      # kind=local 时改为从本地目录读(2020 年的数据在 hendrix 本地盘上),
+      # 此时 bucket/prefix/rclone_remote 全部忽略,key 就是相对 dir 的路径。
+      # kind=stac 时从 STAC collection 读:2020 年的 tile 分散在三个 root 下
+      # (original/tiles/cog、original/tiles/geotiff、masked/tiles/geotiff),
+      # 只有 item JSON 知道每个 tile 在哪,拿一个 dir + glob 去扫会挑错副本。
+      kind: s3                 # s3 | local | stac
+      dir: null                # kind=local 时必填,例: ~/data/gvs/2020
+      catalog: null            # kind=stac 时必填,collection 目录(下面一层是
+                               # <TILE>_<YEAR>/<TILE>_<YEAR>.json),例:
+                               # ~/data/gvs/products/gvsm_stac_catalog/vsm_local_masked
+      # kind=local 匹配的是相对 dir 的路径,kind=stac 匹配的是 asset 文件名。
+      # 分位数分批上传就靠后者:RH*_Q1.tif 只挑中位数那一档。
+      glob: "**/*.tif"
     dst:
       bucket: geoai-ucph
-      prefix: null             # 例: gvsm/original/2024/
+      prefix: null             # 例: gvsm/2024/  (布局: gvsm/<year>/<tile>/)
       endpoint: https://data.source.coop
       profile: source-coop     # ~/.aws/config 里配 credential_process
       region: us-east-1
@@ -82,10 +95,13 @@ deploy:
     _target_: deploy.source_coop.bench.benchmark_transfer
     target_type: function
     src:
-      bucket: null             # 必填,例: 32m-2024
+      bucket: null             # kind=s3 时必填,例: 32m-2024
       prefix: ""
       rclone_remote: lumi-465002698-private
       region: us-east-1
+      kind: s3                 # s3 | local(本地目录,见 sc_upload 的说明)
+      dir: null                # kind=local 时必填
+      glob: "**/*.tif"
     dst:
       bucket: geoai-ucph
       prefix: gvsm/_bench/     # 必须含 "_bench",防止基准数据写进真实路径

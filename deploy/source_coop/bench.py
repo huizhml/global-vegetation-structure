@@ -46,7 +46,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from deploy.source_coop.common import (
     CountingStream, build_cfg, build_dst, build_src, delete_prefix, drain,
-    list_source, retry_count, transfer_config,
+    list_source_items, open_source, source_label, src_kind, transfer_config,
 )
 
 
@@ -134,20 +134,20 @@ def _move_one(args) -> Tuple[float, int, int, int, str, str]:
     t0 = time.time()
     stage = "get"
     try:
-        got = _G["src"].get_object(Bucket=cfg.src.bucket, Key=key)
-        retries = retry_count(got)
-        if read_only:
-            nbytes = drain(got["Body"])
-        else:
-            stage = "put"
-            # 流式转发 + multipart:单次 put_object 会被 source.coop 413 掉,
-            # 而且整对象进内存在高并发下直接 OOM。注意 upload_fileobj 没有返回
-            # 值,所以写入侧的 botocore 重试次数统计不到,retries 只反映读取侧。
-            base = key.rsplit("/", 1)[-1]
-            stream = CountingStream(got["Body"])
-            _G["dst"].upload_fileobj(stream, cfg.dst.bucket,
-                                     dst_prefix + base, Config=_G["xfer"])
-            nbytes = stream.count
+        with open_source(cfg, _G["src"], key) as (body, retries):
+            if read_only:
+                nbytes = drain(body)
+            else:
+                stage = "put"
+                # 流式转发 + multipart:单次 put_object 会被 source.coop 413
+                # 掉,而且整对象进内存在高并发下直接 OOM。注意 upload_fileobj
+                # 没有返回值,写入侧的 botocore 重试次数统计不到,retries 只
+                # 反映读取侧。
+                base = key.rsplit("/", 1)[-1]
+                stream = CountingStream(body)
+                _G["dst"].upload_fileobj(stream, cfg.dst.bucket,
+                                         dst_prefix + base, Config=_G["xfer"])
+                nbytes = stream.count
         return time.time() - t0, nbytes, retries, 0, "", ""
     except ClientError as exc:
         code = exc.response.get("Error", {}).get("Code", "?")
@@ -333,7 +333,8 @@ def benchmark_transfer(
         {'mode': ..., 'rows': [每档的统计字典]}。
     """
     cfg = build_cfg(
-        required=("src.bucket", "dst.prefix"),
+        required=(("src.dir",) if (src or {}).get("kind") == "local"
+                  else ("src.bucket",)) + ("dst.prefix",),
         src=src, dst=dst, mode=mode, workers=workers,
         workers_grid=list(workers_grid or [16, 32, 64, 128]),
         procs_grid=list(procs_grid or [1, 2, 4, 8]),
@@ -358,11 +359,10 @@ def benchmark_transfer(
 
     src_client = build_src(cfg, max(list(cfg.workers_grid) + [cfg.workers]))
 
-    objs = list_source(src_client, cfg.src.bucket, cfg.src.prefix,
-                       budget_bytes=int(cfg.trial_gb * 1e9))
+    objs = list_source_items(cfg, src_client,
+                             budget_bytes=int(cfg.trial_gb * 1e9))
     if not objs:
-        raise RuntimeError(
-            f"s3://{cfg.src.bucket}/{cfg.src.prefix} 下没有对象")
+        raise RuntimeError(f"{source_label(cfg)} 下没有对象")
 
     total = sum(s for _, s in objs)
     mean_mb = total / len(objs) / 1e6

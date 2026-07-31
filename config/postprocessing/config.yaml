@@ -146,6 +146,31 @@ postprocessing:
     target_type: function
     src_dir: ~/data/gvs/products/vsm/2020/original/tiles/geotiff
     dst_dir: ~/data/gvs/products/vsm/2020/original/tiles/cog
+    # LERC_ZSTD is what every COG already in original/tiles/cog uses (1024
+    # blocks, 5 NEAREST overviews, lossless via MAX_Z_ERROR=0). The function
+    # signature defaults to plain ZSTD, which is ~40% larger — pin it here so
+    # the masked/ conversion cannot silently diverge from the original/ one.
+    profile: LERC_ZSTD
+
+  # Many tiles in ONE process — the form to use under the 10-job account cap:
+  # a job takes N cpus and keeps N conversions in flight across tile
+  # boundaries, instead of paying a python+GDAL start per tile.
+  #   sbatch --array=1-10 --cpus-per-task=16 scripts/hendrix/run_cpu.sh 2 \
+  #       ~/data/gvs/assets/worklists/masked_2020_need_cog.txt 2020 masked 10
+  translate_tiles:
+    _target_: postprocessing.core.translate.translate_tiles
+    target_type: function
+    worklist: ~/data/gvs/assets/worklists/masked_2020_need_cog.txt
+    src_root: ~/data/gvs/products/vsm/2020/masked/tiles/geotiff
+    dst_root: ~/data/gvs/products/vsm/2020/masked/tiles/cog
+    profile: LERC_ZSTD
+    pattern: "RH*_Q*.tif"    # e.g. RH*_Q1.tif for a median-quantile-first pass
+    # null -> derived from SLURM_PROCID / SLURM_NTASKS / array id, so
+    # `srun --ntasks=N` partitions the worklist with no shell bookkeeping.
+    chunk: null
+    n_chunks: null
+    workers: null            # null -> SLURM_CPUS_PER_TASK, else cpu_count
+    skip_complete: true
 
   # =========================================================================
   # postprocessing/corrections/blending.py

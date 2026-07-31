@@ -12,14 +12,21 @@
     # 干跑,只看路径映射
     python -m deploy.run run=sc_upload run.mode=dry \
         run.src.bucket=32m-2024 run.src.prefix=32MNC/ \
-        run.dst.prefix=gvsm/original/2024/32MNC/ \
+        run.dst.prefix=gvsm/2024/32MNC/ \
         run.state_prefix=$PWD/state/32MNC
 
     # 实传(整桶,tile 层级由源 key 自带)
     python -m deploy.run run=sc_upload \
         run.src.bucket=32m-2024 run.src.prefix="" \
-        run.dst.prefix=gvsm/original/2024/ \
+        run.dst.prefix=gvsm/2024/ \
         run.state_prefix=$PWD/state/32m-2024 run.workers=64
+
+    # 2020 年:源在 hendrix 本地盘,位置由 STAC collection 决定,按分位数分批
+    python -m deploy.run run=sc_upload \
+        run.src.kind=stac run.src.glob='RH*_Q1.tif' \
+        run.src.catalog=~/data/gvs/products/gvsm_stac_catalog/vsm_local_masked \
+        run.dst.prefix=gvsm/local_masked/2020/ \
+        run.state_prefix=$PWD/state/2020_Q1 run.workers=64
 
     # 只重试失败的
     python -m deploy.run run=sc_upload ... run.only_failed=true
@@ -51,7 +58,8 @@ from omegaconf import DictConfig, OmegaConf
 
 from deploy.source_coop.common import (
     NONRETRYABLE, CountingStream, StateWriter, build_cfg, build_dst, build_src,
-    list_source, load_lines, map_key, normalize_prefix, transfer_config,
+    list_source_items, load_lines, map_key, normalize_prefix, open_source,
+    source_label, src_kind, transfer_config,
 )
 
 
@@ -61,12 +69,12 @@ def transfer_one(src, dst, cfg: DictConfig, key: str, size: Optional[int],
     """源端流式读 -> 目标端 multipart 写,内存占用是分片大小而不是整个对象。
 
     走 upload_fileobj 而不是 put_object:source.coop 对单次 PutObject 有大小
-    上限,大 COG 会被 413 掉。
+    上限,大 COG 会被 413 掉。源端是 LUMI-O 还是本地目录由 open_source 决定。
     """
-    body = src.get_object(Bucket=cfg.src.bucket, Key=key)["Body"]
-    stream = CountingStream(body)
     dst_key = map_key(cfg.src.prefix, cfg.dst.prefix, key)
-    dst.upload_fileobj(stream, cfg.dst.bucket, dst_key, Config=xfer)
+    with open_source(cfg, src, key) as (body, _retries):
+        stream = CountingStream(body)
+        dst.upload_fileobj(stream, cfg.dst.bucket, dst_key, Config=xfer)
 
     # 流式写完才知道读了多少,所以这个校验只能后置 —— 对不上就把刚写进去的
     # 半成品删掉,不能留在目标端冒充完整对象。
@@ -128,8 +136,8 @@ def selftest(cfg: DictConfig) -> int:
         assert map_key("59VMG/", "gvsm/o/2024/59VMG/",
                        "59VMG/RH11_Q2.tif") == "gvsm/o/2024/59VMG/RH11_Q2.tif"
         # 嵌套子目录要保留(整桶模式依赖这条)
-        assert map_key("", "gvsm/original/2024/",
-                       "32MNC/RH11_Q2.tif") == "gvsm/original/2024/32MNC/RH11_Q2.tif"
+        assert map_key("", "gvsm/2024/",
+                       "32MNC/RH11_Q2.tif") == "gvsm/2024/32MNC/RH11_Q2.tif"
         assert map_key("a/", "b/", "a/x/y.tif") == "b/x/y.tif"
         # 前缀不匹配必须报错,而不是悄悄切错字符
         try:
@@ -185,7 +193,8 @@ def selftest(cfg: DictConfig) -> int:
 
     def t_src():
         holder["src"] = build_src(cfg, cfg.workers)
-    check("读取 rclone 配置并建立源端 client", t_src)
+    check({"local": "本地源目录存在", "stac": "STAC collection 目录存在"}.get(
+        src_kind(cfg), "读取 rclone 配置并建立源端 client"), t_src)
 
     def t_dst():
         holder["dst"], holder["cred"] = build_dst(cfg, cfg.workers)
@@ -201,8 +210,18 @@ def selftest(cfg: DictConfig) -> int:
                 "先 source-coop login --duration 12h")
         check(f"凭证有效期充足 ({cred.describe()})", t_window)
 
-    src = holder.get("src")
-    if src is not None and not OmegaConf.is_missing(cfg.src, "bucket"):
+    if src_kind(cfg) != "s3":
+        def t_local_list():
+            items = list_source_items(cfg, None, budget_bytes=1)
+            if not items:
+                raise AssertionError(f"{source_label(cfg)} 下没有文件")
+            name, size = items[0]
+            print(f"      例: {name}  ({size/1e6:.1f} MB) -> "
+                  f"{map_key(cfg.src.prefix, cfg.dst.prefix, name)}")
+        check("源端可列举", t_local_list)
+    elif holder.get("src") is not None and not OmegaConf.is_missing(cfg.src, "bucket"):
+        src = holder["src"]
+
         def t_src_list():
             resp = src.list_objects_v2(Bucket=cfg.src.bucket,
                                        Prefix=cfg.src.prefix, MaxKeys=3)
@@ -306,12 +325,14 @@ def run_transfer(cfg: DictConfig) -> Dict[str, Any]:
         print(f"[warn] 目标端凭证类型是 {cred.kind},botocore 不会重调 "
               "credential_process,进程开始时拿到什么就用到底", file=sys.stderr)
 
-    # 启动前确认两端都通,避免跑到一半才发现 403
-    try:
-        src.list_objects_v2(Bucket=cfg.src.bucket, Prefix=cfg.src.prefix,
-                            MaxKeys=1)
-    except (ClientError, BotoCoreError) as exc:
-        raise RuntimeError(f"源端不可读 ({cfg.src.bucket}): {exc}")
+    # 启动前确认两端都通,避免跑到一半才发现 403。本地源 / STAC 在 build_src 里
+    # 已经确认过目录存在了,不用再探一次。
+    if src_kind(cfg) == "s3":
+        try:
+            src.list_objects_v2(Bucket=cfg.src.bucket, Prefix=cfg.src.prefix,
+                                MaxKeys=1)
+        except (ClientError, BotoCoreError) as exc:
+            raise RuntimeError(f"源端不可读 ({cfg.src.bucket}): {exc}")
 
     if cfg.mode != "dry":
         probe = cfg.dst.prefix + ".transfer_probe"
@@ -322,9 +343,9 @@ def run_transfer(cfg: DictConfig) -> Dict[str, Any]:
             raise RuntimeError(
                 f"目标端不可写 ({cfg.dst.bucket}/{probe}): {exc}")
 
-    keys = list_source(src, cfg.src.bucket, cfg.src.prefix)
+    keys = list_source_items(cfg, src)
     if not keys:
-        msg = f"源前缀下没有任何对象: s3://{cfg.src.bucket}/{cfg.src.prefix}"
+        msg = f"源端下没有任何对象: {source_label(cfg)}"
         if cfg.allow_empty:
             print(f"[warn] {msg}(allow_empty=true,按成功退出)")
             return {"sent": 0, "failed": 0, "bytes": 0, "skipped_empty": True}
@@ -468,8 +489,11 @@ def upload_to_source_coop(
     """把 LUMI-O 上的 VSM 预测 COG 传到 Source Cooperative。
 
     Args:
-        src: 源端(LUMI-O)配置 —— bucket / prefix / rclone_remote / region。
-            凭证从 `rclone config dump` 读取。
+        src: 源端配置。kind=s3(默认,LUMI-O)—— bucket / prefix /
+            rclone_remote / region,凭证从 `rclone config dump` 读取;
+            kind=local —— dir + glob(glob 匹配相对 dir 的路径);
+            kind=stac —— catalog + glob(glob 匹配 asset 文件名,按分位数
+            分批上传就靠它),key 是 <tile>/<文件名>。
         dst: 目标端(Source Cooperative)配置 —— bucket / prefix / endpoint /
             profile / region。凭证走 aws profile 的 credential_process。
         state_prefix: 断点续传状态文件前缀,会写 <prefix>.done 和
@@ -495,8 +519,14 @@ def upload_to_source_coop(
     Returns:
         {'sent': ..., 'failed': ..., 'bytes': ...} 之类的统计字典。
     """
+    # 每种源端必填的字段不一样,但都需要目标前缀和状态文件位置。
+    kind = (src or {}).get("kind", "s3")
+    src_required = {"s3": ("src.bucket",), "local": ("src.dir",),
+                    "stac": ("src.catalog",)}.get(kind)
+    if src_required is None:
+        raise ValueError(f"src.kind 只能是 s3 / local / stac,收到 {kind!r}")
     cfg = build_cfg(
-        required=("src.bucket", "dst.prefix", "state_prefix"),
+        required=src_required + ("dst.prefix", "state_prefix"),
         src=src, dst=dst, state_prefix=state_prefix, mode=mode,
         workers=workers, submit_chunk=submit_chunk, max_attempts=max_attempts,
         only_failed=only_failed, allow_empty=allow_empty,
@@ -506,6 +536,11 @@ def upload_to_source_coop(
         multipart_chunk_mb=multipart_chunk_mb,
         selftest_size_mb=selftest_size_mb, selftest_large_mb=selftest_large_mb,
     )
+
+    if src_kind(cfg) != "s3":
+        # 本地源的 key 已经是相对于 src.dir 的路径,STAC 的是 <tile>/<文件名>,
+        # 再叠一层前缀会让 map_key 直接报"key 不在前缀下"。
+        cfg.src.prefix = ""
 
     if cfg.mode == "selftest":
         failed = selftest(cfg)
