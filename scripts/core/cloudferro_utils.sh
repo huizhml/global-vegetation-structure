@@ -19,12 +19,17 @@ CF_ENDPOINT=${CF_ENDPOINT:-https://s3.waw4-1.cloudferro.com}
 CF_CREDS=${CF_CREDS:-${HOME}/.config/s5cmd/s5cmd.cfg}
 CF_BUCKET=${CF_BUCKET:-vsm-data-public}
 CF_LOCAL_BASE=${CF_LOCAL_BASE:-${HOME}/data/gvs/products/vsm}
+# CloudFerro (Ceph RGW) rejects s5cmd's GetBucketLocation region probe with a
+# 403; pinning the region makes s5cmd skip that probe. The request-id suffix
+# ("...-default") shows the endpoint's region is "default".
+CF_REGION=${CF_REGION:-waw4-1}
 
 # ---- internals ------------------------------------------------------------
 
 _cf_s5() {
-    # Run s5cmd with the configured endpoint + credentials.
-    s5cmd --credentials-file "${CF_CREDS}" --endpoint-url "${CF_ENDPOINT}" "$@"
+    # Run s5cmd with the configured endpoint + credentials + region.
+    AWS_REGION="${CF_REGION}" \
+        s5cmd --credentials-file "${CF_CREDS}" --endpoint-url "${CF_ENDPOINT}" "$@"
 }
 
 _cf_url() {
@@ -66,6 +71,51 @@ cf_stat() {
     local key=${1:?Usage: cf_stat <key>}
     local url=$(_cf_url "${key}")
     _cf_s5 cat --print-stat "${url}" >/dev/null
+}
+
+cf_overview() {
+    # Summarize what lives on CloudFerro, grouped one level down, with a
+    # per-group file count + total size and a grand total. Drills down as you
+    # pass more of the path:
+    #     cf_overview              -> per-year   totals (bucket root)
+    #     cf_overview 2024         -> per-tile   totals under 2024/
+    #     cf_overview 2024 32MRE   -> per-RH     totals under 2024/32MRE/
+    local year=${1:-}
+    local tile=${2:-}
+
+    local prefix mode
+    if   [ -z "${year}" ]; then prefix="s3://${CF_BUCKET}";              mode="year"
+    elif [ -z "${tile}" ]; then prefix="s3://${CF_BUCKET}/${year}";      mode="tile"
+    else                        prefix="s3://${CF_BUCKET}/${year}/${tile}"; mode="rh"
+    fi
+
+    echo "# ${prefix}/*   (grouped by ${mode})"
+    # s5cmd ls output for objects: "DATE TIME SIZE KEY". The wildcard recurses,
+    # so KEY is the full path within the bucket. DIR lines have no numeric size.
+    _cf_s5 ls "${prefix}/*" 2>/dev/null | awk -v mode="${mode}" '
+        {
+            size = $(NF-1); key = $NF
+            if (size !~ /^[0-9]+$/) next          # skip DIR / malformed lines
+            n = split(key, seg, "/")
+            if      (mode == "year") g = seg[1]
+            else if (mode == "tile") g = seg[2]
+            else {                                 # rh: "RH<num>" from filename
+                if (match(seg[n], /^RH[0-9]+/)) g = substr(seg[n], RSTART, RLENGTH)
+                else                            g = seg[n]
+            }
+            if (g == "") next
+            cnt[g]++; bytes[g] += size; tot++; totb += size
+        }
+        END {
+            for (g in cnt)
+                printf "%-16s %8d files  %12d B  %8.2f GiB\n",
+                       g, cnt[g], bytes[g], bytes[g]/1073741824 | "sort"
+            close("sort")
+            if (tot == 0) { print "(no objects found)"; exit }
+            printf "%-16s %8d files  %12d B  %8.2f GiB\n",
+                   "TOTAL", tot, totb, totb/1073741824
+        }
+    '
 }
 
 # ---- verify ---------------------------------------------------------------
