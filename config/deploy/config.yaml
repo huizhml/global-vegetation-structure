@@ -1,0 +1,90 @@
+# All deploy/ ops registered as Hydra `run=<name>` configs.
+# Layout: <section> -> <op_name> -> <op fields>
+#
+# Single entrypoint loads this section:
+#   python -m deploy.run    run=sc_upload
+#
+# Placeholders use Python str.format style ({year}, {tile}) and are resolved by
+# tools.utils.resolve_args in deploy/run.py against sibling fields of the op.
+#
+# `root_results_dir` is read by config.runner.run_cli to index each op's
+# `save_dir` under <root_results_dir>/deploy/<op> via a symlink. The transfer
+# ops below write no local artifacts, so they carry no save_dir.
+#
+# NOTE: this is the ops registry for the deploy/ package. It is unrelated to
+# config/deploy.yaml, which is the Lightning CLI predict/deploy config.
+
+root_data_dir: ~/data/gvs
+root_results_dir: ~/data/gvs/results
+
+deploy:
+
+  # =========================================================================
+  # deploy/source_coop/upload.py
+  # =========================================================================
+  # LUMI-O -> Source Cooperative 正式传输。断点续传状态写在 state_prefix 下的
+  # .done / .failed 里,重跑自动跳过已完成的 key。
+  #   python -m deploy.run run=sc_upload run.mode=selftest   # 先自检
+  #   python -m deploy.run run=sc_upload run.src.bucket=32m-2024 \
+  #       run.src.prefix=32MNC/ run.dst.prefix=gvsm/original/2024/32MNC/ \
+  #       run.state_prefix=$PWD/state/32MNC run.workers=64
+  sc_upload:
+    _target_: deploy.source_coop.upload.upload_to_source_coop
+    target_type: function
+    # null = 必填,由命令行给;留 null 而不是写默认值,是防止手滑把 545 万个
+    # 对象传进错误的桶/前缀。
+    src:
+      bucket: null             # 例: 32m-2024;整桶传时 prefix 留空
+      prefix: ""
+      rclone_remote: lumi-465002698-private   # 凭证从 rclone config dump 读
+      region: us-east-1
+    dst:
+      bucket: geoai-ucph
+      prefix: null             # 例: gvsm/original/2024/
+      endpoint: https://data.source.coop
+      profile: source-coop     # ~/.aws/config 里配 credential_process
+      region: us-east-1
+    state_prefix: null         # 断点续传状态,例: $PWD/state/32MNC
+    mode: run                  # run | dry | selftest
+    workers: 32
+    submit_chunk: 2000         # 分批提交,避免一次建几百万个 future
+    max_attempts: 3            # 单对象外层重试次数
+    only_failed: false         # 只重传 <state_prefix>.failed 里的 key
+    allow_empty: false         # 源前缀为空时按成功退出而不是报错
+    progress_every: 100
+    # source.coop 的 token 最长 12h,且从 `source-coop login --duration 12h`
+    # 那一刻起算 —— 不是从作业开始跑起算。剩余不足这么多分钟就直接失败,不要
+    # 传到一半撞 403(进度在状态文件里,重新 login 后原命令扔回去即可)。
+    min_cred_minutes: 30
+    selftest_size_mb: 1.0      # selftest 往返校验的探测对象大小
+
+  # =========================================================================
+  # deploy/source_coop/bench.py
+  # =========================================================================
+  # 上线前的并发调优基准:先 mode=read 拿源端天花板,再 mode=workers 扫线程数,
+  # 最后 mode=procs 模拟同节点多作业。dst.prefix 必须含 "_bench"(硬保护)。
+  #   python -m deploy.run run=sc_bench run.mode=read run.src.bucket=32m-2024 \
+  #       run.src.prefix=32MND/
+  #   python -m deploy.run run=sc_bench run.mode=procs run.workers=64 \
+  #       'run.procs_grid=[1,2,4,8]'
+  sc_bench:
+    _target_: deploy.source_coop.bench.benchmark_transfer
+    target_type: function
+    src:
+      bucket: null             # 必填,例: 32m-2024
+      prefix: ""
+      rclone_remote: lumi-465002698-private
+      region: us-east-1
+    dst:
+      bucket: geoai-ucph
+      prefix: gvsm/_bench/     # 必须含 "_bench",防止基准数据写进真实路径
+      endpoint: https://data.source.coop
+      profile: source-coop
+      region: us-east-1
+    mode: workers              # read | workers | procs | cleanup
+    workers: 32                # procs 模式下每个进程的线程数
+    workers_grid: [16, 32, 64, 128]
+    procs_grid: [1, 2, 4, 8]
+    trial_gb: 5.0              # 每档搬多少数据
+    settle_sec: 10.0           # 试验间冷却,避免连接复用让后一轮虚高
+    keep_objects: false

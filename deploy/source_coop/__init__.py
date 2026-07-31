@@ -1,0 +1,6 @@
+"""LUMI-O -> Source Cooperative 传输。
+
+ops 注册在 config/deploy/config.yaml,统一入口:
+    python -m deploy.run run=sc_upload ...
+    python -m deploy.run run=sc_bench ...
+"""
