@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import math
 import os
+import sys
 import time
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -44,7 +45,8 @@ from botocore.exceptions import BotoCoreError, ClientError
 from omegaconf import DictConfig, OmegaConf
 
 from deploy.source_coop.common import (
-    build_cfg, build_dst, build_src, delete_prefix, list_source, retry_count,
+    CountingStream, build_cfg, build_dst, build_src, delete_prefix, drain,
+    list_source, retry_count, transfer_config,
 )
 
 
@@ -52,12 +54,15 @@ from deploy.source_coop.common import (
 @dataclass
 class Stats:
     label: str = ""
+    concurrency: int = 0          # procs x workers,稳态外推要用
     objects: int = 0
     bytes_moved: int = 0
     wall_sec: float = 0.0
     errors: int = 0
     retries: int = 0
     latencies: List[float] = field(default_factory=list)
+    reasons: Dict[str, int] = field(default_factory=dict)      # 标签 -> 次数
+    examples: Dict[str, str] = field(default_factory=dict)     # 标签 -> 首条完整错误
 
     @property
     def mbps(self) -> float:
@@ -67,6 +72,20 @@ class Stats:
     def objps(self) -> float:
         return self.objects / self.wall_sec if self.wall_sec else 0.0
 
+    @property
+    def mean_lat(self) -> float:
+        """单对象平均耗时。
+
+        拟合 t(size) = 固定开销 + size/速率 时要用均值而不是 p50 —— 分布右偏,
+        中位数会系统性低估;稳态吞吐 = 并发 × 对象大小 / 平均耗时,用的也是均值。
+        """
+        return sum(self.latencies) / len(self.latencies) if self.latencies else 0.0
+
+    @property
+    def mean_size_mb(self) -> float:
+        """平均对象大小 (MB)。配合 mean_lat 就能解出上面那两个参数。"""
+        return self.bytes_moved / self.objects / 1e6 if self.objects else 0.0
+
     def pct(self, q: float) -> float:
         if not self.latencies:
             return 0.0
@@ -74,12 +93,21 @@ class Stats:
         i = min(len(s) - 1, max(0, int(math.ceil(q * len(s))) - 1))
         return s[i]
 
+    def top_reasons(self, n: int = 3) -> str:
+        """失败原因按次数排序,取前 n 个。"""
+        if not self.reasons:
+            return ""
+        top = sorted(self.reasons.items(), key=lambda kv: -kv[1])[:n]
+        return ", ".join(f"{r}x{c}" for r, c in top)
+
     def summary(self) -> Dict[str, Any]:
         return {"label": self.label, "objects": self.objects,
                 "bytes": self.bytes_moved, "wall_sec": self.wall_sec,
                 "mbps": self.mbps, "objps": self.objps,
+                "mean_lat": self.mean_lat, "mean_size_mb": self.mean_size_mb,
                 "p50": self.pct(0.5), "p95": self.pct(0.95),
-                "retries": self.retries, "errors": self.errors}
+                "retries": self.retries, "errors": self.errors,
+                "reasons": dict(self.reasons)}
 
 
 # ================================================================ 工作进程
@@ -91,25 +119,42 @@ def _child_init(cfg_yaml: str, workers: int) -> None:
     _G["cfg"] = cfg
     _G["src"] = build_src(cfg, workers)
     _G["dst"], _ = build_dst(cfg, workers)
+    _G["xfer"] = transfer_config(cfg)
 
 
-def _move_one(args) -> Tuple[float, int, int, int]:
-    """返回 (耗时, 字节数, 重试次数, 是否失败)。"""
+def _move_one(args) -> Tuple[float, int, int, int, str, str]:
+    """返回 (耗时, 字节数, 重试次数, 是否失败, 原因标签, 完整错误)。
+
+    原因标签形如 "get:AccessDenied" / "put:SlowDown" —— 前缀标出是读源端还是
+    写目标端挂的,这两件事的处理方式完全不同(源端限流要减并发,目标端限流要
+    退档),吞掉原因就只能靠猜。
+    """
     key, _size, dst_prefix, read_only = args
     cfg = _G["cfg"]
     t0 = time.time()
+    stage = "get"
     try:
         got = _G["src"].get_object(Bucket=cfg.src.bucket, Key=key)
         retries = retry_count(got)
-        body = got["Body"].read()
-        if not read_only:
+        if read_only:
+            nbytes = drain(got["Body"])
+        else:
+            stage = "put"
+            # 流式转发 + multipart:单次 put_object 会被 source.coop 413 掉,
+            # 而且整对象进内存在高并发下直接 OOM。注意 upload_fileobj 没有返回
+            # 值,所以写入侧的 botocore 重试次数统计不到,retries 只反映读取侧。
             base = key.rsplit("/", 1)[-1]
-            put = _G["dst"].put_object(Bucket=cfg.dst.bucket,
-                                       Key=dst_prefix + base, Body=body)
-            retries += retry_count(put)
-        return time.time() - t0, len(body), retries, 0
-    except (ClientError, BotoCoreError, OSError):
-        return time.time() - t0, 0, 0, 1
+            stream = CountingStream(got["Body"])
+            _G["dst"].upload_fileobj(stream, cfg.dst.bucket,
+                                     dst_prefix + base, Config=_G["xfer"])
+            nbytes = stream.count
+        return time.time() - t0, nbytes, retries, 0, "", ""
+    except ClientError as exc:
+        code = exc.response.get("Error", {}).get("Code", "?")
+        return time.time() - t0, 0, 0, 1, f"{stage}:{code}", str(exc)[:300]
+    except (BotoCoreError, OSError) as exc:
+        return (time.time() - t0, 0, 0, 1,
+                f"{stage}:{type(exc).__name__}", str(exc)[:300])
 
 
 def _run_slice(payload) -> Dict[str, Any]:
@@ -117,16 +162,44 @@ def _run_slice(payload) -> Dict[str, Any]:
     tasks = [(k, s, dst_prefix, read_only) for k, s in objs]
     nbytes = nobj = nretry = nerr = 0
     lat: List[float] = []
+    reasons: Dict[str, int] = {}
+    examples: Dict[str, str] = {}
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        for dt, size, retries, err in pool.map(_move_one, tasks):
+        for dt, size, retries, err, reason, detail in pool.map(_move_one, tasks):
             lat.append(dt)
             nbytes += size
             nretry += retries
             nerr += err
-            if not err:
+            if err:
+                reasons[reason] = reasons.get(reason, 0) + 1
+                examples.setdefault(reason, detail)
+            else:
                 nobj += 1
     return {"objects": nobj, "bytes": nbytes, "errors": nerr,
-            "retries": nretry, "latencies": lat}
+            "retries": nretry, "latencies": lat,
+            "reasons": reasons, "examples": examples}
+
+
+def check_sample(objs: List[Tuple[str, int]], concurrency: int,
+                 label: str, min_waves: int = 3) -> None:
+    """对象数不够并发数的几倍时,测出来的是启停过程而不是稳态吞吐。
+
+    对象数 < 并发数时,实际并发被对象数卡住(128 个 worker 分 19 个对象,真实
+    并发只有 19),这一档和更低的档跑的是同一件事;哪怕略多于并发数,最后一个
+    波次也只有零星几个对象在跑,大半时间空转,吞吐被系统性低估。踩过一次:
+    46 个对象扫到 w=128,和 5 GB/166 个对象扫到 w=128,得出的"拐点"都是假的。
+    """
+    if len(objs) < concurrency:
+        print(f"[warn] {label}: 只有 {len(objs)} 个对象,实际并发被卡在 "
+              f"{len(objs)} 而不是 {concurrency} —— 这一档的数字不可信,"
+              f"把 trial_gb 调大", file=sys.stderr)
+    elif len(objs) < concurrency * min_waves:
+        waves = len(objs) / concurrency
+        print(f"[warn] {label}: {len(objs)} 个对象 / {concurrency} 并发 = "
+              f"{waves:.1f} 个波次,收尾空转会把吞吐压低;要稳态至少 "
+              f"{min_waves} 个波次(trial_gb 约 "
+              f"{concurrency * min_waves * sum(s for _, s in objs) / len(objs) / 1e9:.0f})",
+              file=sys.stderr)
 
 
 def run_trial(cfg: DictConfig, objs: List[Tuple[str, int]], procs: int,
@@ -143,7 +216,7 @@ def run_trial(cfg: DictConfig, objs: List[Tuple[str, int]], procs: int,
     ]
 
     cfg_yaml = OmegaConf.to_yaml(cfg)
-    st = Stats(label=label)
+    st = Stats(label=label, concurrency=procs * workers)
     t0 = time.time()
     if procs == 1:
         _child_init(cfg_yaml, workers)
@@ -160,6 +233,15 @@ def run_trial(cfg: DictConfig, objs: List[Tuple[str, int]], procs: int,
         st.errors += r["errors"]
         st.retries += r["retries"]
         st.latencies.extend(r["latencies"])
+        for reason, count in r["reasons"].items():
+            st.reasons[reason] = st.reasons.get(reason, 0) + count
+        for reason, detail in r["examples"].items():
+            st.examples.setdefault(reason, detail)
+
+    if st.reasons:
+        print(f"    [err] {st.top_reasons()}", file=sys.stderr)
+        for reason, detail in list(st.examples.items())[:2]:
+            print(f"    [err] {reason}: {detail}", file=sys.stderr)
 
     if not read_only and not cfg.keep_objects:
         delete_prefix(cfg, f"{cfg.dst.prefix}{run_id}/")
@@ -169,16 +251,29 @@ def run_trial(cfg: DictConfig, objs: List[Tuple[str, int]], procs: int,
 # ================================================================ 报告
 def report(rows: List[Stats]) -> None:
     print()
-    print(f"{'配置':>18} {'MB/s':>9} {'obj/s':>8} {'p50':>7} {'p95':>7} "
-          f"{'重试':>6} {'错误':>6} {'加速比':>8}")
-    print("-" * 76)
+    print(f"{'配置':>18} {'MB/s':>9} {'obj/s':>8} {'对象MB':>8} {'均值':>7} "
+          f"{'p50':>7} {'p95':>7} {'重试':>6} {'错误':>6} {'加速比':>8}")
+    print("-" * 92)
     base = rows[0].mbps if rows else 1.0
     for st in rows:
         speedup = st.mbps / base if base else 0.0
         print(f"{st.label:>18} {st.mbps:9.0f} {st.objps:8.1f} "
+              f"{st.mean_size_mb:8.1f} {st.mean_lat:7.1f} "
               f"{st.pct(0.5):7.1f} {st.pct(0.95):7.1f} "
               f"{st.retries:6d} {st.errors:6d} {speedup:7.2f}x")
-    print()
+    # 实测吞吐总是低于稳态:波次是整数,最后一波只剩零星对象,其余连接空转。
+    # 正式传输有几百万个对象,启停损耗可以忽略,该按稳态外推。
+    if any(s.mean_lat and s.concurrency for s in rows):
+        print("稳态推算(并发 x 对象大小 / 平均耗时,不含启停损耗):")
+        for st in rows:
+            if not (st.mean_lat and st.concurrency):
+                continue
+            per_conn = st.mean_size_mb / st.mean_lat
+            waves = st.objects / st.concurrency if st.concurrency else 0
+            print(f"  {st.label:>18}  {per_conn:5.2f} MB/s/conn x "
+                  f"{st.concurrency:<4} = {per_conn * st.concurrency:6.0f} MB/s"
+                  f"   (实测 {st.mbps:.0f},{waves:.1f} 个波次)")
+        print()
 
     if len(rows) >= 2:
         best = max(rows, key=lambda s: s.mbps)
@@ -194,6 +289,12 @@ def report(rows: List[Stats]) -> None:
             print(f"注意: {', '.join(s.label for s in hot)} 的重试率超过 2%,"
                   "可能已触发对方限流")
 
+    bad = [s for s in rows if s.reasons]
+    if bad:
+        print("\n失败原因 (get: = 读源端挂了, put: = 写目标端挂了):")
+        for st in bad:
+            print(f"  {st.label:>18}  {st.top_reasons(4)}")
+
 
 # ================================================================ op 入口
 def benchmark_transfer(
@@ -206,6 +307,8 @@ def benchmark_transfer(
     trial_gb: float = 5.0,              # 每次试验搬多少数据
     settle_sec: float = 10.0,           # 试验间冷却,避免连接复用让后一轮虚高
     keep_objects: bool = False,
+    multipart_threshold_mb: float = 32.0,
+    multipart_chunk_mb: float = 32.0,
     **kwargs,
 ) -> Dict[str, Any]:
     """LUMI-O -> Source Cooperative 的并发调优基准。
@@ -222,6 +325,9 @@ def benchmark_transfer(
         trial_gb: 每档搬多少 GB 数据(源端按此预算采样对象)。
         settle_sec: 两档之间的冷却秒数。
         keep_objects: True 则保留写入目标端的基准对象(默认跑完即删)。
+        multipart_threshold_mb: 超过这个大小走 multipart。source.coop 对单次
+            PutObject 有上限,大对象直接 413,所以这个值不能设得太高。
+        multipart_chunk_mb: multipart 的分片大小,也是单个 worker 的内存占用。
 
     Returns:
         {'mode': ..., 'rows': [每档的统计字典]}。
@@ -232,6 +338,8 @@ def benchmark_transfer(
         workers_grid=list(workers_grid or [16, 32, 64, 128]),
         procs_grid=list(procs_grid or [1, 2, 4, 8]),
         trial_gb=trial_gb, settle_sec=settle_sec, keep_objects=keep_objects,
+        multipart_threshold_mb=multipart_threshold_mb,
+        multipart_chunk_mb=multipart_chunk_mb,
     )
 
     if cfg.mode != "read" and "_bench" not in cfg.dst.prefix:
@@ -270,6 +378,7 @@ def benchmark_transfer(
     if cfg.mode == "read":
         print("[info] 只读源端,不写目标端 —— 这是总吞吐的绝对上限")
         for w in cfg.workers_grid:
+            check_sample(objs, w, f"read w={w}")
             st = run_trial(cfg, objs, 1, w, f"read w={w}", read_only=True)
             rows.append(st)
             print(f"  read w={w:<4} {st.mbps:6.0f} MB/s  errors={st.errors}",
@@ -278,6 +387,7 @@ def benchmark_transfer(
 
     elif cfg.mode == "workers":
         for w in cfg.workers_grid:
+            check_sample(objs, w, f"w={w}")
             st = run_trial(cfg, objs, 1, w, f"w={w}")
             rows.append(st)
             print(f"  w={w:<4} {st.mbps:6.0f} MB/s  retries={st.retries} "
@@ -286,6 +396,7 @@ def benchmark_transfer(
 
     else:  # procs
         for p in cfg.procs_grid:
+            check_sample(objs, p * cfg.workers, f"{p}p x {cfg.workers}w")
             st = run_trial(cfg, objs, p, cfg.workers, f"{p}p x {cfg.workers}w")
             rows.append(st)
             print(f"  procs={p:<3} (总并发 {p * cfg.workers:<5}) "

@@ -56,7 +56,18 @@ deploy:
     # 那一刻起算 —— 不是从作业开始跑起算。剩余不足这么多分钟就直接失败,不要
     # 传到一半撞 403(进度在状态文件里,重新 login 后原命令扔回去即可)。
     min_cred_minutes: 30
+    # 跑到凭证只剩这么多分钟时,停止提交新对象、等在途的传完、干净退出。
+    # 撞 403 会在 .failed 里留下一批本可避免的记录;干净退出后重新登录、原命令
+    # 重跑就从 .done 之后接着走。0 = 关掉。
+    stop_before_cred_expiry: 20
+    # source.coop 对单次 PutObject 有大小上限 —— 实测 ~110 MB 的 COG 直接返回
+    # 413 Request Entity Too Large,同批里偏小的却能过。所以写入一律走
+    # upload_fileobj + multipart(`aws s3 sync` 也是超过 8 MB 就自动切片)。
+    # chunk 大小同时也是单个线程的内存占用:workers × chunk 就是峰值内存。
+    multipart_threshold_mb: 32
+    multipart_chunk_mb: 32
     selftest_size_mb: 1.0      # selftest 往返校验的探测对象大小
+    selftest_large_mb: 128     # multipart 探测对象,必须大于 413 阈值(~110 MB)
 
   # =========================================================================
   # deploy/source_coop/bench.py
@@ -88,3 +99,6 @@ deploy:
     trial_gb: 5.0              # 每档搬多少数据
     settle_sec: 10.0           # 试验间冷却,避免连接复用让后一轮虚高
     keep_objects: false
+    # 与 sc_upload 保持一致,否则测出来的不是正式传输会走的那条路径。
+    multipart_threshold_mb: 32
+    multipart_chunk_mb: 32

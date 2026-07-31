@@ -36,6 +36,7 @@
 
 from __future__ import annotations
 
+import io
 import os
 import random
 import shutil
@@ -49,29 +50,43 @@ from botocore.exceptions import BotoCoreError, ClientError
 from omegaconf import DictConfig, OmegaConf
 
 from deploy.source_coop.common import (
-    NONRETRYABLE, StateWriter, build_cfg, build_dst, build_src, list_source,
-    load_lines, map_key, normalize_prefix,
+    NONRETRYABLE, CountingStream, StateWriter, build_cfg, build_dst, build_src,
+    list_source, load_lines, map_key, normalize_prefix, transfer_config,
 )
 
 
 # ================================================================ 传输
-def transfer_one(src, dst, cfg: DictConfig, key: str,
-                 size: Optional[int]) -> int:
-    body = src.get_object(Bucket=cfg.src.bucket, Key=key)["Body"].read()
-    if size is not None and len(body) != size:
-        raise RuntimeError(f"读取 {len(body)} 字节,列举时是 {size} 字节")
+def transfer_one(src, dst, cfg: DictConfig, key: str, size: Optional[int],
+                 xfer) -> int:
+    """源端流式读 -> 目标端 multipart 写,内存占用是分片大小而不是整个对象。
+
+    走 upload_fileobj 而不是 put_object:source.coop 对单次 PutObject 有大小
+    上限,大 COG 会被 413 掉。
+    """
+    body = src.get_object(Bucket=cfg.src.bucket, Key=key)["Body"]
+    stream = CountingStream(body)
     dst_key = map_key(cfg.src.prefix, cfg.dst.prefix, key)
-    dst.put_object(Bucket=cfg.dst.bucket, Key=dst_key, Body=body)
-    return len(body)
+    dst.upload_fileobj(stream, cfg.dst.bucket, dst_key, Config=xfer)
+
+    # 流式写完才知道读了多少,所以这个校验只能后置 —— 对不上就把刚写进去的
+    # 半成品删掉,不能留在目标端冒充完整对象。
+    if size is not None and stream.count != size:
+        try:
+            dst.delete_object(Bucket=cfg.dst.bucket, Key=dst_key)
+        except (ClientError, BotoCoreError):
+            pass
+        raise RuntimeError(
+            f"读取 {stream.count} 字节,列举时是 {size} 字节(已删除残留)")
+    return stream.count
 
 
 def move(src, dst, cfg: DictConfig, state: StateWriter, key: str,
-         size: Optional[int]) -> int:
+         size: Optional[int], xfer) -> int:
     """返回传输字节数;失败返回 -1(已记录,不向上抛)。"""
     last = ""
     for attempt in range(1, cfg.max_attempts + 1):
         try:
-            nbytes = transfer_one(src, dst, cfg, key, size)
+            nbytes = transfer_one(src, dst, cfg, key, size, xfer)
             state.ok(key)
             return nbytes
         except ClientError as exc:
@@ -224,6 +239,29 @@ def selftest(cfg: DictConfig) -> int:
                 print(f"  [warn] 请手动删除 {cfg.dst.bucket}/{probe}",
                       file=sys.stderr)
 
+        # 大对象走 multipart —— source.coop 对单次 PutObject 有大小上限,超了
+        # 直接 413 Request Entity Too Large。上面那个小探测对象在阈值以下,
+        # 测不到这条路径,而真实的 COG 恰恰都在阈值附近,所以必须单独测。
+        large_bytes = int(cfg.selftest_large_mb * 1_000_000)
+        large_probe = cfg.dst.prefix + f".selftest_mp_{os.getpid()}_{int(time.time())}"
+
+        def t_multipart():
+            xfer = transfer_config(cfg)
+            payload = io.BytesIO(b"\0" * large_bytes)
+            dst.upload_fileobj(payload, cfg.dst.bucket, large_probe, Config=xfer)
+            got = dst.head_object(Bucket=cfg.dst.bucket, Key=large_probe)
+            assert got["ContentLength"] == large_bytes, (
+                f"写入 {large_bytes} 字节,回读 {got['ContentLength']}")
+
+        label = (f"大对象 multipart 写入 ({cfg.selftest_large_mb:.0f} MB, "
+                 f"阈值 {cfg.multipart_threshold_mb:.0f} MB)")
+        if check(label, t_multipart):
+            def t_delete_large():
+                dst.delete_object(Bucket=cfg.dst.bucket, Key=large_probe)
+            if not check("清理 multipart 探测对象", t_delete_large):
+                print(f"  [warn] 请手动删除 {cfg.dst.bucket}/{large_probe}",
+                      file=sys.stderr)
+
     print("\n--- 实网 ---")
     for name, ok, msg in results:
         print(f"  {'PASS' if ok else 'FAIL'}  {name}" + (f"  {msg}" if msg else ""))
@@ -328,15 +366,29 @@ def run_transfer(cfg: DictConfig) -> Dict[str, Any]:
         return {"sent": 0, "failed": 0, "bytes": 0}
 
     state = StateWriter(done_path, failed_path)
+    xfer = transfer_config(cfg)
     sent = failed = 0
     sent_bytes = 0
     started = time.time()
 
+    stopped_early = False
+    # 窗口速率的基准点。只打累计均值的话,跑了几天之后速率掉一半也看不出来 ——
+    # 分母太大,均值几乎不动。长任务必须看最近一段的瞬时值。
+    win_t0, win_bytes0 = started, 0
     try:
         with ThreadPoolExecutor(max_workers=cfg.workers) as pool:
             for start in range(0, len(keys), cfg.submit_chunk):
+                # 凭证快到期就停止提交新对象,等在途的传完再退出。撞上 403 的话
+                # 会在 .failed 里留下一批本可避免的记录,还得再扫一遍;干净退出
+                # 之后只要重新登录、原命令重跑,直接从 .done 之后接着走。
+                if cfg.stop_before_cred_expiry:
+                    left = cred.refresh()
+                    if left is not None and left < cfg.stop_before_cred_expiry:
+                        stopped_early = True
+                        break
+
                 batch = keys[start:start + cfg.submit_chunk]
-                futures = [pool.submit(move, src, dst, cfg, state, k, s)
+                futures = [pool.submit(move, src, dst, cfg, state, k, s, xfer)
                            for k, s in batch]
                 for fut in as_completed(futures):
                     nbytes = fut.result()
@@ -346,11 +398,21 @@ def run_transfer(cfg: DictConfig) -> Dict[str, Any]:
                         sent += 1
                         sent_bytes += nbytes
                     if (sent + failed) % cfg.progress_every == 0:
-                        elapsed = time.time() - started
+                        now = time.time()
+                        elapsed = now - started
                         rate = sent_bytes / elapsed / 1e6 if elapsed else 0
+                        win_sec = now - win_t0
+                        win_rate = ((sent_bytes - win_bytes0) / win_sec / 1e6
+                                    if win_sec else 0)
+                        win_t0, win_bytes0 = now, sent_bytes
+                        left_bytes = max(0, pending_bytes - sent_bytes)
+                        eta_h = (left_bytes / (win_rate * 1e6) / 3600
+                                 if win_rate else 0)
                         print(f"[prog] {sent + failed}/{len(keys)}  "
                               f"ok={sent} fail={failed}  "
-                              f"{sent_bytes/1e9:.1f} GB  {rate:.0f} MB/s",
+                              f"{sent_bytes/1e9:.1f}/{pending_bytes/1e9:.1f} GB  "
+                              f"{win_rate:.0f} MB/s (近 {win_sec:.0f}s)  "
+                              f"均值 {rate:.0f}  剩余 ~{eta_h:.1f}h",
                               flush=True)
     except KeyboardInterrupt:
         print(f"\n[warn] 收到中断,进度已保存在 {done_path},重跑会续上",
@@ -364,12 +426,23 @@ def run_transfer(cfg: DictConfig) -> Dict[str, Any]:
     print(f"[done] 成功 {sent}  失败 {failed}  {sent_bytes/1e9:.2f} GB  "
           f"用时 {elapsed/60:.1f} 分钟  平均 {rate:.0f} MB/s")
 
+    if stopped_early:
+        remaining = len(keys) - sent - failed
+        left = cred.minutes_left
+        print(f"\n[stop] 凭证剩余 {left:.0f} 分钟(阈值 "
+              f"{cfg.stop_before_cred_expiry:.0f}),已停止提交新对象并干净退出。\n"
+              f"       本轮完成 {sent} 个,还剩 {remaining} 个未传。\n"
+              f"       重新登录后原样重跑同一条命令即可续上(已完成的不会重传):\n"
+              f"         source-coop login --duration 12h\n"
+              f"         python -m deploy.run run=sc_upload ...(原命令)")
+
     if failed:
         raise RuntimeError(
             f"{failed} 个对象失败,明细见 {failed_path};"
             "重试: 同样的命令加 run.only_failed=true")
     return {"sent": sent, "failed": failed, "bytes": sent_bytes,
-            "elapsed_sec": elapsed}
+            "elapsed_sec": elapsed, "stopped_early": stopped_early,
+            "remaining": len(keys) - sent - failed}
 
 
 # ================================================================ op 入口
@@ -385,7 +458,11 @@ def upload_to_source_coop(
     allow_empty: bool = False,
     progress_every: int = 100,
     min_cred_minutes: float = 30.0,
+    stop_before_cred_expiry: float = 20.0,
+    multipart_threshold_mb: float = 32.0,
+    multipart_chunk_mb: float = 32.0,
     selftest_size_mb: float = 1.0,
+    selftest_large_mb: float = 128.0,
     **kwargs,
 ) -> Dict[str, Any]:
     """把 LUMI-O 上的 VSM 预测 COG 传到 Source Cooperative。
@@ -406,7 +483,14 @@ def upload_to_source_coop(
         progress_every: 每处理多少个对象打一行进度。
         min_cred_minutes: 目标端凭证剩余有效期低于这个值就直接失败,不开传
             (mode=dry 不检查)。source-coop 的 token 最长 12h 且从 login 起算。
+        stop_before_cred_expiry: 跑到剩余有效期低于这个值时,停止提交新对象、
+            等在途的传完、干净退出(不算失败)。0 表示关掉,一直跑到撞 403。
+        multipart_threshold_mb: 超过这个大小走 multipart。source.coop 对单次
+            PutObject 有上限,大对象直接 413,所以这个值不能设得太高。
+        multipart_chunk_mb: multipart 的分片大小,也是单个线程的内存占用。
         selftest_size_mb: selftest 往返校验写入的探测对象大小 (MB)。
+        selftest_large_mb: selftest 里 multipart 探测对象的大小 (MB),要设成
+            大于实测的 413 阈值(~110 MB),否则测不到真正会挂的那条路径。
 
     Returns:
         {'sent': ..., 'failed': ..., 'bytes': ...} 之类的统计字典。
@@ -417,7 +501,10 @@ def upload_to_source_coop(
         workers=workers, submit_chunk=submit_chunk, max_attempts=max_attempts,
         only_failed=only_failed, allow_empty=allow_empty,
         progress_every=progress_every, min_cred_minutes=min_cred_minutes,
-        selftest_size_mb=selftest_size_mb,
+        stop_before_cred_expiry=stop_before_cred_expiry,
+        multipart_threshold_mb=multipart_threshold_mb,
+        multipart_chunk_mb=multipart_chunk_mb,
+        selftest_size_mb=selftest_size_mb, selftest_large_mb=selftest_large_mb,
     )
 
     if cfg.mode == "selftest":

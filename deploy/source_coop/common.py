@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from typing import Any, List, Optional, Tuple
 
 import boto3
+from boto3.s3.transfer import TransferConfig
 from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError, ProfileNotFound
 from omegaconf import DictConfig, OmegaConf
@@ -140,6 +141,54 @@ def boto_config(workers: int = 32) -> Config:
     )
 
 
+def transfer_config(cfg: DictConfig) -> TransferConfig:
+    """写目标端必须走 multipart。
+
+    source.coop 的网关对单次 PutObject 有大小上限 —— 实测 ~110 MB 的 COG 会
+    直接返回 `413 Request Entity Too Large`,而同一批里偏小的对象能过。
+    `aws s3 sync` 之所以一直没暴露这个问题,是因为它超过 8 MB 就自动切片。
+
+    use_threads=False:外层(bench 的 workers / upload 的线程池)已经有自己的
+    并发了,再让 s3transfer 开一层,实际并发会变成 workers × max_concurrency,
+    调优结果全部失真,也更容易撞对方限流。
+    """
+    return TransferConfig(
+        multipart_threshold=int(cfg.multipart_threshold_mb * 1024 ** 2),
+        multipart_chunksize=int(cfg.multipart_chunk_mb * 1024 ** 2),
+        use_threads=False,
+    )
+
+
+class CountingStream:
+    """透传读取并累计字节数。
+
+    流式上传(upload_fileobj)不像 put_object 那样能先 len(body),但"读到的字节
+    数必须等于列举时的大小"这条完整性检查不能丢,所以在流上数。
+    """
+
+    def __init__(self, raw):
+        self._raw = raw
+        self.count = 0
+
+    def read(self, amt=None):
+        chunk = self._raw.read() if amt is None else self._raw.read(amt)
+        self.count += len(chunk)
+        return chunk
+
+
+def drain(body, chunk_bytes: int = 8 * 1024 * 1024) -> int:
+    """只读不留 —— 返回读到的字节数,内存占用是 chunk_bytes 而不是整个对象。
+
+    read 模式下 128 个 worker × 121 MB 的对象全读进内存就是 15 GB,直接 OOM。
+    """
+    total = 0
+    while True:
+        chunk = body.read(chunk_bytes)
+        if not chunk:
+            return total
+        total += len(chunk)
+
+
 def build_src(cfg: DictConfig, workers: int = 32):
     """源端凭证从 rclone 配置读取,不另外维护一份。"""
     try:
@@ -178,6 +227,17 @@ class CredInfo:
     """目标端凭证的状态。"""
     kind: str = "None"                      # botocore 的凭证类名
     minutes_left: Optional[float] = None    # None = 拿不到 Expiration
+    creds: Any = None                       # botocore 凭证对象,用于重新查询
+
+    def refresh(self) -> Optional[float]:
+        """重新查剩余时间。
+
+        长任务跑几小时后要重新问一次 —— botocore 会在快到期时重调
+        credential_process,如果外面有东西(比如登录节点上的刷新循环)更新了
+        source-coop 的缓存,这里就能看到延长后的过期时间。
+        """
+        self.minutes_left = _minutes_left(self.creds)
+        return self.minutes_left
 
     def describe(self) -> str:
         if self.minutes_left is None:
@@ -228,6 +288,7 @@ def build_dst(cfg: DictConfig, workers: int = 32) -> Tuple[Any, CredInfo]:
     return client, CredInfo(
         kind=type(creds).__name__ if creds else "None",
         minutes_left=_minutes_left(creds),
+        creds=creds,
     )
 
 
@@ -254,26 +315,48 @@ def list_source(src, bucket: str, prefix: str,
 
 
 def delete_prefix(cfg: DictConfig, prefix: str) -> int:
-    """批量删除某前缀下所有对象。基准测试清理用。"""
+    """删除某前缀下所有对象。基准测试清理用。
+
+    先试批量 DeleteObjects,不行就逐个删 —— source.coop 的网关是自研的,批量
+    删除会报 NoSuchBucket(错误码驴唇不对马嘴,单对象 delete_object 明明是通的)。
+    同一个网关拒 rclone 也是这类实现差异,别指望它 S3 兼容得很完整。
+    """
     dst, _ = build_dst(cfg)
     removed = 0
+    bulk_ok = True
     paginator = dst.get_paginator("list_objects_v2")
     try:
         for page in paginator.paginate(Bucket=cfg.dst.bucket, Prefix=prefix):
-            batch = [{"Key": o["Key"]} for o in page.get("Contents", [])]
-            for i in range(0, len(batch), 1000):
-                chunk = batch[i:i + 1000]
-                dst.delete_objects(Bucket=cfg.dst.bucket,
-                                   Delete={"Objects": chunk})
-                removed += len(chunk)
+            keys = [o["Key"] for o in page.get("Contents", [])]
+            for i in range(0, len(keys), 1000):
+                chunk = keys[i:i + 1000]
+                if bulk_ok:
+                    try:
+                        dst.delete_objects(
+                            Bucket=cfg.dst.bucket,
+                            Delete={"Objects": [{"Key": k} for k in chunk]})
+                        removed += len(chunk)
+                        continue
+                    except ClientError as exc:
+                        code = exc.response.get("Error", {}).get("Code", "?")
+                        print(f"[info] 批量删除不可用 ({code}),改为逐个删除",
+                              file=sys.stderr)
+                        bulk_ok = False
+                for key in chunk:
+                    dst.delete_object(Bucket=cfg.dst.bucket, Key=key)
+                    removed += 1
     except (ClientError, BotoCoreError) as exc:
-        print(f"[warn] 清理 {prefix} 失败: {exc}\n       请手动删除",
+        print(f"[warn] 清理 {prefix} 失败(已删 {removed} 个): {exc}\n"
+              f"       剩下的请手动删: aws --profile {cfg.dst.profile} "
+              f"--endpoint-url {cfg.dst.endpoint} s3 rm "
+              f"s3://{cfg.dst.bucket}/{prefix} --recursive",
               file=sys.stderr)
     return removed
 
 
 __all__ = [
-    "NONRETRYABLE", "CredInfo", "StateWriter", "build_cfg", "build_dst", "build_src",
-    "boto_config", "delete_prefix", "list_source", "load_lines", "map_key",
-    "normalize_cfg_prefixes", "normalize_prefix", "retry_count",
+    "NONRETRYABLE", "CountingStream", "CredInfo", "StateWriter", "build_cfg",
+    "build_dst", "build_src", "boto_config", "delete_prefix", "drain",
+    "list_source", "load_lines", "map_key", "normalize_cfg_prefixes",
+    "normalize_prefix", "retry_count", "transfer_config",
 ]
