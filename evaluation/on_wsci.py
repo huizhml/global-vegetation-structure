@@ -156,7 +156,8 @@ def hexbin_regression_plot(
     df          : DataFrame containing the two columns.
     x_name      : Column name for the x-axis variable.
     y_name      : Column name for the y-axis variable.
-    metrics     : dict with keys 'pearson_r', 'spearman_rho', 'r2', 'n'.
+    metrics     : dict with keys 'pearson_r', 'spearman_rho', 'r2', 'n'
+                  ('spearman_rho' and 'r2' are annotated on the plot).
     save_path   : Output file path (.png / .pdf / …).
     title       : Plot title.
     x_label     : Custom x-axis label (defaults to x_name).
@@ -164,16 +165,20 @@ def hexbin_regression_plot(
     gridsize    : Number of hexagons across the x-axis.
     cmap        : Matplotlib colormap name.
     """
-    # Colorbar drops the annotation to the lower-left so the box clears the bar;
-    # without one it sits top-left. (va='top' for both, matching the original.)
-    annot_pos = (0.05, 0.2, 'left', 'top') if show_colorbar else (0.05, 0.95, 'left', 'top')
+    # Colorbar plots (CR) keep the box low so it clears the dense upper-left
+    # cloud. Anchor it bottom-up (va='bottom') rather than top-down: the box
+    # then grows away from the axis edge, so extra stat lines can't push it
+    # past the spine. y=0.1 (not 0.05) leaves the rounded border visibly clear
+    # of the spine instead of flush against it. No colorbar -> top-left.
+    annot_pos = (0.05, 0.08, 'left', 'bottom') if show_colorbar else (0.05, 0.95, 'left', 'top')
     hexbin_density_plot(
         df[x_name].to_numpy(), df[y_name].to_numpy(),
         save_path=save_path,
         figsize=kwargs.get('figsize', FIGURE_SIZES['square']),
         gridsize=gridsize, cmap=cmap,
         refline='regression',
-        annotation=f"$R^2$ = {metrics['r2']:.3f}",
+        annotation=(f"$\\rho$ = {metrics['spearman_rho']:.3f}\n"
+                    f"$R^2$ = {metrics['r2']:.3f}"),
         annot_pos=annot_pos,
         show_colorbar=show_colorbar, reserve_colorbar_slot=True,
         x_label=x_label or x_name, y_label=y_label or y_name,
@@ -181,14 +186,30 @@ def hexbin_regression_plot(
     )
 
 
+def _load_cached_metrics(csv_path: Path) -> dict:
+    '''Read a previously written wsci_vs_diversity_correlation.csv into a
+    {(diversity_index, group): metrics} lookup so re-plotting reuses the
+    stats instead of recomputing them. Missing file -> empty dict.'''
+    if not csv_path.exists():
+        return {}
+    prev = pd.read_csv(csv_path)
+    cached = {(r['diversity_index'], r['group']): r.to_dict()
+              for _, r in prev.iterrows()}
+    print(f'Reusing {len(cached)} cached correlations from {csv_path}')
+    return cached
+
+
 def _correlate(df: pd.DataFrame, wsci_name: str, index_name: str,
-               save_dir: Path, group_by: str, min_points: int) -> list[dict]:
-    '''Correlate WSCI against one diversity index, overall and per group.'''
+               save_dir: Path, group_by: str, min_points: int,
+               cached: dict = None) -> list[dict]:
+    '''Correlate WSCI against one diversity index, overall and per group.
+    Entries found in `cached` (keyed by (label, group)) are reused as-is.'''
     rows = []
+    cached = cached or {}
     label = DIVERSITY_LABELS.get(index_name, index_name)
     sub = df.dropna(subset=[wsci_name, index_name])
 
-    m = _corr_metrics(sub, wsci_name, index_name)
+    m = cached.get((label, 'all')) or _corr_metrics(sub, wsci_name, index_name)
     rows.append({'diversity_index': label, 'group': 'all',
                  'biome_value': -1, **m})
     hexbin_regression_plot(sub, wsci_name, index_name, m,
@@ -202,7 +223,7 @@ def _correlate(df: pd.DataFrame, wsci_name: str, index_name: str,
             if len(group) < min_points:
                 print(f'  skipping {index_name}/{name}: {len(group)} points')
                 continue
-            gm = _corr_metrics(group, wsci_name, index_name)
+            gm = cached.get((label, name)) or _corr_metrics(group, wsci_name, index_name)
             rows.append({'diversity_index': label, 'group': name,
                          'biome_value': int(biome_value), **gm})
             hexbin_regression_plot(
@@ -217,7 +238,7 @@ def _correlate(df: pd.DataFrame, wsci_name: str, index_name: str,
 def eval_on_wsci(wsci_file: str, diversity_file: str, test_point_dir: str,
                  save_dir: str = None, wsci_name: str = 'WSCI',
                  diversity_bands: list = None, group_by: str = 'BIOME',
-                 min_points: int = 30, **kwargs):
+                 min_points: int = 30, reuse: bool = True, **kwargs):
     '''
     Correlation analysis between WSCI and each band of a 4-band diversity
     raster (fhd, enl1d, enl2d, cr) sampled at the test point locations,
@@ -235,6 +256,9 @@ def eval_on_wsci(wsci_file: str, diversity_file: str, test_point_dir: str,
         group_by: point column to break the correlation down by (default
                   'BIOME'); set to None to skip the per-group breakdown
         min_points: minimum valid points required to report a group
+        reuse: reuse the cached `wsci_vs_diversity_sampled.parquet` and
+               `wsci_vs_diversity_correlation.csv` in `save_dir` when they
+               exist, so re-running only redraws the plots (default True)
         plot_scale: axis standardization for the scatter plots only —
                     'zscore' | 'minmax' | 'none' (stats stay on raw values)
     Returns:
@@ -247,34 +271,42 @@ def eval_on_wsci(wsci_file: str, diversity_file: str, test_point_dir: str,
     save_dir.mkdir(parents=True, exist_ok=True)
     diversity_bands = diversity_bands or DIVERSITY_BANDS
 
-    files = sorted(test_point_dir.glob('*.parquet'))
-    columns = ['geometry'] + ([group_by] if group_by else [])
-    gdf = dgp.read_parquet(
-        files, columns=columns, gather_spatial_partitions=False
-    ).compute()
-    print(f'Loaded {len(gdf)} test points from {len(files)} parquet files')
+    sampled_file = save_dir / 'wsci_vs_diversity_sampled.parquet'
+    if reuse and sampled_file.exists():
+        df = pd.read_parquet(sampled_file)
+        print(f'Reusing {len(df)} sampled points from {sampled_file}')
+    else:
+        files = sorted(test_point_dir.glob('*.parquet'))
+        columns = ['geometry'] + ([group_by] if group_by else [])
+        gdf = dgp.read_parquet(
+            files, columns=columns, gather_spatial_partitions=False
+        ).compute()
+        print(f'Loaded {len(gdf)} test points from {len(files)} parquet files')
 
-    wsci = rasterio_read_locs(wsci_file, gdf)[:, 0]
-    diversity = rasterio_read_locs(diversity_file, gdf)
-    if diversity.shape[1] != len(diversity_bands):
-        raise ValueError(
-            f'diversity raster has {diversity.shape[1]} bands but '
-            f'{len(diversity_bands)} band names were given: {diversity_bands}'
-        )
+        wsci = rasterio_read_locs(wsci_file, gdf)[:, 0]
+        diversity = rasterio_read_locs(diversity_file, gdf)
+        if diversity.shape[1] != len(diversity_bands):
+            raise ValueError(
+                f'diversity raster has {diversity.shape[1]} bands but '
+                f'{len(diversity_bands)} band names were given: {diversity_bands}'
+            )
 
-    df = pd.DataFrame({wsci_name: wsci})
-    for i, band in enumerate(diversity_bands):
-        df[band] = diversity[:, i]
-    if group_by:
-        df[group_by] = gdf[group_by].to_numpy()
-    df.to_parquet(save_dir / 'wsci_vs_diversity_sampled.parquet')
+        df = pd.DataFrame({wsci_name: wsci})
+        for i, band in enumerate(diversity_bands):
+            df[band] = diversity[:, i]
+        if group_by:
+            df[group_by] = gdf[group_by].to_numpy()
+        df.to_parquet(sampled_file)
+
+    corr_file = save_dir / 'wsci_vs_diversity_correlation.csv'
+    cached = _load_cached_metrics(corr_file) if reuse else {}
 
     rows = []
     for band in diversity_bands:
         rows += _correlate(df, wsci_name, band, save_dir, group_by,
-                            min_points)
+                            min_points, cached=cached)
     results = pd.DataFrame(rows)
-    results.to_csv(save_dir / 'wsci_vs_diversity_correlation.csv', index=False)
+    results.to_csv(corr_file, index=False)
     return results
 
 

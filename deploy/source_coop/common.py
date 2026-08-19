@@ -15,6 +15,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -208,6 +209,27 @@ def src_kind(cfg: DictConfig) -> str:
     return cfg.src.get("kind", "s3") if "src" in cfg else "s3"
 
 
+SRC_REQUIRED = {
+    "s3": ("src.bucket",),
+    "local": ("src.dir",),
+    "stac": ("src.catalog",),
+}
+
+
+def src_required(src) -> Tuple[str, ...]:
+    """按源端类型给出必填字段。
+
+    每加一种 src.kind 都必须在这里登记 —— 否则会掉进"默认要 bucket"的分支,
+    报一个和真实原因完全无关的错(本地/STAC 上传根本没有 bucket 这个概念)。
+    未知 kind 直接报错,不静默退化。
+    """
+    kind = (src or {}).get("kind", "s3") or "s3"
+    if kind not in SRC_REQUIRED:
+        raise ValueError(
+            f"src.kind 只能是 {sorted(SRC_REQUIRED)},收到 {kind!r}")
+    return SRC_REQUIRED[kind]
+
+
 def build_src(cfg: DictConfig, workers: int = 32):
     """建立源端客户端。本地目录 / STAC 不需要客户端,返回 None。"""
     kind = src_kind(cfg)
@@ -351,28 +373,130 @@ def list_source(src, bucket: str, prefix: str,
     return out
 
 
+def load_tile_filter(path: Optional[str]) -> Optional[set]:
+    """读 tile 白名单(每行一个 tile id)。None/空路径表示不过滤。
+
+    直接吃 stac_cog_audit 写出来的 <prefix>_have_cog.txt。Q1-first 的滚动发布
+    下这个是必需的:没转完的 tile,其 item href 还指向 geotiff,而那些文件是
+    存在的 —— 不过滤就会把转换前的原件一起发出去,而且全程不报错。
+    """
+    if not path:
+        return None
+    tiles = load_lines(str(Path(path).expanduser()))
+    if not tiles:
+        raise RuntimeError(f"tile 白名单是空的或不存在: {path}")
+    return tiles
+
+
+def norm_patterns(pattern) -> List[str]:
+    """glob 可以是单个字符串,也可以是一组模式。
+
+    分批发布要按 RH 挑文件,而 fnmatch 表达不了"这 15 个之一"。更要命的是
+    `RH0*` 会把 `RH100` 也匹配进来、`RH10*` 同样 —— 所以模式必须写成
+    `RH0_Q*.tif` 这种带下划线的形式,一个 RH 一条,合起来是个列表。
+    """
+    if isinstance(pattern, str):
+        return [pattern]
+    pats = [str(p) for p in pattern]
+    if not pats:
+        raise RuntimeError("glob 是空列表,匹配不到任何文件")
+    return pats
+
+
+def _matches(name: str, patterns: List[str]) -> bool:
+    return any(fnmatch(name, p) for p in patterns)
+
+
+def _pattern_rank(name: str, patterns: List[str]) -> int:
+    """命中的第一个模式的序号。order=asset 靠它排序。
+
+    模式列表的顺序就是发布优先级 —— priority_rh_stac 是按 RH0..RH100 写的,
+    所以"先发 RH0 的全部 tile,再发 RH10 的全部 tile"直接由列表顺序决定。
+    """
+    for i, pat in enumerate(patterns):
+        if fnmatch(name, pat):
+            return i
+    return len(patterns)
+
+
+def _walk_local(base: Path, pattern, tiles: Optional[set]
+                ) -> Generator[Tuple[str, str], None, None]:
+    """惰性产出 (相对路径, 绝对路径),目录和文件都按名字排序。
+
+    不用 Path.glob("**/...") —— `sorted(glob(...))` 必须先把整棵树走完才返回,
+    调用方的 budget 早停就完全失效了。实测 original/tiles/cog 那棵树在共享盘上
+    要 47 分钟才列完,而基准只需要前 25 GB。
+
+    "**/<文件名模式>" 这种形状(也就是实际用的那种)走 os.walk + fnmatch,可以
+    边走边产出,还能在顶层按 tile 白名单剪枝 —— 白名单 2593 个 tile 而树下有
+    一万八千个的话,省掉的是绝大部分目录。其它形状退回 glob。
+    """
+    patterns = norm_patterns(pattern)
+    if all(p.startswith("**/") and "/" not in p[3:] for p in patterns):
+        name_pats = [p[3:] for p in patterns]
+        for dirpath, dirnames, filenames in os.walk(base):
+            dirnames.sort()
+            rel_dir = os.path.relpath(dirpath, base)
+            if tiles is not None and rel_dir == ".":
+                # 顶层就是 tile 目录,不在白名单里的整棵子树都不用进
+                dirnames[:] = [d for d in dirnames if d in tiles]
+            for name in sorted(filenames):
+                if _matches(name, name_pats):
+                    rel = name if rel_dir == "." else f"{rel_dir}/{name}"
+                    yield rel.replace(os.sep, "/"), os.path.join(dirpath, name)
+    else:
+        seen: Dict[str, str] = {}
+        for pat in patterns:
+            for path in base.glob(pat):
+                if path.is_file():
+                    seen[path.relative_to(base).as_posix()] = str(path)
+        for rel in sorted(seen):
+            yield rel, seen[rel]
+
+
 def list_local(root: str, pattern: str = "**/*.tif",
-               budget_bytes: Optional[int] = None) -> List[Tuple[str, int]]:
+               budget_bytes: Optional[int] = None,
+               tiles: Optional[set] = None,
+               order: str = "tile") -> List[Tuple[str, int]]:
     """列举本地目录。返回 (相对路径, 字节数),相对路径直接就是目标端的 key 尾部。
 
     排序是为了可重复:同一个目录两次列举顺序一致,断点续传和基准采样才可比。
+    tiles 非空时只保留这些 tile(取相对路径的第一段)。
+    order=asset 时按模式顺序排(先某个 RH 的全部 tile,再下一个 RH)—— 本地这
+    条路径必须先全部收集再排序,所以 budget 的早停要等排完才生效;树只走一遍,
+    在慢文件系统上比按模式走 15 遍划算得多。
     """
     base = Path(root).expanduser()
     if not base.is_dir():
         raise RuntimeError(f"源目录不存在: {base}")
 
+    patterns = norm_patterns(pattern)
     out: List[Tuple[str, int]] = []
+    ranked: List[Tuple[int, str, int]] = []
     total = 0
-    for path in sorted(base.glob(pattern)):
-        if not path.is_file():
+    for rel, abspath in _walk_local(base, patterns, tiles):
+        if tiles is not None and rel.split("/", 1)[0] not in tiles:
             continue
-        size = path.stat().st_size
+        try:
+            size = os.stat(abspath).st_size
+        except OSError:
+            continue
         if size == 0:
             continue
-        out.append((path.relative_to(base).as_posix(), size))
+        if order == "asset":
+            ranked.append((_pattern_rank(rel, patterns), rel, size))
+            continue
+        out.append((rel, size))
         total += size
         if budget_bytes is not None and total >= budget_bytes:
             return out
+
+    if order == "asset":
+        for _rank, rel, size in sorted(ranked):
+            out.append((rel, size))
+            total += size
+            if budget_bytes is not None and total >= budget_bytes:
+                break
     return out
 
 
@@ -391,30 +515,38 @@ def _stac_item_ids(catalog: str) -> Dict[str, str]:
     if not base.is_dir():
         raise RuntimeError(f"STAC collection 目录不存在: {base}")
 
+    # scandir 而不是 iterdir + is_dir():后者对一万八千个条目要发一万八千次
+    # stat,在共享文件系统上是几十秒;DirEntry 的类型信息直接来自目录项本身,
+    # 基本不额外发系统调用。这一步在每次启动时都要付一遍(12h 凭证窗口意味着
+    # 整个上传会重启十几次),值得省。
+    with os.scandir(base) as it:
+        names = sorted(e.name for e in it if e.is_dir(follow_symlinks=False))
+
     out: Dict[str, str] = {}
-    for entry in sorted(base.iterdir()):
-        if not entry.is_dir():
-            continue
-        tile = entry.name.split("_", 1)[0]
+    for name in names:
+        tile = name.split("_", 1)[0]
         if tile in out:
             raise RuntimeError(
-                f"同一个 tile 在 collection 里出现两次: {out[tile]} / {entry.name};"
+                f"同一个 tile 在 collection 里出现两次: {out[tile]} / {name};"
                 "目标端 key 是 <tile>/<文件名>,会互相覆盖")
-        out[tile] = entry.name
+        out[tile] = name
     if not out:
         raise RuntimeError(f"STAC collection 目录下没有 item: {base}")
     return out
 
 
-@lru_cache(maxsize=64)
+@lru_cache(maxsize=32768)
 def _stac_assets(catalog: str, item_id: str) -> Dict[str, str]:
     """一个 item 的 <文件名> -> 绝对路径。
 
     按文件名而不是 asset key 建索引:key 是目标端 <tile>/<文件名>,这样即使某天
     asset key 和文件名不再一一对应也不会错位。href 是 file:// URI。
 
-    maxsize=64 够用:列举是按 tile 排好序的,传输也照这个顺序提交,同一时刻在飞
-    的 item 不会超过线程数。
+    缓存要能装下整次运行涉及的所有 item —— 每个条目只是几十个 <文件名, 路径>
+    的小字典,三万个也就几十 MB,而一次 miss 是一次 open+parse,在共享文件系统
+    上是毫秒级。之前设成 64 有两个问题:128 个并发 worker 同时在飞的 item 数就
+    可能超过它,传输全程反复重读同一批 JSON;而 print_source_roots 的均匀抽样
+    更是每次必 miss。
     """
     path = Path(catalog).expanduser() / item_id / f"{item_id}.json"
     try:
@@ -452,7 +584,9 @@ def stac_path(catalog: str, key: str) -> Path:
 
 
 def list_stac(catalog: str, pattern: str = "*.tif",
-              budget_bytes: Optional[int] = None) -> List[Tuple[str, int]]:
+              budget_bytes: Optional[int] = None,
+              tiles: Optional[set] = None,
+              order: str = "tile") -> List[Tuple[str, int]]:
     """列举 STAC collection 里的 asset。返回 (<tile>/<文件名>, 字节数)。
 
     pattern 是对文件名(不是整条路径)做 fnmatch,分位数分批上传就靠它:
@@ -462,32 +596,47 @@ def list_stac(catalog: str, pattern: str = "*.tif",
     (一万八千个 item,为一个坏 href 全盘停掉不划算),但会在结尾汇总告警,
     漏掉的东西必须让人看见。
     """
-    if "/" in pattern:
+    patterns = norm_patterns(pattern)
+    bad = [p for p in patterns if "/" in p]
+    if bad:
         # kind=local 的默认值是 **/*.tif,直接拿来 fnmatch 文件名会一个都匹配
         # 不上,然后当成"源端是空的"退出 —— 这种静默的空跑必须拦住。
         raise RuntimeError(
-            f"kind=stac 的 glob 匹配的是 asset 文件名,不能带 '/':{pattern!r}"
-            "(整档用 '*.tif',分位数用 'RH*_Q1.tif')")
+            f"kind=stac 的 glob 匹配的是 asset 文件名,不能带 '/':{bad!r}"
+            "(整档用 '*.tif',单档用 'RH98_Q1.tif',多档用列表)")
+
+    # order=asset:一个模式扫一轮全部 tile,再下一个模式 —— 即"先发 RH0 的所有
+    # tile,再发 RH10 的所有 tile"。item JSON 已经在 _stac_assets 里缓存住了,
+    # 多扫几轮只是内存里的字典查找,不会重复读盘。
+    groups = ([[p] for p in patterns] if order == "asset" else [patterns])
 
     out: List[Tuple[str, int]] = []
     total = 0
     missing: List[str] = []
-    for tile, item_id in _stac_item_ids(catalog).items():
-        for name, path in sorted(_stac_assets(catalog, item_id).items()):
-            if not fnmatch(name, pattern):
+    seen: set = set()
+    for group in groups:
+        for tile, item_id in _stac_item_ids(catalog).items():
+            if tiles is not None and tile not in tiles:
                 continue
-            try:
-                size = os.stat(path).st_size
-            except OSError:
-                missing.append(path)
-                continue
-            if size == 0:
-                missing.append(path)
-                continue
-            out.append((f"{tile}/{name}", size))
-            total += size
-            if budget_bytes is not None and total >= budget_bytes:
-                return out
+            for name, path in sorted(_stac_assets(catalog, item_id).items()):
+                if not _matches(name, group):
+                    continue
+                key = f"{tile}/{name}"
+                if key in seen:      # 模式重叠时不能传两遍
+                    continue
+                try:
+                    size = os.stat(path).st_size
+                except OSError:
+                    missing.append(path)
+                    continue
+                if size == 0:
+                    missing.append(path)
+                    continue
+                seen.add(key)
+                out.append((key, size))
+                total += size
+                if budget_bytes is not None and total >= budget_bytes:
+                    return out
 
     if missing:
         print(f"[warn] STAC 里有 {len(missing)} 个 asset 在磁盘上缺失或为空,"
@@ -500,13 +649,30 @@ def list_source_items(cfg: DictConfig, src,
                       ) -> List[Tuple[str, int]]:
     """按源端类型列举。上层不用关心是本地盘、STAC 还是 LUMI-O。"""
     kind = src_kind(cfg)
+    tiles = load_tile_filter(cfg.src.get("tiles")) if "src" in cfg else None
+    if tiles is not None:
+        print(f"[info] tile 白名单: {len(tiles)} 个 ({cfg.src.tiles})", flush=True)
+
+    # 列举可能要跑几十秒(STAC 要扫一万八千个 item 目录,整桶 list 要几千次
+    # API 调用),不报时的话看着就是卡住了。
+    t0 = time.time()
+    order = cfg.src.get("order", "tile") if "src" in cfg else "tile"
+    if order not in ("tile", "asset"):
+        raise RuntimeError(f"src.order 只能是 tile / asset,收到 {order!r}")
     if kind == "local":
-        return list_local(cfg.src.dir, cfg.src.get("glob", "**/*.tif"),
-                          budget_bytes)
-    if kind == "stac":
-        return list_stac(cfg.src.catalog, cfg.src.get("glob", "*.tif"),
-                         budget_bytes)
-    return list_source(src, cfg.src.bucket, cfg.src.prefix, budget_bytes)
+        items = list_local(cfg.src.dir, cfg.src.get("glob", "**/*.tif"),
+                           budget_bytes, tiles, order)
+    elif kind == "stac":
+        items = list_stac(cfg.src.catalog, cfg.src.get("glob", "*.tif"),
+                          budget_bytes, tiles, order)
+    else:
+        items = list_source(src, cfg.src.bucket, cfg.src.prefix, budget_bytes)
+
+    elapsed = time.time() - t0
+    if elapsed > 1:
+        print(f"[info] 列举 {len(items)} 个对象耗时 {elapsed:.1f}s "
+              f"({kind})", flush=True)
+    return items
 
 
 def source_label(cfg: DictConfig) -> str:
@@ -515,8 +681,68 @@ def source_label(cfg: DictConfig) -> str:
     if kind == "local":
         return f"{cfg.src.dir}/{cfg.src.get('glob', '**/*.tif')}"
     if kind == "stac":
-        return f"{cfg.src.catalog}[{cfg.src.get('glob', '*.tif')}]"
+        pats = norm_patterns(cfg.src.get("glob", "*.tif"))
+        shown = pats[0] if len(pats) == 1 else f"{len(pats)} 个模式"
+        return f"{cfg.src.catalog}[{shown}]"
     return f"s3://{cfg.src.bucket}/{cfg.src.prefix}"
+
+
+def source_root_summary(cfg: DictConfig, keys: List[Tuple[str, int]],
+                        sample: int = 200) -> List[Tuple[str, int, float]]:
+    """按产品 root 统计将要读取的文件,返回 [(root, 个数, 平均MB)]。
+
+    2020 的 item 分散在 original/tiles/cog、original/tiles/geotiff、
+    masked/tiles/geotiff 三个 root 下,retarget 之后才会指向 masked/tiles/cog。
+    发布前必须能一眼看出读的是哪一份 —— 传未压缩的原件不会报任何错,只会在
+    对方那里多占几倍空间,而且事后很难分辨。
+
+    抽样统计:解析每个 key 都要读一次 item JSON,几十万个对象全解一遍不值当。
+    """
+    kind = src_kind(cfg)
+    if kind == "s3" or not keys:
+        return []
+
+    step = max(1, len(keys) // sample)
+    picked = keys[::step][:sample]
+
+    buckets: Dict[str, List[int]] = {}
+    for key, size in picked:
+        if kind == "stac":
+            path = stac_path(cfg.src.catalog, key)
+        else:
+            path = Path(cfg.src.dir).expanduser() / key
+        # .../<root>/<tile>/<文件名> —— 往上两级就是产品 root
+        buckets.setdefault(str(path.parent.parent), []).append(size)
+
+    return sorted(
+        ((root, len(v), sum(v) / len(v) / 1e6) for root, v in buckets.items()),
+        key=lambda r: -r[1])
+
+
+def print_source_roots(cfg: DictConfig, keys: List[Tuple[str, int]]) -> None:
+    """把 source_root_summary 打出来,并对疑似未转换的 root 给出告警。
+
+    cfg.check_source_roots=false 可以关掉。发布前(mode=dry / 实传)不该关 ——
+    传错副本不报任何错;基准测试里它只是个便利,嫌慢就关。
+    """
+    if not cfg.get("check_source_roots", True):
+        return
+    t0 = time.time()
+    rows = source_root_summary(cfg, keys)
+    if not rows:
+        return
+    elapsed = time.time() - t0
+    if elapsed > 1:
+        print(f"[info] root 抽查耗时 {elapsed:.1f}s"
+              "(嫌慢: run.check_source_roots=false)")
+    total = sum(n for _, n, _ in rows)
+    print(f"[info] 源文件所在的 root(抽样 {total} 个):")
+    for root, n, mb in rows:
+        flag = "  <- 不是 COG?" if "/cog" not in root else ""
+        print(f"         {n:6d} 个  平均 {mb:7.1f} MB  {root}{flag}")
+    if any("/cog" not in root for root, _, _ in rows):
+        print("[warn] 有文件不在 cog/ 下 —— 先跑 tools.run run=stac_retarget "
+              "把 item href 指过去,否则发布的是转换前的原件", file=sys.stderr)
 
 
 @contextmanager
@@ -589,7 +815,9 @@ def delete_prefix(cfg: DictConfig, prefix: str) -> int:
 __all__ = [
     "NONRETRYABLE", "CountingStream", "CredInfo", "StateWriter", "build_cfg",
     "build_dst", "build_src", "boto_config", "delete_prefix", "drain",
-    "list_local", "list_source", "list_source_items", "list_stac", "load_lines",
+    "norm_patterns", "list_local", "list_source", "list_source_items", "list_stac", "load_lines",
+    "load_tile_filter",
     "map_key", "normalize_cfg_prefixes", "normalize_prefix", "open_source",
-    "retry_count", "source_label", "src_kind", "stac_path", "transfer_config",
+    "print_source_roots", "retry_count", "source_label", "source_root_summary",
+    "src_kind", "src_required", "stac_path", "transfer_config",
 ]

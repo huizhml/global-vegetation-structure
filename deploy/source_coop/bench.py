@@ -46,7 +46,9 @@ from omegaconf import DictConfig, OmegaConf
 
 from deploy.source_coop.common import (
     CountingStream, build_cfg, build_dst, build_src, delete_prefix, drain,
-    list_source_items, open_source, source_label, src_kind, transfer_config,
+    list_source_items, open_source, print_source_roots, source_label,
+    src_kind, src_required,
+    transfer_config,
 )
 
 
@@ -309,6 +311,7 @@ def benchmark_transfer(
     keep_objects: bool = False,
     multipart_threshold_mb: float = 32.0,
     multipart_chunk_mb: float = 32.0,
+    check_source_roots: bool = True,
     **kwargs,
 ) -> Dict[str, Any]:
     """LUMI-O -> Source Cooperative 的并发调优基准。
@@ -333,14 +336,14 @@ def benchmark_transfer(
         {'mode': ..., 'rows': [每档的统计字典]}。
     """
     cfg = build_cfg(
-        required=(("src.dir",) if (src or {}).get("kind") == "local"
-                  else ("src.bucket",)) + ("dst.prefix",),
+        required=src_required(src) + ("dst.prefix",),
         src=src, dst=dst, mode=mode, workers=workers,
         workers_grid=list(workers_grid or [16, 32, 64, 128]),
         procs_grid=list(procs_grid or [1, 2, 4, 8]),
         trial_gb=trial_gb, settle_sec=settle_sec, keep_objects=keep_objects,
         multipart_threshold_mb=multipart_threshold_mb,
         multipart_chunk_mb=multipart_chunk_mb,
+        check_source_roots=check_source_roots,
     )
 
     if cfg.mode != "read" and "_bench" not in cfg.dst.prefix:
@@ -371,6 +374,11 @@ def benchmark_transfer(
     if not 30 <= mean_mb <= 90:
         print(f"[warn] 平均对象 {mean_mb:.1f} MB 偏离全局平均 (58.7 MB),"
               "外推到全量会有偏差")
+
+    # 读的是 cog/ 还是转换前的 geotiff/ —— 两者尺寸差几倍,测出来的吞吐和
+    # 对象数完全不可比,而路径上看不出来的话很容易测完了才发现。
+    print_source_roots(cfg, objs)
+
     del src_client   # 父进程的 client 不要被 fork 继承
 
     rows: List[Stats] = []
