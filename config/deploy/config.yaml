@@ -17,6 +17,15 @@
 root_data_dir: ~/data/gvs
 root_results_dir: ~/data/gvs/results
 
+# 优先发布的 15 个 key RH。RH 编号是唯一事实来源,模式由 rh_globs resolver
+# 生成(config/loader.py),四个消费方共用同一份,不再各抄一份 15 条 glob。
+#
+# 当前这一轮只发 Q1。要扩到三个分位数就把下面两行的 `,1` 换成 `,'*'`。
+# 模式里的 `_Q` 不是装饰:`RH10*` 会把 RH100 也匹配进来,分隔符必须钉死。
+priority_rhs: [0, 10, 20, 25, 30, 40, 50, 60, 70, 75, 80, 90, 95, 98, 100]
+priority_rh_stac: ${rh_globs:${priority_rhs},1}            # kind=stac:匹配文件名
+priority_rh_local: ${rh_globs:${priority_rhs},1,'**/'}     # kind=local:匹配相对路径
+
 deploy:
 
   # =========================================================================
@@ -48,6 +57,16 @@ deploy:
       catalog: null            # kind=stac 时必填,collection 目录(下面一层是
                                # <TILE>_<YEAR>/<TILE>_<YEAR>.json),例:
                                # ~/data/gvs/products/gvsm_stac_catalog/vsm_local_masked
+      # tile 白名单文件(每行一个 tile id),null = 全部。直接吃
+      # stac_cog_audit 写出的 <prefix>_have_cog.txt —— Q1-first 滚动发布时
+      # 必须用它:没转的 tile 其 href 还指向 geotiff,不过滤就会把转换前的
+      # 原件也发出去,而且全程不报错。
+      tiles: null
+      # 上传顺序。tile = 逐个 tile 展开它的全部 asset(默认);
+      # asset = 按 glob 列表的顺序,一个模式扫完所有 tile 再下一个 ——
+      # 配 ${priority_rh_stac} 就是"先发 RH0 的所有 tile,再发 RH10 的",
+      # 每个 RH 一完成就是一个全球完整的图层。
+      order: tile              # tile | asset
       # kind=local 匹配的是相对 dir 的路径,kind=stac 匹配的是 asset 文件名。
       # 分位数分批上传就靠后者:RH*_Q1.tif 只挑中位数那一档。
       glob: "**/*.tif"
@@ -79,6 +98,10 @@ deploy:
     # chunk 大小同时也是单个线程的内存占用:workers × chunk 就是峰值内存。
     multipart_threshold_mb: 32
     multipart_chunk_mb: 32
+    # 开跑前抽查源文件落在哪个产品 root(cog/ 还是转换前的 geotiff/)。
+    # kind=stac 时要解析若干 item JSON,慢的话可以关;但 mode=dry 和实传别关 ——
+    # 传错副本不会报任何错。
+    check_source_roots: true
     selftest_size_mb: 1.0      # selftest 往返校验的探测对象大小
     selftest_large_mb: 128     # multipart 探测对象,必须大于 413 阈值(~110 MB)
 
@@ -99,8 +122,16 @@ deploy:
       prefix: ""
       rclone_remote: lumi-465002698-private
       region: us-east-1
-      kind: s3                 # s3 | local(本地目录,见 sc_upload 的说明)
+      # 三种源保持和 sc_upload 一致 —— 基准要测的就是正式传输会读的那批文件,
+      # 尤其 kind=stac:2020 的 tile 分散在三个 root 下,按目录扫会挑错副本,
+      # 测出来的对象尺寸也就不对。
+      kind: s3                 # s3 | local | stac(见 sc_upload 的说明)
       dir: null                # kind=local 时必填
+      catalog: null            # kind=stac 时必填
+      tiles: null              # tile 白名单文件,见 sc_upload 的说明
+      order: tile              # tile | asset,见 sc_upload 的说明
+      # kind=local 匹配相对 dir 的路径;kind=stac 匹配 asset 文件名(不能带
+      # '/',整档用 '*.tif',分位数用 'RH*_Q1.tif')。
       glob: "**/*.tif"
     dst:
       bucket: geoai-ucph
@@ -118,3 +149,32 @@ deploy:
     # 与 sc_upload 保持一致,否则测出来的不是正式传输会走的那条路径。
     multipart_threshold_mb: 32
     multipart_chunk_mb: 32
+    check_source_roots: true   # 见 sc_upload;基准里嫌慢可以关
+
+  # =========================================================================
+  # deploy/source_coop/move.py
+  # =========================================================================
+  # 已发布对象改前缀。S3 没有 rename,但 source.coop 支持服务端 CopyObject
+  # (ETag 与源一致,不经过本地),所以调整目录结构不用从 hendrix 重传。
+  #   python -m deploy.run run=sc_move run.mode=dry \
+  #       run.src_prefix=gvsm/2020/ run.dst_prefix=gvsm/2020/tiles/
+  sc_move:
+    _target_: deploy.source_coop.move.move_within_source_coop
+    target_type: function
+    dst_bucket: geoai-ucph
+    src_prefix: null         # 例: gvsm/2020/
+    dst_prefix: null         # 例: gvsm/2020/tiles/  (可以嵌套在源前缀下)
+    endpoint: https://data.source.coop
+    profile: source-coop
+    region: us-east-1
+    state_prefix: null       # 断点续传状态,mode=run 时必填
+    mode: run                # run | dry
+    workers: 128
+    submit_chunk: 5000
+    max_attempts: 3
+    only_failed: false
+    progress_every: 1000
+    # true = 只复制不删源。想先验证一轮再删的时候用,注意期间存储是双份的。
+    keep_source: false
+    min_cred_minutes: 30
+    stop_before_cred_expiry: 20

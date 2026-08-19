@@ -35,7 +35,7 @@ import colorsys
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import matplotlib.gridspec as gridspec
 import matplotlib.patches as mpatches
-from scipy.stats import gaussian_kde, pearsonr
+from scipy.stats import gaussian_kde, pearsonr, spearmanr
 from const import (
     BIOMES,
     MAX_HEIGHT_METERS,
@@ -66,9 +66,9 @@ def _sci(n) -> str:
     return f'{mant} \\times 10^{{{int(exp)}}}'
 
 
-def _annotate_stats(ax, r2, pvalue, n, corner='upper left') -> None:
-    '''Boxed R^2 / p-value / N annotation in the on_wsci.py style: one rounded
-    white box, mathtext R^2 and scientific N. `corner` is 'upper left'
+def _annotate_stats(ax, r2, pvalue, n, rho=None, corner='upper left') -> None:
+    '''Boxed rho / R^2 / p-value / N annotation in the on_wsci.py style: one
+    rounded white box, mathtext R^2 and scientific N. `corner` is 'upper left'
     (default) or 'lower right' — position and text alignment move together
     so the box stays inside the axes either way. Wraps what used to be three
     separate ax.text() calls.'''
@@ -76,9 +76,11 @@ def _annotate_stats(ax, r2, pvalue, n, corner='upper left') -> None:
         'upper left':  (0.05, 0.95, 'left',  'top'),
         'lower right': (0.95, 0.05, 'right', 'bottom'),
     }[corner]
+    lines = [] if rho is None else [f"$\\rho$ = {rho:.3f}"]
+    lines.append(f"$R^2$ = {r2:.3f}")
     ax.text(
         x, y,
-        f"$R^2$ = {r2:.3f}",
+        '\n'.join(lines),
         # f"p = {pvalue:.2e}",
         # f"N = ${_sci(n)}$",
         ha=ha, va=va, transform=ax.transAxes,
@@ -119,6 +121,7 @@ def scatter_plot(df: pd.DataFrame, var: str, metrics: dict, biome_value: int = N
     if plot_title is not None:
         ax.set_title(plot_title)
     _annotate_stats(ax, metrics[f'{var}_r2'], metrics[f'{var}_pvalue'], metrics[f'{var}_n'],
+                    rho=metrics.get(f'{var}_spearman_rho'),
                     corner='lower right' if var == 'cr' else 'upper left')
     fewer_ticks(ax, nbins=3)  # ~3 nice ticks, tracks live limits
     ax.set_aspect('equal')
@@ -152,7 +155,8 @@ def hexbin_scatter_plot(df: pd.DataFrame, var: str, metrics: dict, biome_value: 
         gridsize=gridsize, cmap=cmap, vmax=100000,
         extent=(0, max_value, 0, max_value),
         refline='identity', equal_aspect=True,
-        annotation=f"$R^2$ = {metrics[f'{var}_r2']:.3f}",
+        annotation=(f"$\\rho$ = {metrics[f'{var}_spearman_rho']:.3f}\n"
+                    f"$R^2$ = {metrics[f'{var}_r2']:.3f}"),
         annot_corner='lower right' if var == 'cr' else 'upper left',
         show_colorbar=show_colorbar,
         x_label='GEDI', y_label='Ours' if show_ylabel else None,
@@ -844,14 +848,17 @@ def eval_diversity_indices(
                    'enl2d': 18, 'cr': 1.06}
 
     def compute_metrics(group) -> pd.Series:
-        '''Pure: per-var corr / r2 / rmse / mae / me / n (no side effects).'''
+        '''Pure: per-var corr / rho / r2 / rmse / mae / me / n (no side effects).'''
         metrics = {}
         for var in _DIV_VARS:
             gedi, ours = group[f'{var}_gedi'], group[f'{var}_ours']
             diff = group[f'{var}_diff'] / max_metrics[var]
             corr, pvalue = pearsonr(gedi, ours)
+            rho, rho_pvalue = spearmanr(gedi, ours)
             metrics[f'{var}_corr'] = corr
             metrics[f'{var}_pvalue'] = pvalue
+            metrics[f'{var}_spearman_rho'] = rho
+            metrics[f'{var}_spearman_p'] = rho_pvalue
             metrics[f'{var}_r2'] = r2_score(gedi, ours)
             metrics[f'{var}_rmse'] = np.sqrt(np.mean(diff ** 2))
             metrics[f'{var}_mae'] = np.mean(np.abs(diff))
@@ -905,6 +912,7 @@ def eval_diversity_indices(
     scatter_hexbin(df, result, biome_value=None)
     records = {
         label: {'R2': result[f'{var}_r2'], 'Corr': result[f'{var}_corr'],
+                'Rho': result[f'{var}_spearman_rho'],
                 'RMSE': result[f'{var}_rmse'], 'MAE': result[f'{var}_mae'],
                 'ME': result[f'{var}_me']}
         for var, label in _DIV_VARS.items()

@@ -138,10 +138,16 @@ def translate_tiles(worklist, src_root, dst_root, profile="LERC_ZSTD",
                 # the tile stays off the .done side and a re-run retries it.
                 failed.append((str(src_path), f"{type(exc).__name__}: {exc}"))
             done += 1
-            if done % 500 == 0 or done == len(jobs):
+            # Tagged with the chunk id and paced at 100: dozens of tasks share
+            # one log file, and at a few hundred files/hour a 500-file interval
+            # leaves each chunk silent for an hour, which reads as a hang.
+            if done % 100 == 0 or done == len(jobs):
                 rate = done / max(time.time() - t0, 1e-9)
-                print(f"  {done}/{len(jobs)} files  {rate*3600:.0f}/h  "
-                      f"{len(failed)} failed", flush=True)
+                eta = (len(jobs) - done) / max(rate, 1e-9) / 3600
+                print(f"  [chunk {chunk}/{n_chunks}] {done}/{len(jobs)} files  "
+                      f"{rate*3600:.0f}/h  eta {eta:.1f}h  "
+                      f"{len(failed)} failed  last={src_path.parent.name}",
+                      flush=True)
 
     if failed:
         print(f"  [error] {len(failed)} files failed, first 5:")

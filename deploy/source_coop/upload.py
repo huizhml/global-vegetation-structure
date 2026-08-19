@@ -57,9 +57,10 @@ from botocore.exceptions import BotoCoreError, ClientError
 from omegaconf import DictConfig, OmegaConf
 
 from deploy.source_coop.common import (
-    NONRETRYABLE, CountingStream, StateWriter, build_cfg, build_dst, build_src,
-    list_source_items, load_lines, map_key, normalize_prefix, open_source,
-    source_label, src_kind, transfer_config,
+    CountingStream, NONRETRYABLE, StateWriter, build_cfg, build_dst,
+    build_src, list_source_items, load_lines, map_key, normalize_prefix,
+    open_source, print_source_roots, source_label, src_kind, src_required,
+    transfer_config,
 )
 
 
@@ -373,6 +374,10 @@ def run_transfer(cfg: DictConfig) -> Dict[str, Any]:
     print(f"[info] 待传 {len(keys)} 个 / {pending_bytes/1e9:.1f} GB "
           f"(已完成 {len(done)})")
 
+    # 读的是哪一份副本(cog/ 还是转换前的 geotiff/)—— 传错了不会报任何错,
+    # 只会在对方那里多占几倍空间,所以干跑和实传都打一遍。
+    print_source_roots(cfg, keys)
+
     if cfg.mode == "dry":
         for key, size in keys[:10]:
             print(f"  {key}\n      -> "
@@ -482,6 +487,7 @@ def upload_to_source_coop(
     stop_before_cred_expiry: float = 20.0,
     multipart_threshold_mb: float = 32.0,
     multipart_chunk_mb: float = 32.0,
+    check_source_roots: bool = True,
     selftest_size_mb: float = 1.0,
     selftest_large_mb: float = 128.0,
     **kwargs,
@@ -519,14 +525,10 @@ def upload_to_source_coop(
     Returns:
         {'sent': ..., 'failed': ..., 'bytes': ...} 之类的统计字典。
     """
-    # 每种源端必填的字段不一样,但都需要目标前缀和状态文件位置。
-    kind = (src or {}).get("kind", "s3")
-    src_required = {"s3": ("src.bucket",), "local": ("src.dir",),
-                    "stac": ("src.catalog",)}.get(kind)
-    if src_required is None:
-        raise ValueError(f"src.kind 只能是 s3 / local / stac,收到 {kind!r}")
+    # 每种源端必填的字段不一样(见 common.SRC_REQUIRED),但都需要目标前缀和
+    # 状态文件位置。
     cfg = build_cfg(
-        required=src_required + ("dst.prefix", "state_prefix"),
+        required=src_required(src) + ("dst.prefix", "state_prefix"),
         src=src, dst=dst, state_prefix=state_prefix, mode=mode,
         workers=workers, submit_chunk=submit_chunk, max_attempts=max_attempts,
         only_failed=only_failed, allow_empty=allow_empty,
@@ -534,6 +536,7 @@ def upload_to_source_coop(
         stop_before_cred_expiry=stop_before_cred_expiry,
         multipart_threshold_mb=multipart_threshold_mb,
         multipart_chunk_mb=multipart_chunk_mb,
+        check_source_roots=check_source_roots,
         selftest_size_mb=selftest_size_mb, selftest_large_mb=selftest_large_mb,
     )
 

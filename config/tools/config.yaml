@@ -11,6 +11,12 @@
 # `save_dir` under <root_results_dir>/tools/<op> via a symlink.
 
 root_data_dir: ~/data/gvs
+
+# 优先发布的 15 个 key RH,当前这一轮只发 Q1(和 config/deploy/config.yaml 里的
+# priority_rhs 是同一份编号清单)。模式由 rh_globs resolver 生成,见 config/loader.py。
+priority_rhs: [0, 10, 20, 25, 30, 40, 50, 60, 70, 75, 80, 90, 95, 98, 100]
+priority_rh_assets: ${rh_globs:${priority_rhs},1}
+
 root_results_dir: ~/data/gvs/results
 
 tools:
@@ -444,11 +450,15 @@ tools:
     catalog: ~/data/gvs/products/gvsm_stac_catalog/vsm_local_masked
     product_root: ~/data/gvs/products/vsm/2020
     out_dir: ~/data/gvs/assets/worklists
-    src_root: masked/tiles/geotiff   # items here are the ones needing a COG
-    cog_root: masked/tiles/cog       # where their COG copy belongs
-    # Q1-first rollout: a tile counts as done when its RH*_Q1 COGs are there.
-    asset_glob: "RH*_Q1.tif"
-    prefix: masked_2020_q1
+    # 按 asset 判定,两个产品分支(original/ 和 masked/)一起处理 —— href 指向
+    # 哪个分支就从哪个分支发。部分 retarget 之后一个 item 会横跨两个 root,按
+    # item 归类会把这些全判成"不匹配",worklist 直接变空。
+    cog_dirname: cog
+    raw_dirname: geotiff
+    # 当前这一轮只发 Q1(见文件头的 priority_rhs)。判定标准:这 15 个 Q1
+    # asset 的 href 全都指向某个 cog root 且文件存在,这个 tile 才可发布。
+    asset_glob: ${priority_rh_assets}
+    prefix: masked_2020_key_rhs_q1
     workers: 32
 
   # =========================================================================
@@ -464,9 +474,16 @@ tools:
     target_type: function
     catalog: ~/data/gvs/products/gvsm_stac_catalog/vsm_local_masked
     product_root: ~/data/gvs/products/vsm/2020
-    src_root: masked/tiles/geotiff
-    dst_root: masked/tiles/cog
-    asset_glob: "RH*_Q1.tif"
+    # 按路径段改写(*/geotiff/ -> */cog/),original 和 masked 两个分支一起处理。
+    # 写死成单个 src_root 的话,住在另一个分支的 tile 会被静默跳过并报
+    # "nothing to move" —— 待处理的 46395 个 asset 全在 original/tiles/geotiff,
+    # 而配置指着 masked,就是这么踩的。
+    raw_dirname: geotiff
+    cog_dirname: cog
+    # 和 stac_cog_audit 用同一份清单(当前是 15 个 key RH 的 Q1)。两边必须
+    # 一致 —— 上传发了某个 asset 而 retarget 没把它指向 cog/,发出去的就是
+    # 未压缩的原件,而且全程不报错。
+    asset_glob: ${priority_rh_assets}
     backup_dir: null          # null -> <catalog>_backup next to the collection
     dry_run: true
     workers: 32

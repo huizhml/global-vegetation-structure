@@ -19,6 +19,27 @@ def _sens_label(threshold):
 OmegaConf.register_new_resolver('sens_label', _sens_label, replace=True)
 
 
+def _rh_globs(rhs, quantile='*', prefix=''):
+    """Turn a list of RH numbers into asset filename patterns.
+
+    The GVSM rollout publishes a subset of RHs at a time, and every consumer
+    (deploy/source_coop upload+bench, tools/stac_retarget, tools/stac_cog_audit)
+    needs the same list. Building the patterns here keeps the RH numbers as the
+    single source of truth instead of copying 15 literal globs into four places.
+
+    The `_Q` in the pattern is not decoration: a bare prefix like `RH10*` also
+    matches RH100, so patterns must pin the separator.
+
+        ${rh_globs:${priority_rhs},1}          -> RH0_Q1.tif, RH10_Q1.tif, ...
+        ${rh_globs:${priority_rhs},'*'}        -> RH0_Q*.tif, ...   (all quantiles)
+        ${rh_globs:${priority_rhs},1,'**/'}    -> **/RH0_Q1.tif, ... (kind=local)
+    """
+    return [f'{prefix}RH{int(r)}_Q{quantile}.tif' for r in rhs]
+
+
+OmegaConf.register_new_resolver('rh_globs', _rh_globs, replace=True)
+
+
 def _split_shared_and_ops(d: dict) -> tuple[dict, dict]:
     """Split a YAML mapping into (shared_scalars, op_dicts)."""
     shared = {k: v for k, v in d.items() if not isinstance(v, dict)}
@@ -101,6 +122,11 @@ def _register_base(default_run: str, shared: dict, group: str = 'run',
     for k, v in shared.items():
         if isinstance(v, (list, dict)):
             cls_fields.append((k, type(v), field(default_factory=lambda v=v: v)))
+        elif isinstance(v, str) and '${' in v:
+            # An interpolation's literal form is a str but it can resolve to a
+            # list (e.g. ${rh_globs:...}). Pinning the field to str would make
+            # OmegaConf reject the resolved value, so leave it untyped.
+            cls_fields.append((k, Any, field(default=v)))
         else:
             t = type(v) if v is not None else Any
             cls_fields.append((k, t, field(default=v)))
