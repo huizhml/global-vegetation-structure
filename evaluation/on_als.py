@@ -2,6 +2,7 @@ import rasterio
 import numpy as np
 from pathlib import Path
 import pandas as pd
+from scipy.stats import spearmanr
 from sklearn.metrics import r2_score, mean_squared_error
 
 from const import FIGURE_SIZES, set_plot_fonts
@@ -65,6 +66,7 @@ def extract_pixels_and_save(ref_dir: str, ours_root_dir: str, save_dir: str = No
 def _stats_annotation(stats: dict) -> str:
     '''Multi-line boxed-annotation text, shared by the single plot and grid.'''
     return '\n'.join([
+        f'$\\rho$ = {stats['rho']:.2f}',
         f'$R^2$ = {stats['r2']:.2f}',
         f'RMSE = {stats['rmse']:.2f}',
         f'ME = {stats['me']:.2f}',
@@ -101,12 +103,19 @@ def scatter_plot_grid(items: list, ref_col: str, save_dir: Path = None,
                       max_height: int = 80, nrows: int = 3, ncols: int = 4, **kwargs) -> None:
     '''Combined nrows x ncols panel of per-tile hexbin scatters with shared x/y
     axes and a single shared colorbar. `items` is a list of
-    (tile_id, x, y, stats, ref_year, our_year); the per-tile acquisition years
-    go on a second line of each panel title.'''
+    (tile_id, parquet_path, stats, ref_year, our_year); the per-tile acquisition
+    years go on a second line of each panel title.
+
+    Panel data is passed as callables so each tile's pixels are read only while
+    that panel is drawn — holding all of them at once OOMs on the full set.'''
+    def loader(path, col):
+        return lambda: pd.read_parquet(path, columns=[col])[col].to_numpy()
+
     panels = [
-        {'x': x, 'y': y, 'annotation': _stats_annotation(stats),
+        {'x': loader(path, ref_col), 'y': loader(path, 'ours_rh98'),
+         'annotation': _stats_annotation(stats),
          'title': _panel_title(tile_id, ref_col, ref_year, our_year)}
-        for tile_id, x, y, stats, ref_year, our_year in items
+        for tile_id, path, stats, ref_year, our_year in items
     ]
     hexbin_density_grid(
         panels,
@@ -121,18 +130,38 @@ def scatter_plot_grid(items: list, ref_col: str, save_dir: Path = None,
     )
 
 
+# Spearman needs a full ranking, which scipy does in float64 + int64 argsort:
+# ~32 bytes/pixel on top of the arrays themselves. Above this many pixels rho
+# is computed on a fixed random subsample instead — at 1e7 points the estimate
+# is stable well past the 2 decimals we print, and memory stays bounded.
+RHO_MAX_N = 10_000_000
+
+
+def _spearman(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    if len(y_true) > RHO_MAX_N:
+        idx = np.random.default_rng(0).choice(len(y_true), RHO_MAX_N, replace=False)
+        y_true, y_pred = y_true[idx], y_pred[idx]
+    return float(spearmanr(y_true, y_pred).statistic)
+
+
 def tile_level_evaluate(df: pd.DataFrame, ref_col: str, ours_col: str='ours_rh98') -> dict:
     y_true = df[ref_col].to_numpy()
     y_pred = df[ours_col].to_numpy()
     residual = y_pred - y_true
-    # rss/ref are kept so evaluate() can pool a global RMSE/R^2 across tiles.
+    # rss + the two ref moments are enough for evaluate() to pool a global
+    # RMSE/R^2 across tiles; keeping the raw arrays instead would hold every
+    # tile's pixels in memory at once (OOM on the full ALS set). Sums are
+    # accumulated in float64 — float32 loses precision over ~1e8 pixels.
+    ref64 = y_true.astype(np.float64, copy=False)
     return {
         'n': len(df),
         'rss': float((residual ** 2).sum()),
-        'ref': df[ref_col],
+        'sum_ref': float(ref64.sum()),
+        'sum_ref_sq': float((ref64 ** 2).sum()),
         'rmse': float(np.sqrt(mean_squared_error(y_true, y_pred))),
         'me': float(residual.mean()),  # signed bias; no sklearn/scipy equivalent
         'r2': float(r2_score(y_true, y_pred)),
+        'rho': _spearman(y_true, y_pred),
         'avg_height': float(y_true.mean()),
     }
 
@@ -170,20 +199,22 @@ def evaluate(df_dir: str, save_dir: str = None, ref_col: str = 'als', **kwargs) 
         tile_id = f.stem.split('_')[-1]
         ref_year, our_year = year_map.get(tile_id, (None, None))
         stats[tile_id] = tile_level_evaluate(df, ref_col)
+        print(f'  {tile_id}: {len(df):,} px', flush=True)
         scatter_plot(tile_id, df, ref_col, stats[tile_id], save_dir,
                      ref_year=ref_year, our_year=our_year)
-        grid_items.append((tile_id, df[ref_col].to_numpy(), df['ours_rh98'].to_numpy(),
-                           stats[tile_id], ref_year, our_year))
+        grid_items.append((tile_id, f, stats[tile_id], ref_year, our_year))
+        del df
     if grid_items:
         # Order panels by reference avg height (ascending: shortest -> tallest).
-        grid_items.sort(key=lambda it: it[3]['avg_height'])
+        grid_items.sort(key=lambda it: it[2]['avg_height'])
         scatter_plot_grid(grid_items, ref_col, save_dir)
 
     rss =0
     me =0
     n =0
     sum_me =0
-    ref = []
+    sum_ref =0
+    sum_ref_sq =0
     for tile_id in stats.keys():
         # if stats[tile_id]['r2'] < 0:
         #     print(f"Warning: tile {tile_id} has negative R^2 ({stats[tile_id]['r2']:.2f}), skipping in global stats")
@@ -191,16 +222,21 @@ def evaluate(df_dir: str, save_dir: str = None, ref_col: str = 'als', **kwargs) 
         rss += stats[tile_id]['rss']
         n += stats[tile_id]['n']
         sum_me += stats[tile_id]['me'] * stats[tile_id]['n']
-        ref.append(stats[tile_id]['ref'])
+        sum_ref += stats[tile_id]['sum_ref']
+        sum_ref_sq += stats[tile_id]['sum_ref_sq']
     rmse = np.sqrt(rss / n)
     me = sum_me / n
-    ref = np.concatenate(ref)
-    avg_height = ref.mean()
-    r2 = 1 - rss / ((ref - avg_height)**2).sum()
+    avg_height = sum_ref / n
+    # SS_tot = sum((ref - mean)^2) = sum(ref^2) - n * mean^2, so the pooled R^2
+    # needs only the two moments above, not the pixels themselves.
+    r2 = 1 - rss / (sum_ref_sq - n * avg_height ** 2)
+    # No pooled rho: Spearman is not decomposable into per-tile summaries, and
+    # ranking every pixel at once is what blew up memory. Use the per-tile rho
+    # in tile_level_stats_*.csv instead.
     df = pd.DataFrame([{'rmse': rmse, 'me': me, 'n': n, 'r2': r2, 'avg_height': avg_height}])
     df.to_csv(save_dir / f'overall_stats_{ref_col}.csv', index=False)
     tile_level_stats = pd.DataFrame(stats).T
-    tile_level_stats = tile_level_stats.drop(columns='ref')
+    tile_level_stats = tile_level_stats.drop(columns=['sum_ref', 'sum_ref_sq'])
     tile_level_stats.to_csv(save_dir / f'tile_level_stats_{ref_col}.csv', index=True)
     return stats
 

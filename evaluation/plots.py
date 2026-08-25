@@ -246,8 +246,12 @@ def hexbin_density_grid(
 
     hb = None
     for ax, panel in zip(axes_flat, panels):
+        # 'x'/'y' may be zero-arg callables so a caller with large per-panel
+        # data can load one panel at a time instead of holding every panel's
+        # arrays at once; hexbin only keeps the aggregated counts.
+        px, py = panel['x'], panel['y']
         _, _, hb = hexbin_density_plot(
-            panel['x'], panel['y'],
+            px() if callable(px) else px, py() if callable(py) else py,
             ax=ax,
             gridsize=gridsize, cmap=cmap, vmin=vmin, vmax=vmax,
             extent=extent,

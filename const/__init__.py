@@ -121,7 +121,13 @@ def set_plot_fonts(**overrides):
     argument) picks them up too — not just elements that fall back to rcParams.
     Returns the effective size dict. Raises ``KeyError`` on an unknown category.
     """
+    import logging
     import matplotlib as mpl
+
+    # pdf.fonttype 42 (below) makes savefig run fontTools' subsetter, which
+    # logs every pruned table at INFO. Under Hydra's INFO root logger that
+    # buries real output in "glyf pruned" noise, so keep it at WARNING.
+    logging.getLogger('fontTools').setLevel(logging.WARNING)
 
     unknown = set(overrides) - set(FONT_SIZES)
     if unknown:

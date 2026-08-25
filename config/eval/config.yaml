@@ -44,7 +44,44 @@ on_sota_chm:
     split: test
     data_name: original_with_sota_chms_biome_and_ours_full
     ours_dir: ${gedi_dir}/subset_${.split}/${.data_name}/${.year}
-    save_dir: ${root_}/evaluation/with_sota_chm/results/
+    save_dir: ${eval_dir}/with_sota_chm/results/
+
+  # Paired two-sided Wilcoxon signed-rank test of our CHM against each SOTA
+  # map on the footprints where both are valid — the significance statement
+  # behind the RMSE/MAE table above.
+  wilcoxon_chm_vs_sota:
+    _target_: evaluation.on_sota_chm.wilcoxon_chm_vs_sota
+    target_type: function
+    year: 2020
+    split: test
+    data_name: original_with_sota_chms_biome_and_ours_full
+    ours_dir: ${gedi_dir}/subset_${.split}/${.data_name}/${.year}
+    save_dir: ${eval_dir}/with_sota_chm/results/
+    slope_lt20: false
+    error_metrics: [abs_error, sq_error]
+    # signed_rank = paired (same footprints); rank_sum = unpaired Mann-Whitney U
+    test: signed_rank
+    zero_method: wilcox
+    max_n: null   # subsample this many footprints per comparison; null = all
+
+  # Bootstrap CIs for the RMSE / MAE / ME difference. The Wilcoxon above is
+  # median-based and cannot speak to RMSE or ME (both are means, driven by
+  # the tails a rank test ignores) — this is what backs those claims.
+  bootstrap_chm_vs_sota:
+    _target_: evaluation.on_sota_chm.bootstrap_chm_vs_sota
+    target_type: function
+    year: 2020
+    split: test
+    data_name: original_with_sota_chms_biome_and_ours_full
+    ours_dir: ${gedi_dir}/subset_${.split}/${.data_name}/${.year}
+    save_dir: ${eval_dir}/with_sota_chm/results/
+    slope_lt20: false
+    metrics: [RMSE, MAE, ME, absME]
+    # Set to a tile/region column to block the resampling on it; null = i.i.d.
+    # over footprints, which ignores spatial autocorrelation and is optimistic.
+    block_col: null
+    n_boot: 1000
+    ci: 95
 
 
 # =========================================================================
@@ -62,8 +99,8 @@ on_als:
   evaluate_chm_with_als_and_lvis:
     _target_: evaluation.on_als.evaluate
     target_type: function
-    df_dir: ${eval_dir}/with_airborne_lidar/lidar_and_ours_year_matching
-    save_dir: ${eval_dir}/with_airborne_lidar/figures/evaluated_on_ours_year_matching
+    df_dir: ${eval_dir}/with_airborne_lidar/rh98_processed_to_footprint25m/lidar_and_ours_year_matching
+    save_dir: ${eval_dir}/with_airborne_lidar/rh98_processed_to_footprint25m/figures/evaluated_on_ours_year_matching
     ref_col: als
 
 
@@ -497,7 +534,8 @@ utils:
       - [rh98]
       - [rh98_fhd, rh98_enl2d, rh98_cr, rh98_fhd_enl1d_enl2d_cr]
       - [key_rhs]
-      - [rh98_s2, full_profile, full_profile_s2]
+      - [full_profile]
+      - [rh98_s2, full_profile_s2]
 
 
 # =========================================================================
@@ -610,7 +648,7 @@ on_naturalness:
     all_cms_file: ${.root_dir}/logistic_regression_confusion_matrices.npz
     save_dir: ${.root_dir}
     baseline_name: rh98
-    groups: [rh98, rh98_fhd, rh98_enl2d, rh98_cr, rh98_fhd_enl1d_enl2d_cr, key_rhs, rh98_s2, full_profile, full_profile_s2]
+    groups: [rh98, rh98_fhd, rh98_enl2d, rh98_cr, rh98_fhd_enl1d_enl2d_cr, key_rhs, full_profile, rh98_s2,  full_profile_s2]
     figsize: [12, 5]
 
   plot_bars_center_pixel: # logistic regression
@@ -636,7 +674,7 @@ on_naturalness:
     save_dir: ${.root_dir}
     plot_types: ['bars']
     baseline_name: rh98
-    groups: [rh98, rh98_fhd, rh98_enl2d, rh98_cr, rh98_fhd_enl1d_enl2d_cr, key_rhs, rh98_s2, full_profile, full_profile_s2]
+    groups: [rh98, rh98_fhd, rh98_enl2d, rh98_cr, rh98_fhd_enl1d_enl2d_cr, key_rhs, full_profile, rh98_s2,  full_profile_s2]
     figsize: [12,5]
 
   # STEP 5. save predictions from all models for map analysis
@@ -659,6 +697,27 @@ on_naturalness:
     save_dir: ${.root_dir}
     out_name: preds_on_world_grid.parquet
     min_points_per_cell: 10
+
+  # STEP 7. paired two-sided significance tests behind the "+X%" claim:
+  # RH98-only vs VSM-profile + S2, CNN, on the primary-forest class (11).
+  # Writes {prefix}.csv/.tex (tests) and {prefix}_effect_sizes.csv (the
+  # recall/precision/F1 gains the sentence quotes).
+  wilcoxon_naturalness:
+    _target_: evaluation.on_naturalness.wilcoxon_naturalness
+    target_type: function
+    root_dir: ${nat_dir}/results_from_vsm_2017
+    preds_file: ${.root_dir}/aggregated_predictions_cnn_logreg.fgb
+    grid_file: ${root_data_dir}/assets/world_1deg_land_grid.parquet
+    save_dir: ${.root_dir}
+    model: cnn                  # cnn | lr
+    baseline: rh98              # canopy top height only
+    best: full_profile_s2       # VSM profile + Sentinel-2
+    classes: null               # null = every LAND_USE_NAMES code
+    metrics: [f1]               # add recall / precision if wanted
+    min_points_per_cell: 10
+    # signed_rank = paired (same cells); rank_sum = unpaired Mann-Whitney U
+    test: signed_rank
+    zero_method: wilcox         # 'pratt' is the conservative choice per cell
 
   # Cross-package: targets tools.parq_ops. Registered here so the existing
   # `eval-merge-patch-stats` justfile recipe keeps working. Move to the tools
