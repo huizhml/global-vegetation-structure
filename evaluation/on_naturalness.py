@@ -18,8 +18,10 @@ import seaborn as sns
 import xgboost as xgb
 import warnings
 from matplotlib.ticker import MultipleLocator
+from matplotlib.transforms import offset_copy
 from evaluation.utils import load_vsm_naturalness
 from evaluation.diversity_maps import _chunk_diversity
+from evaluation.significance import (run_test, holm_correct, format_p)
 from const import VSM_NODATA, KEY_RHS_EVAL, FONT_SIZES, FIGURE_SIZES, set_plot_fonts, fewer_ticks
 
 set_plot_fonts()
@@ -124,7 +126,7 @@ def _lighten(color, amount=0.55):
     return (r + (1 - r) * amount, g + (1 - g) * amount, b + (1 - b) * amount)
 
 
-def plot_bars(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, groups: tuple[str], metric: str='Recall', avg:str='macro', baseline_name: str='rh98', save_dir: str=None, show_improve: bool=True, show_legend: bool=True, include_alpha_em: bool=False, annotate_models: tuple=('rh98_s2', 'full_profile_s2'), **kwargs):
+def plot_bars(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, groups: tuple[str], metric: str='Recall', avg:str='macro', baseline_name: str='rh98', save_dir: str=None, show_improve: bool=True, show_legend: bool=True, include_alpha_em: bool=False, annotate_models: tuple=('full_profile', 'full_profile_s2'), **kwargs):
     '''
     Plot the summary reports
     Args:
@@ -209,21 +211,31 @@ def plot_bars(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, groups: tupl
             if annotate_this:
                 for j, imp in enumerate(improvement):
                     if imp > 0:
+                        # Absolute delta, with the gain relative to the baseline
+                        # on its own line: side by side the labels are wide
+                        # enough to collide with the neighbouring class group.
+                        # A zero baseline (e.g. rh98 scores F1=0 on planted
+                        # forest) makes the relative gain infinite, so fall back
+                        # to the absolute delta alone -- the missing '%' marks it.
+                        if baseline_vals[j] <= 0:
+                            txt = f"+{imp:.2f}"
+                        else:
+                            txt = f"+{imp:.2f}\n(+{imp / baseline_vals[j] * 100:.0f}%)"
                         # Carry the bar colour so the label matches its own bar.
-                        annotations[j].append((offsets[j], values[j], f"+{imp:.2f}", bar_color))
+                        annotations[j].append((offsets[j], values[j], txt, bar_color))
 
     # Second pass: resolve label overlaps within each group
     if show_improve:
-        # Lift the labels higher and space them further apart when only the two
-        # S2 models are annotated; keep the tuned values for full_profile_center.
-        if baseline_name == 'full_profile_center':
-            base_offset, min_gap = 0.01, 0.04
-        else:
-            base_offset, min_gap = 0.06, 0.09
+        # full_profile_center sits its label just above the bar it belongs to;
+        # other baselines lift the labels clear of the whole group. min_gap has
+        # to clear a two-line label (absolute + percent) either way.
+        base_offset = 0.01 if baseline_name == 'full_profile_center' else 0.06
+        min_gap = 0.12
         # Tallest bar in each group, so labels can be lifted clear of every bar
         # (not just their own) and stop overlapping neighbouring bars.
         group_max = [max(values_dict[m][j] for m in groups)
                      for j in range(len(class_names))]
+        label_texts = []  # measured after layout to size the ylim headroom
         for j in range(len(class_names)):
             labels = annotations[j]
             if not labels:
@@ -240,8 +252,28 @@ def plot_bars(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, groups: tupl
                 y_positions.append(desired_y)
             for k, (lx, ly, txt, color) in enumerate(labels):
                 label_y = y_positions[k]
-                ax.text(lx, label_y, txt, ha='center', va='bottom',
-                        fontsize=FONT_SIZES['annot'], color=color)
+                # The absolute+percent labels are wide; shrink every label in
+                # the figure so neighbouring class groups don't overlap (the
+                # zero-baseline fallback is single-line but must match).
+                # The two lines are drawn separately -- bold absolute delta on
+                # top, smaller percent underneath -- since a single Text object
+                # can't mix weights or sizes across its lines.
+                fs_abs, fs_pct = FONT_SIZES['annot'] - 4, FONT_SIZES['annot'] - 7
+                abs_txt, _, pct_txt = txt.partition('\n')
+                if pct_txt:
+                    label_texts.append(
+                        ax.text(lx, label_y, pct_txt, ha='center', va='bottom',
+                                fontsize=fs_pct, color=color))
+                    # Lift the bold line clear of the percent line below it.
+                    label_texts.append(
+                        ax.text(lx, label_y, abs_txt, ha='center', va='bottom',
+                                fontsize=fs_abs, color=color, fontweight='bold',
+                                transform=offset_copy(ax.transData, fig=fig,
+                                                      y=fs_pct * 1.2, units='points')))
+                else:
+                    label_texts.append(
+                        ax.text(lx, label_y, abs_txt, ha='center', va='bottom',
+                                fontsize=fs_abs, color=color, fontweight='bold'))
                 if label_y - ly > 0.02:
                     ax.plot([lx, lx], [ly, label_y],
                             color=color, linewidth=0.5, alpha=0.5)
@@ -271,6 +303,16 @@ def plot_bars(summary_df: pd.DataFrame, per_class_df: pd.DataFrame, groups: tupl
     ax.grid(axis='y', which='major', alpha=0.3)
     ax.grid(axis='y', which='minor', alpha=0.2, linewidth=0.5)
     plt.tight_layout()
+    # Annotation height is fixed in points, so how much data space it needs
+    # depends on the final axes height -- measure the drawn labels once the
+    # layout is settled and grow ylim until they fit inside the frame.
+    if show_improve and label_texts:
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        inv = ax.transData.inverted()
+        top = max(inv.transform((0, t.get_window_extent(renderer).ymax))[1]
+                  for t in label_texts)
+        ax.set_ylim(0, max(1.05, top + 0.02))
     # bbox_extra_artists forces the (in_layout=False) legend back into the saved
     # bbox, so it isn't cropped by bbox_inches='tight'.
     plt.savefig(save_dir / f'barplot_{metric}_{avg}_baseline_{baseline_name}.pdf', dpi=150,
@@ -1320,6 +1362,220 @@ def agg_preds_on_grid(preds_file: str, grid_file: str, save_dir: str = None,
     # print(f'wrote {len(out)} cells ({len(preds)} samples -> {joined.shape[0]} joined) to {out_fp}')
     # return out
 
+
+# ---------------------------------------
+#   Significance testing
+# ---------------------------------------
+
+def _class_label(code: int) -> str:
+    '''Human-readable class name for the output tables (newlines in the
+    short_name are for plot tick labels, not for a CSV cell).'''
+    return LAND_USE_NAMES[code]['short_name'].replace('\n', ' ') if code in LAND_USE_NAMES else str(code)
+
+
+def _per_cell_tests(joined: pd.DataFrame, model: str, baseline: str, best: str,
+                    classes: list, metrics: tuple, ref_col: str,
+                    min_points_per_cell: int, test: str,
+                    zero_method: str, seed: int) -> list[dict]:
+    '''
+    Spatially blocked paired tests: score both models inside each grid cell and
+    pair the two per-cell scores, one test per (class, metric).
+
+    Neighbouring reference samples are not independent, so a sample-level test
+    on millions of points answers "is the shift non-zero" with a p-value the
+    spatial autocorrelation has already inflated. Pairing by cell reduces each
+    region to one observation and tests the claim that actually matters: the
+    gain holds across the map, not just where the samples happen to concentrate.
+
+    Per-class F1 is undefined in a cell where the class has no reference support
+    or neither model ever predicts it, so those cells drop out pairwise. The
+    surviving count is reported per row as `n_pairs` and varies by class — rare
+    classes are tested on far fewer cells than common ones.
+    '''
+    rows = []
+    counts = joined.groupby('cell_id').size()
+    keep_cells = counts[counts >= min_points_per_cell].index
+    joined = joined[joined['cell_id'].isin(keep_cells)]
+    print(f'  {len(keep_cells)} cells with >= {min_points_per_cell} samples '
+          f'({len(joined)} samples)')
+
+    per_best = _per_class_metrics_by_cell(
+        joined, pred_col=f'{model}_{best}', ref_col=ref_col, classes=classes)
+    per_base = _per_class_metrics_by_cell(
+        joined, pred_col=f'{model}_{baseline}', ref_col=ref_col, classes=classes)
+    per_best, per_base = per_best.align(per_base, join='inner', axis=0)
+
+    for code in classes:
+        for metric in metrics:
+            col = f'{metric}_{code}'
+            if col not in per_best.columns:
+                continue
+            rows.append(run_test(
+                per_best[col], per_base[col], test=test,
+                name_a=best, name_b=baseline, zero_method=zero_method, seed=seed,
+                metric=f'{metric.upper()}({code})', metric_type=metric,
+                unit='grid cell',
+                **{'class': _class_label(code), 'class_code': int(code)}))
+            r = rows[-1]
+            print(f"  {_class_label(code):<28} {metric:<9} n={r['n_pairs']:>4}  "
+                  f"HL={r['hodges_lehmann']:+.3f}  p={format_p(r['p_value'])}")
+
+    # Macro average over the classes actually tested, as an overall summary row.
+    for metric in metrics:
+        cols = [f'{metric}_{c}' for c in classes if f'{metric}_{c}' in per_best.columns]
+        rows.append(run_test(
+            per_best[cols].mean(axis=1, skipna=True),
+            per_base[cols].mean(axis=1, skipna=True),
+            test=test, name_a=best, name_b=baseline,
+            zero_method=zero_method, seed=seed,
+            metric=f'macro {metric.upper()}', metric_type=metric,
+            unit='grid cell',
+            **{'class': 'macro avg', 'class_code': -1}))
+    return rows
+
+
+def _headline_effect(df: pd.DataFrame, model: str, baseline: str, best: str,
+                     classes: list, ref_col: str) -> pd.DataFrame:
+    '''
+    The point estimates the paper's "+X%" sentences quote, computed from the
+    same predictions as the tests so the two cannot drift apart. One row per
+    class with recall / precision / F1 for both models and the relative gain.
+    '''
+    y = df[ref_col].to_numpy()
+    y_base = df[f'{model}_{baseline}'].to_numpy()
+    y_best = df[f'{model}_{best}'].to_numpy()
+
+    def _scores(y_true, y_pred, pos) -> dict:
+        tp = ((y_true == pos) & (y_pred == pos)).sum()
+        support, pred_pos = (y_true == pos).sum(), (y_pred == pos).sum()
+        rec = tp / support if support else np.nan
+        prec = tp / pred_pos if pred_pos else np.nan
+        f1 = 2 * prec * rec / (prec + rec) if (prec + rec) else np.nan
+        return {'recall': rec, 'precision': prec, 'F1': f1, 'support': int(support)}
+
+    rows = []
+    for code in classes:
+        s_base, s_best = _scores(y, y_base, code), _scores(y, y_best, code)
+        for m in ('recall', 'precision', 'F1'):
+            rows.append({
+                'class': _class_label(code), 'class_code': int(code), 'metric': m,
+                'support': s_base['support'],
+                baseline: s_base[m], best: s_best[m],
+                'absolute_gain': s_best[m] - s_base[m],
+                'relative_gain_pct': 100 * (s_best[m] - s_base[m]) / s_base[m]
+                                     if s_base[m] else np.nan,
+            })
+    out = pd.DataFrame(rows)
+    # Macro average across classes, matching the macro row in the test table.
+    for m in ('recall', 'precision', 'F1'):
+        sub = out[out['metric'] == m]
+        b, g = sub[baseline].mean(skipna=True), sub[best].mean(skipna=True)
+        out.loc[len(out)] = {
+            'class': 'macro avg', 'class_code': -1, 'metric': m,
+            'support': int(sub['support'].sum()), baseline: b, best: g,
+            'absolute_gain': g - b,
+            'relative_gain_pct': 100 * (g - b) / b if b else np.nan,
+        }
+    return out
+
+
+def wilcoxon_naturalness(preds_file: str, save_dir: str = None,
+                         grid_file: str = None, model: str = 'cnn',
+                         baseline: str = 'rh98', best: str = 'full_profile_s2',
+                         classes: list = None, metrics: tuple = ('f1',),
+                         ref_col: str = 'Land_use_ID',
+                         min_points_per_cell: int = 10,
+                         test: str = 'signed_rank',
+                         zero_method: str = 'wilcox', seed: int = 0,
+                         out_prefix: str = None, **kwargs):
+    '''
+    Paired two-sided significance tests behind the naturalness-classification
+    claims, comparing the RH98-only baseline against the VSM-profile +
+    Sentinel-2 model on identical reference samples, for every land-use class.
+
+    Both models are evaluated on the same held-out samples, so the comparison is
+    paired. Scores are computed per 1-degree grid cell and the two models' cells
+    are paired: this blocks out the spatial autocorrelation that makes a
+    sample-level p-value optimistic, and it is the form of the test to quote if
+    a reviewer challenges independence.
+
+    `{prefix}_effect_sizes.csv` carries the point estimates the paper's "+X%"
+    sentences quote, computed from the same predictions as the tests.
+
+    Args:
+        preds_file: per-sample predictions from `agg_preds_from_models`
+            (.fgb or .parquet), holding `{model}_{group}` hard predictions
+        save_dir: output dir (defaults to the directory of preds_file)
+        grid_file: polygon grid with a `cell_id` column (e.g. the 1-degree world
+            land grid). Required — the tests are per-cell.
+        model: prediction-column prefix — 'cnn' or 'lr'
+        baseline / best: MODEL_NAMES keys for the two models being compared
+        classes: Land_use_ID codes to test; defaults to every LAND_USE_NAMES key
+        metrics: per-class metrics to test — 'f1' (default), 'recall',
+            'precision'. A macro-average row is added for each.
+        min_points_per_cell: minimum samples for a grid cell to be tested
+        test: 'signed_rank' (paired) or 'rank_sum' (unpaired)
+        zero_method: 'wilcox' (drop zero differences) or 'pratt'; per-cell ties
+            are common, so 'pratt' is the conservative choice
+    Returns:
+        DataFrame with one row per (class, metric)
+    '''
+    preds_file = Path(preds_file).expanduser()
+    save_dir = Path(save_dir).expanduser() if save_dir else preds_file.parent
+    save_dir.mkdir(parents=True, exist_ok=True)
+    classes = sorted(classes) if classes else sorted(LAND_USE_NAMES.keys())
+    metrics = tuple(metrics)
+    prefix = out_prefix or f'{test}_{model}_{baseline}_vs_{best}'
+
+    preds = (gpd.read_parquet(preds_file) if preds_file.suffix == '.parquet'
+             else gpd.read_file(preds_file))
+    base_col, best_col = f'{model}_{baseline}', f'{model}_{best}'
+    missing = [c for c in (base_col, best_col, ref_col) if c not in preds.columns]
+    if missing:
+        raise ValueError(f'{preds_file} has no {missing}; available prediction '
+                         f'columns: {sorted(c for c in preds.columns if "_" in c)}')
+
+    # -1 marks a rowid the run never predicted; a pair needs both sides present.
+    valid = (preds[base_col] != -1) & (preds[best_col] != -1) & (preds[ref_col] != -1)
+    df = preds[valid]
+    print(f'{len(df)} samples predicted by both {baseline} and {best} '
+          f'(dropped {(~valid).sum()} of {len(preds)})\n')
+
+    effects = _headline_effect(df, model, baseline, best, classes, ref_col)
+    effects.to_csv(save_dir / f'{prefix}_effect_sizes.csv', index=False)
+    print(effects[effects.metric == 'F1'].to_string(index=False), '\n')
+
+    if not grid_file:
+        raise ValueError('grid_file is required: the tests pair models by grid cell')
+    grid = gpd.read_parquet(Path(grid_file).expanduser())
+    pts = df.to_crs(grid.crs) if df.crs != grid.crs else df
+    joined = gpd.sjoin(pts, grid[['cell_id', 'geometry']], how='inner',
+                       predicate='within').drop(columns=['geometry', 'index_right'])
+    rows = _per_cell_tests(joined, model, baseline, best, classes, metrics,
+                           ref_col, min_points_per_cell, test, zero_method, seed)
+
+    results = pd.DataFrame(rows)
+    # One Holm family per metric type: the per-class tests are the comparisons
+    # made simultaneously. Grouping on `metric` instead would put each class in
+    # a family of one and silently apply no correction at all.
+    results = holm_correct(results, within=['metric_type'])
+    results['p_value_str'] = results['p_value'].map(format_p)
+    results['p_holm_str'] = results['p_holm'].map(format_p)
+
+    front = ['class', 'class_code', 'metric', 'unit', 'test', 'comparison',
+             'n_pairs', 'n_zero_diff', 'median_diff', 'hodges_lehmann',
+             'rank_biserial', 'win_rate', 'p_value_str', 'p_holm_str']
+    results = results[[c for c in front if c in results]
+                      + [c for c in results.columns if c not in front]]
+    out_file = save_dir / f'{prefix}.csv'
+    results.to_csv(out_file, index=False)
+    results[[c for c in front if c in results]].to_latex(
+        out_file.with_suffix('.tex'), index=False, float_format='%.3f', na_rep='')
+    print('\n' + results[[c for c in front if c in results
+                          and c not in ('unit', 'test', 'comparison', 'class_code')]]
+          .to_string(index=False))
+    print(f'wrote {len(results)} paired tests to {out_file}')
+    return results
 
 # ============================================================================
 # Hydra entrypoint

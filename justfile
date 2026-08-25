@@ -361,6 +361,16 @@ eval-vsm-on-gedi *args:
 eval-chm-with-sota *args:
     {{eval-on-sota-chm}} run=evaluate_chm_with_sota {{args}}
 
+# Paired two-sided Wilcoxon signed-rank test: our CHM vs each SOTA map
+[group('evaluation')]
+eval-wilcoxon-chm-vs-sota *args:
+    {{eval-on-sota-chm}} run=wilcoxon_chm_vs_sota {{args}}
+
+# Bootstrap CIs for the RMSE / MAE / ME difference vs each SOTA map
+[group('evaluation')]
+eval-bootstrap-chm-vs-sota *args:
+    {{eval-on-sota-chm}} run=bootstrap_chm_vs_sota {{args}}
+
 # Evaluate CHM with ALS and LVIS - estract pixels
 [group('evaluation')]
 eval-with-als-extract-pixels *args:
@@ -539,6 +549,11 @@ eval-plot-bars-center-pixel *args:
 [group('evaluation')]
 eval-plot-cnn-results *args:
     {{eval-on-naturalness}} run=plot_cnn_results {{args}}
+
+# Paired two-sided significance tests behind the naturalness "+X%" claim
+[group('evaluation')]
+eval-wilcoxon-naturalness *args:
+    {{eval-on-naturalness}} run=wilcoxon_naturalness {{args}}
 
 # Compute GLCM texture
 [group('evaluation')]
