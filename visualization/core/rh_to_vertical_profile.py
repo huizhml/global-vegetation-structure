@@ -294,9 +294,12 @@ def make_figure(rh, out_path, **kwargs):
                 facecolor='white', edgecolor='none')
     fig.savefig(out_path.with_suffix('.pdf'), dpi=200, bbox_inches='tight',
                 facecolor='white', edgecolor='none')
+    fig.savefig(out_path.with_suffix('.svg'), dpi=200, bbox_inches='tight',
+                    facecolor='white', edgecolor='none')
     plt.close(fig)
     print(f"Saved → {out_path.with_suffix('.png')}")
     print(f"Saved → {out_path.with_suffix('.pdf')}")
+    print(f"Saved → {out_path.with_suffix('.svg')}")
 
 
 def make_separate_figures(rh, out_dir, annot_rhs: bool = False, **kwargs):
@@ -340,7 +343,7 @@ def make_separate_figures(rh, out_dir, annot_rhs: bool = False, **kwargs):
     plot_rh_curve(ax1, percentiles, rh, rh_markers, cfg)
     # ax1.axhline(y=0, color='#8B7355', linewidth=0.8, linestyle='--', alpha=0.5)
     _strip_labels(ax1)
-    for ext in ('.png', '.pdf'):
+    for ext in ('.png', '.pdf', '.svg'):
         fig1.savefig(out_dir / f'rh_curve{ext}', **save_kw)
     plt.close(fig1)
 
@@ -353,7 +356,7 @@ def make_separate_figures(rh, out_dir, annot_rhs: bool = False, **kwargs):
     if annot_rhs:
         add_rh_annotations(fig2, ax2, rh, label_configs, cfg)
     _strip_labels(ax2)
-    for ext in ('.png', '.pdf'):
+    for ext in ('.png', '.pdf', '.svg'):
         fig2.savefig(out_dir / f'vertical_profile{ext}', **save_kw)
     plt.close(fig2)
 
@@ -363,7 +366,7 @@ def make_separate_figures(rh, out_dir, annot_rhs: bool = False, **kwargs):
     plot_forest(ax3, rh, rh_markers, cfg)
     # ax3.axhline(y=0, color='#8B7355', linewidth=0.8, linestyle='--', alpha=0.5)
     _strip_labels(ax3)
-    for ext in ('.png', '.pdf'):
+    for ext in ('.png', '.pdf', '.svg'):
         fig3.savefig(out_dir / f'forest_structure{ext}', **save_kw)
     plt.close(fig3)
 
