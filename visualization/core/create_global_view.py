@@ -71,7 +71,7 @@ def get_tiles_in_countries(countries_file: Path, s2_grid_file: str):
     if len(countries) == 0:
         return []
 
-    countries_url = "~/data/gvs/ne_10m_admin_0_countries/ne_10m_admin_0_countries.shp"
+    countries_url = "~/data/00_raw_data/ne_10m_admin_0_countries/ne_10m_admin_0_countries.shp"
     countries_df = gpd.read_file(countries_url)
     regions = countries_df[countries_df['ADMIN'].isin(countries)]
     s2_grid = gpd.read_parquet(s2_grid_file)

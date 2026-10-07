@@ -78,59 +78,6 @@ echo "Invalid option"
 exit 1
 ;;
 esac
-# # **************************************************************
-# #              Predict multiple tiles in one job
-# # **************************************************************
-# # tile_id_file=${HOME}/data/gvs/deploy/s2_deploy_items_${year}_part${part}_unique_images.txt # for 2020
-# tile_id_file=${HOME}/data/gvs/deploy/slurm_job_files_${year}/deploy_s2_items_${year}_part${part}.txt # for 2024
-
-# echo "Translate tiles from $tile_id_file"
-# # Get tile ID from line number specified by SLURM array task ID
-
-# if [ -z "$line_num" ]; then
-#     echo "No tile ID file provided, using all tiles"
-#     while IFS= read -r tile_id; do
-#         translate_flag="${HOME}/data/gvs/deploy/translate_flags_${year}/${tile_id}_done"
-#         translate_flag_new="${HOME}/data/gvs/deploy/inference_flags_${year}/${tile_id}_best_images_done"
-#         if [ -f "$translate_flag" ] || [ -f "$translate_flag_new" ]; then
-#             echo "Translate flag file $translate_flag or $translate_flag_new exists. Skipping tile $tile_id"
-#             continue
-#         fi
-#         echo "Processing tile ID: $tile_id"
-#         echo "***************************** START INFERENCE *****************************"
-#         run_id=cg11fpjr
-#         echo run prediction for model $run_id for tile $tile_id;
-#         python run.py predict -c config/predict.yaml --model config/model/xception_mix_order.yaml \
-#                 --data.init_args.input_lat_lon True \
-#                 --data.init_args.num_workers 4 \
-#                 --data.init_args.tile_id $tile_id \
-#                 --data.init_args.metadata_file ${HOME}/data/gvs/deploy/slurm_job_files_${year}/deploy_s2_items_${year}_part${part}.parquet \
-#                 --data.init_args.pred_fp ~/data/gvs/deploy/inference_${year}.zarr \
-#                 --data.init_args.prediction_dir $save_dir/${tile_id}_GTiff \
-#                 --data.init_args.year $year \
-#                 --correct_bias True \
-#                 --data.init_args.patch_size 544 \
-#                 --data.init_args.chunk_size 512 \
-#                 --data.init_args.debug False \
-#                 --data.init_args.predict_full_profile True \
-#                 --data.init_args.output_format gtiff \
-#                 --trainer.logger.init_args.resume False \
-#                 --trainer.logger.init_args.offline True \
-#                 --trainer.logger.init_args.id $run_id 
-
-#         # Capture the exit status of the command
-#         exit_status=$?
-#         if [ $exit_status -ne 0 ]; then
-#             echo "Prediction command failed with exit status $exit_status for tile $tile_id"
-#             rm -rf $save_dir/${tile_id}_GTiff
-#         else
-#             echo "Prediction command completed successfully"
-#             touch ${translate_flag_new}
-#         fi
-#         echo "***************************** END INFERENCE *****************************"
-#     done < "$tile_id_file"
-# fi
-
 
 # echo "***************************** SYNC DATA TO SCRATCH *****************************"
 # mkdir -p /scratch/${tile_id}

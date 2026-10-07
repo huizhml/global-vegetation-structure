@@ -104,7 +104,7 @@ python -m visualization.create_global_view year=$year  \
     task=check_mosaic_after_bias_correction \
     +bias_cutoff=$bias_cutoff \
     +save_dir=${HOME}/data/gvs/predictions/${year}/bias_corrected_slope_lt20_minpoints2000_bias_cutoff${bias_cutoff}/mosaic \
-    +bias_dir=${HOME}/data/gvs/assets/bias_correction_stats/slope_lt20_minpoints2000/${year}/stats_by_tile
+    +bias_dir=${HOME}/data/gvs/postprocess/bias_correction/per_tile_bias/slope_lt20_minpoints2000/${year}/stats_by_tile
 ;;
 
 6)
@@ -117,7 +117,7 @@ python -m visualization.create_global_view year=$year  \
     task=check_mosaic_after_bias_correction \
     +average_across_rhs=True \
     +save_dir=${HOME}/data/gvs/predictions/${year}/bias_corrected_slope_lt20_minpoints2000_average_across_rhs/mosaic \
-    +bias_dir=${HOME}/data/gvs/assets/bias_correction_stats/slope_lt20_minpoints2000/${year}/stats_by_tile
+    +bias_dir=${HOME}/data/gvs/postprocess/bias_correction/per_tile_bias/slope_lt20_minpoints2000/${year}/stats_by_tile
 ;;
 
 7)
@@ -130,7 +130,7 @@ python -m visualization.create_global_view year=$year  \
     task=check_mosaic_after_bias_correction \
     +bias_col=mean_bias_trimmed_5_95 \
     +save_dir=${HOME}/data/gvs/predictions/${year}/bias_corrected_slope_lt20_minpoints2000_trimmed_5_95/mosaic \
-    +bias_dir=${HOME}/data/gvs/assets/bias_correction_stats/slope_lt20_minpoints2000/${year}/stats_with_median_and_trimmed_5_95_by_tile
+    +bias_dir=${HOME}/data/gvs/postprocess/bias_correction/per_tile_bias/slope_lt20_minpoints2000/${year}/stats_with_median_and_trimmed_5_95_by_tile
 ;;
 
 8)
@@ -143,7 +143,7 @@ python -m visualization.create_global_view year=$year  \
     task=check_mosaic_after_bias_correction \
     +bias_col=median_bias \
     +save_dir=${HOME}/data/gvs/predictions/${year}/bias_corrected_slope_lt20_minpoints2000_median_bias/mosaic \
-    +bias_dir=${HOME}/data/gvs/assets/bias_correction_stats/slope_lt20_minpoints2000/${year}/stats_with_median_and_trimmed_5_95_by_tile
+    +bias_dir=${HOME}/data/gvs/postprocess/bias_correction/per_tile_bias/slope_lt20_minpoints2000/${year}/stats_with_median_and_trimmed_5_95_by_tile
 ;;
 9)
 
@@ -154,8 +154,8 @@ year=2020
 python -m postprocess.bias_correction year=$year \
     task=plot_bias_distribution \
     +bias_col=median_bias \
-    +bias_dir=${HOME}/data/gvs/assets/bias_correction_stats/slope_lt20_minpoints2000/${year}/stats_with_median_and_trimmed_5_95_by_tile \
-    +save_dir=${HOME}/data/gvs/assets/bias_correction_stats/slope_lt20_minpoints2000/${year}/figures
+    +bias_dir=${HOME}/data/gvs/postprocess/bias_correction/per_tile_bias/slope_lt20_minpoints2000/${year}/stats_with_median_and_trimmed_5_95_by_tile \
+    +save_dir=${HOME}/data/gvs/postprocess/bias_correction/per_tile_bias/slope_lt20_minpoints2000/${year}/figures
 ;;
 
 *)

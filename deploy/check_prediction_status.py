@@ -9,8 +9,8 @@ import pandas as pd
 import xarray as xr
 from tqdm import tqdm
 import subprocess
-import re
 import pyarrow.parquet as pq
+from download.core.items_store import list_tiles
 
 def check_input_images_availability(s2_grid_file: str):
     s2_grid_file = Path(s2_grid_file).expanduser()
@@ -23,11 +23,11 @@ def check_input_images_availability(s2_grid_file: str):
                 df.loc[df['Name'] == tile, f'no_images_{year}'] = True
     df.to_parquet(f'~/data/gvs/deploy/s2_grid_input_images_availability.parquet')
 
-def check_prediction_status(s2_grid_file: str, flag_dir: str, prediction_dir: str, save_dir: str):
+def check_prediction_status(s2_grid_file: str, flag_dir: str, prediction_dir: str, save_dir: str,
+                            items_file: str = '~/data/gvs/deploy/_s2_meta/s2_meta_zone_grouped_{year}.parquet'):
     s2_grid_file = Path(s2_grid_file).expanduser()
     save_dir = Path(save_dir).expanduser()
     prediction_dir = Path(prediction_dir).expanduser()
-    deploy_dir = Path(f'~/data/gvs/deploy').expanduser()
     
     df = gpd.read_parquet(s2_grid_file, columns=['Name', 'geometry', 'growing_months'])
     tiles = df['Name'].unique()
@@ -36,13 +36,11 @@ def check_prediction_status(s2_grid_file: str, flag_dir: str, prediction_dir: st
         print(f'Checking prediction status for {year}')
         flag_dir_ = Path(f'{flag_dir}_{year}').expanduser()
         input_s2_dir = Path(f'~/data/gvs/deploy/inference_{year}.zarr').expanduser()
-        config_files = deploy_dir.glob(f'slurm_job_files_{year}/*_items_{year}_part*.txt')
-        config_files = [config_file for config_file in config_files]
+        tiles_with_metadata = set(list_tiles(items_file.format(year=year)))
         df[f'predicted_{year}'] = pd.NA
         df[f'has_s2_images_{year}'] = pd.NA
         df[f'has_s2_metadata_{year}'] = pd.NA
         df[f'broken_s2_images_{year}'] = pd.NA
-        df[f'meta_file_idx_{year}'] = pd.NA
         for tile in tiles:
             flag_file_old = flag_dir_ / f'{tile}_done'
             flag_file_new = flag_dir_ / f'{tile}_best_images_done'
@@ -68,15 +66,8 @@ def check_prediction_status(s2_grid_file: str, flag_dir: str, prediction_dir: st
                 else:
                     df.loc[df['Name'] == tile, f'has_s2_images_{year}'] = False
                 #  check metadata availability
-                for config_file in config_files:
-                    if tile in config_file.read_text().splitlines():
-                        df.loc[df['Name'] == tile, f'has_s2_metadata_{year}'] = True
-                        df.loc[df['Name'] == tile, f'meta_file_idx_{year}'] = int(re.search(r'part(\d+)', config_file.stem).group(1))
-                        break
-                # if tile in tiles_with_metadata:
-                #     df.loc[df['Name'] == tile, f'has_s2_metadata_{year}'] = True
-                # else:
-                #     df.loc[df['Name'] == tile, f'has_s2_metadata_{year}'] = False
+                if tile in tiles_with_metadata:
+                    df.loc[df['Name'] == tile, f'has_s2_metadata_{year}'] = True
     df.to_parquet(save_dir / f'deploy_status.parquet')
 
 
@@ -165,12 +156,8 @@ def update_deploy_status(deploy_status_file: str):
     unpredicted_20 = df[df['predicted_2020'] == False]['Name'].tolist()
     unpredicted_24 = df[df['predicted_2024'] == False]['Name'].tolist()
     unpredicted_20 = unpredicted_20 + duplicate_tiles['Name'].tolist()
-    df_20 = pd.DataFrame(unpredicted_20, columns=['Name'])
-    df_20['meta_file_idx_2020'] = pd.NA
-    df_20.to_csv(f'~/data/gvs/deploy/slurm_job_files_2020/deploy_s2_items_2020_without_images.txt', index=False)
-    df_24 = pd.DataFrame(unpredicted_24, columns=['Name'])
-    df_24['meta_file_idx_2024'] = pd.NA
-    df_24.to_csv(f'~/data/gvs/deploy/slurm_job_files_2024/deploy_s2_items_2024_without_images.txt', index=False)
+    pd.DataFrame(unpredicted_20, columns=['Name']).to_csv(f'~/data/gvs/deploy/unpredicted_tiles_2020.txt', index=False)
+    pd.DataFrame(unpredicted_24, columns=['Name']).to_csv(f'~/data/gvs/deploy/unpredicted_tiles_2024.txt', index=False)
     print(f'Number of unpredicted 2020 tiles: {len(unpredicted_20)}')
     print(f'Number of unpredicted 2024 tiles: {len(unpredicted_24)}')
     print(f'Unpredicted 2020 tiles: {unpredicted_20}')
@@ -187,10 +174,10 @@ def get_unfinished_tiles(deploy_status_file: str):
         tiles_without_images_and_metadata['Name'].to_csv(f'~/data/gvs/deploy/tiles_without_images_and_metadata_{year}.txt', index=False)
         # need to download images by saved metadata
         tiles_without_images = df[(df[f'has_s2_images_{year}'] == False)&(~df[f'has_s2_metadata_{year}'].isna())]
-        tiles_without_images[['Name', f'meta_file_idx_{year}']].to_csv(f'~/data/gvs/deploy/tiles_without_images_{year}.txt', index=False)
+        tiles_without_images[['Name']].to_csv(f'~/data/gvs/deploy/tiles_without_images_{year}.txt', index=False)
         # ready to predict tiles        
         unfinished_tiles = df[df[f'has_s2_images_{year}']==True]
-        unfinished_tiles[['Name', f'meta_file_idx_{year}']].to_csv(f'~/data/gvs/deploy/unfinished_tiles_{year}.txt', index=False)
+        unfinished_tiles[['Name']].to_csv(f'~/data/gvs/deploy/unfinished_tiles_{year}.txt', index=False)
 
 
 def get_tiles_covered_by_gedi(s2_grid_file: str, save_dir: str = None):

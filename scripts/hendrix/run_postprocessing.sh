@@ -176,7 +176,7 @@ year=2020
 split=${2:-cal}
 echo "Evaluating bias correction performance for ${split} split..."
 input_dir=${HOME}/data/gvs/gedi/veg_sensitivity_gt0p95/subset_${split}/original_with_sota_chms_ours/${year}
-bias_correct_dir=${HOME}/assets/bias_correction_stats/slope_lt20_minpoints2000/${year}
+bias_correct_dir=${HOME}/postprocess/bias_correction/per_tile_bias/slope_lt20_minpoints2000/${year}
 python -m postprocessing.run run=evaluate_bias_correction \
     run.slope_lt20=True \
     run.year=$year \
@@ -199,7 +199,7 @@ for tile_id in ${tile_ids[@]}; do
     echo "Processing tile $tile_id"
     python -m postprocess.bias_correction year=$year tile_id=$tile_id \
     task=get_correction_stats \
-    +save_dir=${HOME}/data/gvs/assets/bias_correction_stats/slope_lt20_minpoints2000/${year}/stats_with_median_and_trimmed_5_95_by_tile
+    +save_dir=${HOME}/data/gvs/postprocess/bias_correction/per_tile_bias/slope_lt20_minpoints2000/${year}/stats_with_median_and_trimmed_5_95_by_tile
 done
 ;;
 

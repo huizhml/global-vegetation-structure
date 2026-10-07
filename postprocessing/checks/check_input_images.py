@@ -7,9 +7,11 @@ from pathlib import Path
 import pandas as pd
 import geopandas as gpd
 import numpy as np
+import pyarrow.parquet as pq
 import matplotlib.pyplot as plt
 
 from const import FONT_SIZES, set_plot_fonts
+from download.core.items_store import read_items_for_tiles
 
 set_plot_fonts()
 import warnings
@@ -53,9 +55,7 @@ class CheckInputImages:
         ds = ds.swap_dims({"time": "id"})
         if ds.time.size > 20:
             # put the 20 images used for prediction first
-            meta_file = Path(f'~/data/gvs/assets/worklists/s2_meta_by_zone/{self.year}/{tile_id[:3]}.parquet').expanduser()
-            meta_df = gpd.read_parquet(meta_file)
-            meta_df = meta_df[meta_df['s2:mgrs_tile'] == tile_id]
+            meta_df = read_items_for_tiles(f'~/data/gvs/deploy/_s2_meta/s2_meta_zone_grouped_{self.year}.parquet', [tile_id])
             # NOTE: not all images in the meta df are actually downloaded, we need to check the zarr store
             s2_ids_zarr = ds.id.values
             meta_df = meta_df[meta_df['id'].isin(s2_ids_zarr)]
@@ -115,12 +115,11 @@ def check_images_order():
     '''
     for year in [2020]:
         not_ordered_tiles = []
-        slurm_config_dir = Path(f'~/data/gvs/deploy/slurm_job_files_{year}').expanduser()
-        slurm_config_files = slurm_config_dir.glob(f'*_items_{year}_part*.parquet')
-        for s2_geoparq_file in slurm_config_files:
-            part_idx = int(s2_geoparq_file.stem.split('_')[-1][4:])
-            print(f'Checking year {year} part {part_idx}')
-            s2_df = gpd.read_parquet(s2_geoparq_file)
+        items_file = Path(f'~/data/gvs/deploy/_s2_meta/s2_meta_zone_grouped_{year}.parquet').expanduser()
+        cols = ['id', 's2:mgrs_tile', 's2:nodata_pixel_percentage', 'eo:cloud_cover']
+        pf = pq.ParquetFile(items_file)
+        for rg in range(pf.metadata.num_row_groups):  # one MGRS zone per row group
+            s2_df = pf.read_row_group(rg, columns=cols).to_pandas()
             unique_tiles = s2_df['s2:mgrs_tile'].unique()
             for tile_id in unique_tiles:
                 done_flag = Path(f'~/data/gvs/deploy/inference_flags_{year}/{tile_id}_done').expanduser()
@@ -132,9 +131,9 @@ def check_images_order():
                         should_use_imgs = ordered_img_df['id'].tolist()
                         used_imgs = img_df['id'].iloc[:20].tolist()
                         if set(should_use_imgs) != set(used_imgs):
-                            not_ordered_tiles.append([tile_id, part_idx])
-            print(f'Total not ordered tiles in year {year} part {part_idx}: {len(not_ordered_tiles)}')
-        df = pd.DataFrame(not_ordered_tiles, columns=['Name', 'meta_file_idx_2020'])
+                            not_ordered_tiles.append(tile_id)
+        print(f'Total not ordered tiles in year {year}: {len(not_ordered_tiles)}')
+        df = pd.DataFrame(not_ordered_tiles, columns=['Name'])
         df.to_csv(Path(f'~/data/gvs/deploy/predicted_not_ordered_tiles_{year}.txt').expanduser(), index=False)
         
 def check_n_images_per_tile():

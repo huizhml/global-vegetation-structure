@@ -56,7 +56,7 @@ tools:
   make_world_grid:
     _target_: tools.make_world_grid.make_world_land_grid
     target_type: function
-    out_file: ~/data/gvs/assets/world_1deg_land_grid.parquet
+    out_file: ~/data/gvs/00_raw_data/world_1deg_land_grid.parquet
     resolution: 1.0
     land_source: naturalearth.land
     clip_to_land: false

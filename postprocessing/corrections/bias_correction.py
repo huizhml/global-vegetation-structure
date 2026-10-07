@@ -702,12 +702,12 @@ def main(cfg):
     time_start = time.time()
     vsm_correction = BiasCorrection(**cfg)
     if cfg.task == 'get_correction_stats':
-        save_dir = cfg.get('save_dir', f'~/data/gvs/assets/bias_correction_stats/slope_lt20_minpoints2000/{cfg.year}/stats_by_tile')
+        save_dir = cfg.get('save_dir', f'~/data/gvs/postprocess/bias_correction/per_tile_bias/slope_lt20_minpoints2000/{cfg.year}/stats_by_tile')
         ref_data_dir = cfg.get('ref_data_dir', f'~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_correction/subset_4k/{cfg.year}/with_slope_col')
         vsm_correction.get_correction_stats(cfg.tile_id, save_dir=save_dir, ref_data_dir=ref_data_dir)
     elif cfg.task == 'plot_bias_distribution':
-        bias_dir = cfg.get('bias_dir', f'~/data/gvs/assets/bias_correction_stats/slope_lt20_minpoints2000/{cfg.year}/stats_by_tile')
-        save_dir = cfg.get('save_dir', f'~/data/gvs/assets/bias_correction_stats/slope_lt20_minpoints2000/{cfg.year}/figures')
+        bias_dir = cfg.get('bias_dir', f'~/data/gvs/postprocess/bias_correction/per_tile_bias/slope_lt20_minpoints2000/{cfg.year}/stats_by_tile')
+        save_dir = cfg.get('save_dir', f'~/data/gvs/postprocess/bias_correction/per_tile_bias/slope_lt20_minpoints2000/{cfg.year}/figures')
         rh_idxs = cfg.get('rh_idxs', [10, 25, 50, 98])
         average_across_rhs = cfg.get('average_across_rhs', False)
         bias_col = cfg.get('bias_col', 'bias')
@@ -720,8 +720,8 @@ def main(cfg):
         
     elif cfg.task == 'evaluate_bias_correction_against_sota_chm':
         gedi_chm_ours_dir = cfg.get('gedi_chm_ours_dir', f'~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_val/with_sota_chms_ours/{cfg.year}')
-        correction_stats_dir = cfg.get('correction_stats_dir', f'~/data/gvs/assets/bias_correction_stats/slope_lt20_minpoints2000/{cfg.year}/stats_with_median_and_trimmed_5_95_by_tile')
-        save_dir = cfg.get('save_dir', f'~/data/gvs/assets/bias_correction_stats/slope_lt20_minpoints2000/{cfg.year}/figures/')
+        correction_stats_dir = cfg.get('correction_stats_dir', f'~/data/gvs/postprocess/bias_correction/per_tile_bias/slope_lt20_minpoints2000/{cfg.year}/stats_with_median_and_trimmed_5_95_by_tile')
+        save_dir = cfg.get('save_dir', f'~/data/gvs/postprocess/bias_correction/per_tile_bias/slope_lt20_minpoints2000/{cfg.year}/figures/')
         evaluate_bias_correction_against_sota_chm(gedi_chm_ours_dir=gedi_chm_ours_dir, year=cfg.year, correction_stats_dir=correction_stats_dir, save_dir=save_dir)
     
     # if cfg.task == 'get_tiles_covered_by_gedi':

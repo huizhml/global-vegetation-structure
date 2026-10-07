@@ -198,6 +198,16 @@ dl-agg-growing-season *args:
 dl-inference *args:
     {{dl}} run=download_inference {{args}}
 
+# Preview how dl-inference splits tiles over n_jobs (prioritized countries first)
+[group('download')]
+dl-preview-jobs *args:
+    {{dl}} run=preview_job_allocation {{args}}
+
+# Build the one-row-group-per-zone S2 items store and verify it against the parts
+[group('download')]
+dl-check-items-store *args:
+    {{dl}} run=check_items_store {{args}}
+
 # Download downstream-task data
 [group('download')]
 dl-downstream-task-data *args:

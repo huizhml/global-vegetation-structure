@@ -693,7 +693,7 @@ on_naturalness:
     target_type: function
     root_dir: ${nat_dir}/results_from_vsm_2017
     preds_file: ${.root_dir}/aggregated_predictions_cnn_logreg.fgb
-    grid_file: ${root_data_dir}/assets/world_1deg_land_grid.parquet
+    grid_file: ${root_data_dir}/00_raw_data/world_1deg_land_grid.parquet
     save_dir: ${.root_dir}
     out_name: preds_on_world_grid.parquet
     min_points_per_cell: 10
@@ -707,7 +707,7 @@ on_naturalness:
     target_type: function
     root_dir: ${nat_dir}/results_from_vsm_2017
     preds_file: ${.root_dir}/aggregated_predictions_cnn_logreg.fgb
-    grid_file: ${root_data_dir}/assets/world_1deg_land_grid.parquet
+    grid_file: ${root_data_dir}/00_raw_data/world_1deg_land_grid.parquet
     save_dir: ${.root_dir}
     model: cnn                  # cnn | lr
     baseline: rh98              # canopy top height only

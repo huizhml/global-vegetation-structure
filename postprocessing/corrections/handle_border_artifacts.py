@@ -313,9 +313,9 @@ class AggGediToS2:
     year: int = 2020
     s2_grid_file: str = '~/data/gvs/state/s2_tiles_with_growing_months.parquet'
     output_dir: str = f'~/data/gvs/products/vsm/{year}/blended'
-    correction_stats_dir: str = f'~/data/gvs/assets/bias_correction_stats/slope_lt20_minpoints2000/{year}/none'
+    correction_stats_dir: str = f'~/data/gvs/postprocess/bias_correction/per_tile_bias/slope_lt20_minpoints2000/{year}/none'
     stac_collection_dir: str = '~/data/gvs/products/gvsm_stac_catalog/vsm_local'
-    distance_map_dir: str = '~/data/gvs/assets/blending/distance_maps'
+    distance_map_dir: str = '~/data/gvs/postprocess/blending/0_distance_maps'
     flag_dir: str = f'~/data/gvs/state/{year}/blended'
     costal_tiles_file: str = '~/data/gvs/assets/worklists/tiles_coastal_regions.txt'
     tile_id: str = '20MRS'
