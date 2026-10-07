@@ -6,9 +6,6 @@
 #
 # Placeholders use Python str.format style ({split}, {year}) and are resolved by
 # tools.utils.resolve_args in tools/run.py against sibling fields of the op.
-#
-# `root_results_dir` is read by config.runner.run_cli to index each op's
-# `save_dir` under <root_results_dir>/tools/<op> via a symlink.
 
 root_data_dir: ~/data/gvs
 

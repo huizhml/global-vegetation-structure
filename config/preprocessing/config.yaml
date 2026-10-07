@@ -6,13 +6,8 @@
 #
 # These ops use literal paths (no {...} placeholders), so preprocessing/run.py
 # does not call resolve_args.
-#
-# `root_results_dir` is read by config.runner.run_cli to index each op's
-# `save_dir` under <root_results_dir>/preprocessing/<op> via a symlink (no op
-# here defines save_dir, so indexing is skipped).
 
 root_data_dir: ~/data/gvs
-root_results_dir: ~/data/gvs/results
 
 preprocessing:
 

@@ -7,15 +7,10 @@
 # Placeholders use Python str.format style ({year}, {tile}) and are resolved by
 # tools.utils.resolve_args in deploy/run.py against sibling fields of the op.
 #
-# `root_results_dir` is read by config.runner.run_cli to index each op's
-# `save_dir` under <root_results_dir>/deploy/<op> via a symlink. The transfer
-# ops below write no local artifacts, so they carry no save_dir.
-#
 # NOTE: this is the ops registry for the deploy/ package. It is unrelated to
 # config/deploy.yaml, which is the Lightning CLI predict/deploy config.
 
 root_data_dir: ~/data/gvs
-root_results_dir: ~/data/gvs/results
 
 # 优先发布的 15 个 key RH。RH 编号是唯一事实来源,模式由 rh_globs resolver
 # 生成(config/loader.py),四个消费方共用同一份,不再各抄一份 15 条 glob。

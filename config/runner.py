@@ -1,34 +1,13 @@
 import os
 import time
-from hydra.core.hydra_config import HydraConfig
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
-from postprocessing.core.utils import generate_run_log, link_results_dir
+from postprocessing.core.utils import generate_run_log
 
 
 def run_cli(cfg):
     t0 = time.time()
     print(OmegaConf.to_yaml(cfg))
-
-    # Results stay physically in save_dir (the data tree); index them under
-    # root_results_dir/<section>/<op> with a symlink pointing back, so all
-    # results are browsable in one place under a clean, logical name —
-    # decoupled from where the data physically lives, and without moving bytes.
-    #
-    # Ops that produce raw data products (rasters under products/, etc.)
-    # rather than browsable artifacts (plots, CSVs) should set
-    # `link_results: false` in their config to skip this — the products tree
-    # is its own catalog, and the symlink would just add noise (and a small
-    # concurrency footgun under SLURM array submission).
-    save_dir = cfg.run.get('save_dir', None)
-    root_results_dir = cfg.get('root_results_dir', None)
-    link_results = cfg.run.get('link_results', True)
-    if link_results and save_dir is not None and root_results_dir is not None:
-        op_name = HydraConfig.get().runtime.choices.get('run')
-        section = cfg.get('section', None)
-        index_name = f'{section}/{op_name}' if section else op_name
-        if index_name:
-            link_results_dir(save_dir, root_results_dir, index_name)
 
     if cfg.run.target_type == 'function':
         instantiate(cfg.run)
