@@ -9,12 +9,8 @@
 # of the same op. NOTE: several paths bake in year=2020 as literals because the
 # original dataclass used f-strings evaluated at class-definition time (so a
 # `run.year=` override never rewrote them — preserved here).
-#
-# `root_results_dir` is read by config.runner.run_cli to index each op's
-# `save_dir` under <root_results_dir>/download/<op> via a symlink.
 
 root_data_dir: ~/data/gvs
-root_results_dir: ~/data/gvs/results
 
 download:
 

@@ -61,65 +61,6 @@ def generate_run_log(log_file: str, run_config: OmegaConf, runtime: float):
     return log_file
 
 
-def _abspath(p) -> Path:
-    """Expand ~ and make absolute without resolving symlinks (path may not exist yet)."""
-    return Path(os.path.abspath(os.path.expanduser(str(p))))
-
-
-def link_results_dir(save_dir, root_results_dir, index_name) -> Path:
-    """Index an op's output dir at ``root_results_dir/<index_name>`` via a symlink.
-
-    The results stay physically in ``save_dir`` (the data tree), exactly where
-    the op writes them — intermediate data included. A symlink at
-    ``root_results_dir / index_name`` points back to ``save_dir``, so
-    ``root_results_dir`` becomes a clean, browsable catalog of every op's
-    results, named logically (e.g. ``<section>/<op>``) and decoupled from where
-    the data physically lives.
-
-    Args:
-        save_dir: directory the op writes to (the real, data-side path).
-        root_results_dir: central directory the result symlinks are collected under.
-        index_name: relative name for the symlink under ``root_results_dir``,
-            e.g. ``"on_gedi/evaluate_vsm_on_gedi"``.
-
-    Returns:
-        Path to ``save_dir`` (where writes actually land).
-    """
-    save_dir = _abspath(save_dir)
-    results_root = _abspath(root_results_dir)
-    save_dir.mkdir(parents=True, exist_ok=True)
-
-    # save_dir already lives under the results root -> it's its own index entry.
-    if save_dir == results_root or results_root in save_dir.parents:
-        return save_dir
-
-    link = results_root / index_name
-
-    if link.is_symlink():
-        if _abspath(os.readlink(link)) == save_dir:
-            return save_dir  # already pointing where we want it
-        print(f"  [link_results_dir] re-pointing {link} -> {save_dir}")
-        # missing_ok=True: under SLURM array submission many tasks race
-        # here, and a peer may have unlinked between our check and call.
-        link.unlink(missing_ok=True)
-    elif link.exists():
-        # A real dir/file already sits at the index location; don't clobber it.
-        print(f"  [link_results_dir] {link} exists and is not a symlink; "
-              f"leaving it. Results stay at {save_dir}")
-        return save_dir
-
-    link.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        os.symlink(save_dir, link, target_is_directory=True)
-        print(f"  [link_results_dir] {link} -> {save_dir}")
-    except FileExistsError:
-        # Another concurrent task created the same symlink first. Since they
-        # all share the same save_dir for this op, the winner's link is
-        # equivalent — accept and move on.
-        pass
-    return save_dir
-
-
 def create_vrt_for_tile(tile_dir, vrt_path, q_idx="1"):
     tile_dir = Path(tile_dir).expanduser()
     vrt_path = Path(vrt_path).expanduser()

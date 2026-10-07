@@ -7,12 +7,8 @@
 # Placeholders use Python str.format style ({year}, {root_dir}, {split}, ...)
 # and are resolved by tools.utils.resolve_args(cfg.run) in postprocessing/run.py
 # against sibling fields of the same op.
-#
-# `root_results_dir` is read by config.runner.run_cli to index each op's
-# `save_dir` under <root_results_dir>/postprocessing/<op> via a symlink.
 
 root_data_dir: ~/data/gvs
-root_results_dir: ~/data/gvs/results
 
 postprocessing:
 

@@ -9,12 +9,9 @@
 # resolved by tools.utils.resolve_args in visualization/run.py against sibling
 # fields of the same op (not OmegaConf ${...} interpolation).
 #
-# File-level scalars below land at the config root. `root_results_dir` is read
-# by config.runner.run_cli to index each op's `save_dir` under
-# <root_results_dir>/visualization/<op> via a symlink.
+# File-level scalars below land at the config root.
 
 root_data_dir: ~/data/gvs
-root_results_dir: ~/data/gvs/results
 
 visualization:
 

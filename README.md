@@ -80,8 +80,6 @@ just viz-datacube run.bg_color=white run.rh_step=4    # extra args are Hydra ove
 | `tools/` | `python -m tools.run` | [config/tools/config.yaml](config/tools/config.yaml) | `tools-` |
 | `deploy/` | `python -m deploy.run` | [config/deploy/config.yaml](config/deploy/config.yaml) | none |
 
-If an op's config sets `save_dir`, [config/runner.py](config/runner.py) adds a symlink to it under `root_results_dir/<section>/<op>`. All results can then be browsed in one place while the data stays where it is. Ops that write raw products set `link_results: false` to skip this.
-
 ### Adding a new op
 
 1. Write a function (or class) in the relevant package. Do not use `argparse`; take arguments as keyword parameters.
