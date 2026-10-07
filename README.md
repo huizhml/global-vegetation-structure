@@ -17,6 +17,17 @@ To better support carbon and biodiversity monitoring and to support the SDGs, EU
 
 This repository contains the code to produce, evaluate, and publish VSM. That includes data download, model training, prediction on every Sentinel-2 MGRS tile worldwide, and postprocessing. VSM is distributed as Cloud Optimized GeoTIFFs for 2020 and 2024, about 360 TB per year.
 
+## What is an RH metric?
+
+GEDI records laser energy reflected by vegetation and the ground within each footprint. **RHn** is the height above ground below which *n* % of that returned energy has accumulated.
+
+- **RH98–RH100**: approximate canopy top height, comparable to conventional canopy height products.
+- **RH50**: the height below which half of the total returned energy has accumulated.
+- **Low RHs (RH0–RH25)**: describe the lower portion of the cumulative return, influenced by both vegetation and ground returns.
+
+Taken together, RH0 … RH100 for a pixel make a cumulative vertical profile. You can use it to study canopy layering, understory density and structural diversity, not only the top height.
+
+<img src="docs/assets/1a_vertical_structure.png" alt="Global map of VSM vertical vegetation structure, with RH layers stacked as a 3-D datacube (height in metres, 0–50)" width="100%">
 
 ## Getting started
 
