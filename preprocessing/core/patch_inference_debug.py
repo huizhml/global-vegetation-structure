@@ -8,6 +8,7 @@ import geopandas as gpd
 from shapely.geometry import box
 from download.core.constants import S2_ITEM_PROPS
 from download.core.utils import get_patch, row_to_stac_item
+from download.core.items_store import read_items_for_tiles
 import numpy as np
 import matplotlib.pyplot as plt
 import torch.nn.functional as F
@@ -45,8 +46,7 @@ def get_model(model_cfg, run_id: str, wandb_project: str, bias_correction_column
     return model
 
 def get_data(metadata_file, tile_id, n_iamges_per_tile):
-    s2_df = gpd.read_parquet(metadata_file)
-    tile_df = s2_df[s2_df['s2:mgrs_tile'] == tile_id].set_index('id')
+    tile_df = read_items_for_tiles(metadata_file, [tile_id]).set_index('id')
     if len(tile_df)>n_iamges_per_tile:
         if (tile_df['s2:nodata_pixel_percentage']==0).sum() > 0:
             tile_df = tile_df.sort_values(['s2:nodata_pixel_percentage', 'eo:cloud_cover']).head(n_iamges_per_tile)
@@ -121,7 +121,7 @@ def main(cfg: DictConfig):
     model = get_model(cfg.model, cfg.run_id, cfg.wandb_project, cfg.bias_correction_column, cfg.model_alias)
     model = model.to('cuda')
     dataset = S2DatasetStream(
-        metadata_file='~/data/gvs/deploy/deploy_s2_items_2024_part7.parquet',
+        metadata_file='~/data/gvs/deploy/_s2_meta/s2_meta_zone_grouped_2024.parquet',
         h5_dir='~/flash/data/gvs/deploy/inference_2020',
         tile_id='32MPD',
         prediction_dir='~/data/gvs/deploy/predictions_2024/11UMP_GTiff',

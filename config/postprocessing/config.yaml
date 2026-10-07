@@ -135,7 +135,7 @@ postprocessing:
     _target_: postprocessing.core.s2_tiling.get_tiles_wo_enough_gedi_gt
     target_type: function
     tiles_list_file: ~/data/gvs/assets/worklists/total_tiles_2020.txt
-    bias_stats_dir: ~/data/gvs/assets/bias_correction_stats/slope_all_minpoints200/2020/stats_by_tile
+    bias_stats_dir: ~/data/gvs/postprocess/bias_correction/per_tile_bias/slope_all_minpoints200/2020/stats_by_tile
     s2_grid_file: ~/data/gvs/state/s2_tiles_with_growing_months.parquet
 
   # =========================================================================
@@ -179,7 +179,7 @@ postprocessing:
     _target_: postprocessing.corrections.blending.create_distance_map_for_all_tiles
     target_type: function
     stac_collection_dir: ~/data/gvs/products/gvsm_stac_catalog/vsm_local
-    save_dir: ~/data/gvs/assets/blending/distance_maps
+    save_dir: ~/data/gvs/postprocess/blending/0_distance_maps
 
   # =========================================================================
   # postprocessing/core/repartition_data.py
@@ -265,7 +265,7 @@ postprocessing:
     flag_dir: ~/data/gvs/state/2020/blended
     output_dir: ~/data/gvs/products/vsm/2020/blended/tiles
     stac_collection_dir: ~/data/gvs/products/gvsm_stac_catalog/vsm_local
-    distance_map_dir: ~/data/gvs/assets/blending/distance_maps
+    distance_map_dir: ~/data/gvs/postprocess/blending/0_distance_maps
     s2_grid_file: ~/data/gvs/state/s2_tiles_with_growing_months.parquet
     costal_tiles_file: ~/data/gvs/assets/worklists/tiles_coastal_snow_regions.txt
     chunksize: 1024
@@ -279,7 +279,7 @@ postprocessing:
     _target_: visualization.create_global_view.check_mosaic_after_bias_correction
     target_type: function
     year: 2020
-    bias_dir: ~/data/gvs/assets/bias_correction_stats/slope_lt20_minpoints2000/2020/stats_by_tile
+    bias_dir: ~/data/gvs/postprocess/bias_correction/per_tile_bias/slope_lt20_minpoints2000/2020/stats_by_tile
     save_dir: ~/data/gvs/products/vsm/2020/bias_corrected_slope_lt20_minpoints2000/mosaic
     bias_cutoff: null
     average_across_rhs: false
@@ -293,8 +293,8 @@ postprocessing:
     year: 2020
     slope_lt20: false
     gedi_chm_ours_dir: ~/data/gvs/gedi/veg_sensitivity_gt0p95/subset_cal/original_with_sota_chms_ours/2020
-    correction_stats_dir: ~/data/gvs/assets/bias_correction_stats/slope_lt20_minpoints2000/2020/stats_with_median_and_trimmed_5_95_by_tile
-    save_dir: ~/data/gvs/assets/bias_correction_stats/slope_lt20_minpoints2000/2020/figures/cal_slope_lt20
+    correction_stats_dir: ~/data/gvs/postprocess/bias_correction/per_tile_bias/slope_lt20_minpoints2000/2020/stats_with_median_and_trimmed_5_95_by_tile
+    save_dir: ~/data/gvs/postprocess/bias_correction/per_tile_bias/slope_lt20_minpoints2000/2020/figures/cal_slope_lt20
 
   # =========================================================================
   # postprocessing/core/create_vrt.py

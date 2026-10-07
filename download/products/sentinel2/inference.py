@@ -25,6 +25,7 @@ import os
 from download.core import DaskDownloader, stack
 from download.core.utils import build_parquet_file_table, filter_parquet_files, row_to_stac_item, harmonize_to_old
 from download.core.constants import S2_ITEM_PROPS, STAC_ITEM_KEYS
+from download.core.items_store import read_items_for_tiles
 
 
 
@@ -127,9 +128,12 @@ class WorldS2(DaskDownloader):
                     n_iamges_per_tile: int = 20,
                     total_splits: int = 21,
                     output_format: str = 'h5',
+                    items_file: str = None,
                     debug: bool=False,
                     **kwargs):
         super().__init__(n_parallel=n_parallel, max_retries=3, **kwargs)
+        # zone-grouped STAC items store, see download/core/items_store.py
+        self.items_file = Path(items_file or f'~/data/gvs/deploy/_s2_meta/s2_meta_zone_grouped_{year}.parquet').expanduser()
         self.total_splits = total_splits
         self.n_tiles_per_split = 900 # for total_splits = 21
         self.n_iamges_per_tile = n_iamges_per_tile
@@ -298,26 +302,29 @@ class WorldS2(DaskDownloader):
 
             
             
-    def download(self, job_id, specified_tiles_df=None, **kwargs):
-        if specified_tiles_df is not None:
-            postfix = '_specified'
-            print(f'Downloading S2 images for specified tiles: {specified_tiles_df}')
-        else:
-            postfix = ''
-        
+    def download(self, job_id: int = 0, n_jobs: int = 1, specified_tiles_df=None, specified_tiles_file: str = None,
+                 prioritized_countries=None, s2_grid_file: str = None, **kwargs):
+        '''
+        Download the tiles of block `job_id` out of `n_jobs` over the tiles in
+        self.items_file (tiles in `prioritized_countries` first, see
+        deploy/schedule_tasks.py), or the tiles in `specified_tiles_df['Name']` / the
+        `Name` column of `specified_tiles_file`.
+        Tiles with a done flag are skipped, so n_jobs may change between submissions.
+        '''
+        if specified_tiles_df is None and specified_tiles_file:
+            specified_tiles_df = pd.read_csv(Path(specified_tiles_file).expanduser())
         if specified_tiles_df is None:
-            s2_df = gpd.read_parquet(self.save_dir / f'slurm_job_files_{self.year}/deploy_s2_items_{self.year}_part{job_id}.parquet')
-            s2_tiles = s2_df['s2:mgrs_tile'].unique() # 15019 tiles
-            s2_df = s2_df.set_index('s2:mgrs_tile')
+            from deploy.schedule_tasks import job_tiles
+            s2_tiles = job_tiles(self.items_file, job_id, n_jobs, prioritized_countries, s2_grid_file)
         else:
-            s2_tiles = specified_tiles_df['Name'].unique()
-            idx = specified_tiles_df[f'meta_file_idx_{self.year}'].unique().astype(int)
-            meta_files = [self.save_dir / f'slurm_job_files_{self.year}/deploy_s2_items_{self.year}_part{i}.parquet' for i in idx]
-            s2_df = dgp.read_parquet(meta_files, gather_spatial_partitions=False)
-            s2_df = s2_df.compute()
-            s2_df = s2_df.set_index('s2:mgrs_tile')
-            s2_df = s2_df.loc[s2_tiles]
-            s2_df['datetime'] = pd.to_datetime(s2_df['datetime'], utc=True)
+            print(f'Downloading S2 images for specified tiles: {specified_tiles_df}')
+            s2_tiles = specified_tiles_df['Name'].unique().tolist()
+        s2_df = read_items_for_tiles(self.items_file, s2_tiles)
+        missing = set(s2_tiles) - set(s2_df['s2:mgrs_tile'])
+        if missing:
+            print(f'{len(missing)} tiles have no items in {self.items_file}: {sorted(missing)}')
+        s2_tiles = s2_df['s2:mgrs_tile'].unique()
+        s2_df = s2_df.set_index('s2:mgrs_tile')
         # self.store_name = f'inference_part{job_id}.zarr'
         if self.debug:
             process_tiles = s2_tiles[:8] # ['32MQE'] if job_id == 7 else ['32TMT']
@@ -329,6 +336,8 @@ class WorldS2(DaskDownloader):
                 unfinished_tiles.append(tile)
         s2_df = s2_df.loc[unfinished_tiles]
         print(f'Processing {len(unfinished_tiles)} tiles, {len(s2_df)} images')
+        if not unfinished_tiles:
+            return
         wc_df = self.retrive_wc_items()
         wc_df['datetime'] = wc_df['start_datetime'].dt.strftime('%Y-%m-%d %H:%M:%S.%f')
         self.wc_df = wc_df[wc_df.geometry.intersects(box(*s2_df.total_bounds))]
@@ -341,7 +350,7 @@ class WorldS2(DaskDownloader):
             nfailed, results = self.schedule_tasks(delayed_tasks=tasks)
 
             if nfailed <= 0:
-                flag = self.save_dir / f'{self.year}_job_{job_id}_done'
+                flag = self.save_dir / f'{self.year}_job_{job_id}_of_{n_jobs}_done'
                 flag.touch()
 
     @delayed
@@ -408,10 +417,7 @@ class WorldS2(DaskDownloader):
         import matplotlib.pyplot as plt
         s2_tile = gpd.read_parquet(self.save_dir.parent / f's2_tiles_with_growing_months.parquet')
         s2_tile = s2_tile.set_index('Name')
-        df = []
-        for part in range(21):
-            df.append(gpd.read_parquet(self.save_dir / f'deploy_s2_items_{self.year}_part{part}.parquet'))
-        df = pd.concat(df)
+        df = pd.read_parquet(self.items_file, columns=['s2:mgrs_tile'])
         print(len(df))
         count_per_tile = df.groupby('s2:mgrs_tile').size()
         s2_images = s2_tile.join(count_per_tile.to_frame('images_count'), how='left')
@@ -512,7 +518,8 @@ class WorldS2(DaskDownloader):
         grow_months = df['growing_months'].iloc[0]
         if isinstance(grow_months, str):
             grow_months = [int(m) for m in grow_months[1:-1].split(' ') if m != '']
-        df['datetime'] = df['datetime'].dt.tz_localize(None)
+        # keep datetime tz=UTC as read: stripping it here (only for tiles with >20 items)
+        # left the column naive in some outputs and UTC in others
         if len(grow_months) < 12:
             idx = df['datetime'].dt.month.isin(grow_months)
             df = df[idx]
@@ -548,21 +555,8 @@ class WorldS2(DaskDownloader):
 
         res = pd.concat([best, rest])
         return res
-    
-    def save_s2_items_by_zone(self, df):
-        zone = df['mgrs_zone'].iloc[0]
-        df.to_parquet(self.save_dir / f'{zone}.parquet')
-    
-    def partition_s2_items_by_zone(self, parquet_dir: str = None, save_dir: str = None):
-        parquet_dir = Path(parquet_dir).expanduser()
-        self.save_dir = Path(save_dir).expanduser()
-        self.save_dir.mkdir(exist_ok=True, parents=True)
-        parquet_files = list(parquet_dir.glob(f'*.parquet'))
-        
-        s2_df = dgp.read_parquet(parquet_files, gather_spatial_partitions=False)
-        s2_df['mgrs_zone'] = s2_df['s2:mgrs_tile'].str[:3]
-        s2_df.groupby('mgrs_zone').apply(self.save_s2_items_by_zone, meta=('object', None)).compute()
-        
+
+
 @dataclass
 class MyConfig:
     year: int = 2020
@@ -575,6 +569,8 @@ class MyConfig:
     max_water_percentage: int = 99
     total_splits: int = 21
     job_id: int = 5
+    n_jobs: int = 1
+    items_file: str = '~/data/gvs/deploy/_s2_meta/s2_meta_zone_grouped_${year}.parquet'
     specified_tiles_file: str='' # download/evaluation_tiles.txt
     n_parallel: int = 8
     output_format: str = 'zarr'
@@ -597,12 +593,7 @@ def main(cfg):
     # with open_dict(cfg):
         # cfg.specified_tiles = specified_tiles
     s2 = WorldS2(**cfg)
-    if cfg.task == 'partition_s2_items_by_zone':
-        parquet_dir = cfg.get('geoparquet_dir', f'~/data/gvs/assets/worklists/slurm_job_files_{cfg.year}')
-        save_dir = cfg.get('save_dir', f'~/data/gvs/assets/worklists/s2_meta_by_zone/{cfg.year}')
-        s2.partition_s2_items_by_zone(parquet_dir, save_dir)
-    else:
-        getattr(s2, cfg.task)(**cfg, specified_tiles_df=specified_tiles_df)
+    getattr(s2, cfg.task)(**cfg, specified_tiles_df=specified_tiles_df)
     # s2.check_images_per_tile()
     print(f"Time taken: {time.time() - t0:.2f}s")
 

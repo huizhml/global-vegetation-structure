@@ -272,3 +272,5 @@ class BaseModel(LightningModule):
         if hasattr(self.trainer.datamodule.pred_dataset, 'tile_id'):
             if self.trainer.datamodule.cache_predictions:
                 self.trainer.datamodule.pred_dataset.save_predictions()
+            elif hasattr(self.trainer.datamodule.pred_dataset, 'finalize_output'):
+                self.trainer.datamodule.pred_dataset.finalize_output()

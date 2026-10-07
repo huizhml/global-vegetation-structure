@@ -79,7 +79,7 @@ visualization:
     _target_: visualization.core.create_global_view.check_mosaic_after_bias_correction
     target_type: function
     year: 2020
-    bias_dir: ~/data/gvs/assets/bias_correction_stats/slope_lt20_minpoints2000/2020/stats_by_tile
+    bias_dir: ~/data/gvs/postprocess/bias_correction/per_tile_bias/slope_lt20_minpoints2000/2020/stats_by_tile
     save_dir: ~/data/gvs/products/vsm/2020/bias_corrected_slope_lt20_minpoints2000/mosaic
     bias_cutoff: null
     average_across_rhs: false

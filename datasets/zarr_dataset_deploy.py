@@ -33,6 +33,8 @@ import pystac_client
 from download.core.stackstac_lib import stack
 from download.core.constants import S2_ITEM_PROPS
 from download.core.utils import get_patch, row_to_stac_item, harmonize_to_old
+from download.core.items_store import read_items_for_tiles
+from datasets.per_image_report import per_image_dir_name, write_per_image_report
 from const import SCL_EXCLUDE_LABELS, SCL_WATER, ESA_BUILT_UP, ESA_WATER, ESA_SNOW
 
 
@@ -122,8 +124,8 @@ class BaseDeployDataset(Dataset):
         else:
             if metadata_file != 'none':
                 self.metadata_file = Path(metadata_file).expanduser()
-                df = pd.read_parquet(self.metadata_file, columns=['id', 'eo:cloud_cover', 's2:mgrs_tile', 's2:nodata_pixel_percentage', 'orbit'])
-                df = df[df['s2:mgrs_tile'] == self.tile_id]
+                df = read_items_for_tiles(self.metadata_file, [self.tile_id],
+                                          columns=['id', 'eo:cloud_cover', 's2:mgrs_tile', 's2:nodata_pixel_percentage', 'orbit'])
                 if len(df) == 0:
                     raise RuntimeError(f'No images found for tile {self.tile_id} in metadata file {self.metadata_file}')
                 ids_from_zarr = self.store[f'{self.key}id'][:]
@@ -389,11 +391,13 @@ class ChunkedWriteDataset(BaseDeployDataset):
         BaseDeployDataset (_type_): _description_
     """
     
-    def __init__(self, save_intermediate_tif: bool = False, **kwargs):
+    def __init__(self, save_intermediate_tif: bool = False, diagnostics_dir: str = '~/data/gvs/diagnostics', **kwargs):
         super().__init__(**kwargs)
         self.prediction_fp = self.prediction_dir / f'{self.tile_id}'
         self.transform = Affine(*self.transform).to_gdal()
         self.save_intermediate_tif = save_intermediate_tif # for debugging purposes
+        self.diagnostics_dir = Path(diagnostics_dir).expanduser() # root of per-image debug reports
+        self.zarr_store_path = kwargs.get('zarr_store_path')
         
     def initialize_output(self):
         self.options = [
@@ -410,18 +414,7 @@ class ChunkedWriteDataset(BaseDeployDataset):
         else:
             output_files = [self.prediction_fp.with_stem(f'RH{i//3}_Q1') for i in self.rh_idx]
         if self.save_intermediate_tif:
-            from cftime import num2date
-            tvar = self.store[f'{self.tile_id}/time']
-            time_raw = tvar[:]  # integers/floats
-            units = tvar.attrs["units"]                  # e.g. "seconds since 2020-01-01 00:00:00"
-            calendar = tvar.attrs.get("calendar", "standard")
-
-            # Decode to datetimes (cftime objects or datetimes)
-            decoded = num2date(time_raw, units, calendar=calendar)
-
-            # Format to YYYY-MM-DD strings
-            dates = np.array([d.strftime("%Y-%m-%d") for d in decoded])
-            output_files = [self.prediction_fp.with_stem(f'{self.tile_id}_{date}') for date in dates]
+            output_files = self._init_per_image_output()
         
         self.tiff_writers = [self.init_gtiff(output_file) for output_file in output_files]
         dtype = np.dtype(
@@ -462,6 +455,52 @@ class ChunkedWriteDataset(BaseDeployDataset):
         tiff_output.SetMetadataItem('Sentinel-2 tile', self.tile_id)
         return tiff_output
 
+    def _init_per_image_output(self):
+        """One RH98 tif per predicted image, inside a dated report folder (see datasets/per_image_report.py)."""
+        from cftime import num2date
+        tvar = self.store[f'{self.key}time']
+        dates = num2date(tvar[:], tvar.attrs['units'], calendar=tvar.attrs.get('calendar', 'standard'))
+        ids = self.store[f'{self.key}id'][:]
+        # _apply_masks concatenates images in img_slices order, so outputs must follow the same order
+        img_idx = np.concatenate([np.arange(len(dates))[s] for s in self.img_slices])
+        self.per_image_meta = pd.DataFrame({
+            'img_idx': img_idx,
+            'date': [dates[i].strftime('%Y-%m-%d') for i in img_idx],
+            'id': [ids[i].decode() if isinstance(ids[i], bytes) else str(ids[i]) for i in img_idx],
+        })
+        # img_idx keeps names unique when two images share a date
+        self.per_image_meta['name'] = [f'{self.tile_id}_{d}_img{i:03d}'
+                                       for d, i in zip(self.per_image_meta['date'], img_idx)]
+        self.per_image_dir = self.diagnostics_dir / per_image_dir_name(self.tile_id, self.year)
+        (self.per_image_dir / 'tifs').mkdir(parents=True, exist_ok=True)
+        print(f'Per-image predictions will be saved to {self.per_image_dir}')
+        return [self.per_image_dir / 'tifs' / name for name in self.per_image_meta['name']]
+
+    def finalize_output(self):
+        """Called once after the last batch: write the per-image report, then close all GDAL datasets."""
+        if self.save_intermediate_tif:
+            write_per_image_report(
+                out_dir=self.per_image_dir,
+                meta=self.per_image_meta,
+                tiff_writers=self.tiff_writers,
+                s2_array=self.store[f'{self.key}s2'],
+                nodata_value=self.nodata_value,
+                inputs={
+                    'tile_id': self.tile_id,
+                    'year': self.year,
+                    'zarr_store': self.zarr_store_path,
+                    'patch_size': self.patch_size,
+                    'border': self.border,
+                    'mask_with_scl': self.mask_with_scl,
+                    'nodata_value': self.nodata_value,
+                },
+                title=f'Per-image predictions {self.tile_id} {self.year}',
+            )
+        for writer in self.tiff_writers:
+            writer.FlushCache()
+        self.tiff_writers = None
+        self.pred_table = None
+
 def write_patch_predictions(entry, x_topleft, y_topleft, nodata_value):
     raster_writer, array = entry[0]
     band = raster_writer.GetRasterBand(1)
@@ -471,6 +510,9 @@ def write_patch_predictions(entry, x_topleft, y_topleft, nodata_value):
     if 'uncompressed' in filename.stem:
         date = filename.stem.split('_')[1]
         band.SetDescription(f"{date}")
+    elif not filename.stem.startswith('RH'):
+        # per-image debug output: <tile>_<date>_img<idx>
+        band.SetDescription(filename.stem)
     else:
         rh_idx = int(filename.stem.split('_')[0].split('RH')[1])
         q_idx = int(filename.stem.split('_')[1].split('Q')[1])
@@ -672,8 +714,7 @@ class S2DatasetStream(BaseDeployDataset):
             'B01', 'B04', 'B03', 'B02', 'B05', 'B06', 'B07', 'B08', 'B8A',
             'B09', 'B11', 'B12', 'SCL'
         ]
-        s2_df = gpd.read_parquet(self.metadata_file)
-        tile_df = s2_df[s2_df['s2:mgrs_tile'] == self.tile_id]
+        tile_df = read_items_for_tiles(self.metadata_file, [self.tile_id])
         tile_df = tile_df.drop_duplicates(subset='id', keep='first')
         tile_df = tile_df.set_index('id')
         if len(tile_df)>self.n_iamges_per_tile:

@@ -167,36 +167,3 @@ esac
 #     fi
 #     echo "***************************** END INFERENCE *****************************"
 # fi
-
-
-
-
-# # **************************************************************
-# #              Predict multiple tiles in one job
-# # **************************************************************
-# # input_dir=/scratch/predictions_${year}
-# # tile_id_file=${HOME}/data/gvs/deploy/s2_deploy_items_${year}_part${part}_unique_images.txt # for 2020
-# tile_id_file=${HOME}/data/gvs/deploy/slurm_job_files_${year}/deploy_s2_items_${year}_part${part}.txt # for 2024
-# echo "Translate tiles from $tile_id_file"
-# # Get tile ID from line number specified by SLURM array task ID
-# while true; do
-#     while IFS= read -r tile_id; do
-#         inference_flag="${HOME}/data/gvs/deploy/inference_flags_${year}/${tile_id}_best_images_done"
-#         translate_flag="${HOME}/data/gvs/deploy/translate_flags_${year}/${tile_id}_best_images_done"
-#         if [ -f "$inference_flag" ] && [ ! -f "$translate_flag" ]; then
-#             echo "***************************** START INFERENCE *****************************"
-#             echo Translate predictions for tile $tile_id in year $year;
-#             python -m postprocess.translate src_dir=$input_dir/${tile_id}_GTiff dst_dir=${HOME}/data/gvs/deploy/predictions_${year}/${tile_id}_cog
-#             exit_status=$?
-#             if [ $exit_status -ne 0 ]; then
-#                 echo "Prediction command failed with exit status $exit_status"
-#             else
-#                 echo "Prediction command completed successfully"
-#                 rm -rf $input_dir/${tile_id}_GTiff
-#                 touch ${translate_flag}
-#             fi
-#             echo "***************************** END INFERENCE *****************************"
-#         fi
-#     done < "$tile_id_file"  
-# done
-# echo "***************************** END TRANSLATE *****************************"

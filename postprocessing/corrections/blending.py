@@ -307,7 +307,7 @@ class Blending:
 @dataclass
 class Config:
     stac_collection_dir: str = '~/data/gvs/products/gvsm_stac_catalog/vsm_local'
-    distance_map_dir: str = '~/data/gvs/assets/blending/distance_maps'
+    distance_map_dir: str = '~/data/gvs/postprocess/blending/0_distance_maps'
     s2_grid_file: str = '~/data/gvs/state/s2_tiles_with_growing_months.parquet'
     
     output_dir: str = '~/data/gvs/sanity_checks/blending'

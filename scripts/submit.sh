@@ -125,13 +125,16 @@ year=2020
 echo download inference data for $year by api query;
 python -m download._5_download_inference task=download_by_api_query year=$year specified_tiles_file=~/data/gvs/deploy/tiles_without_images_$year.txt;;
 11)
-year=2020
-echo download inference data for $year by metadata;
-python -m download._5_download_inference task=download year=$year job_id=0 specified_tiles_file=~/data/gvs/deploy/tiles_without_images_$year.txt;;
-12)
 year=${2:-2020}
-echo schedule slurm jobs, i.e, split tiles, for $year;
-python -m deploy.schedule_tasks year=$year parquet_dir=~/data/gvs/deploy/slurm_job_files_${year} save_dir=~/data/gvs/deploy/slurm_job_files_${year}
+echo download inference data for $year by metadata;
+if [ -n "$3" ]; then
+    # only the tiles in a csv with a Name column, e.g. ~/data/gvs/deploy/tiles_without_images_$year.txt
+    python -m download.run run=download_inference run.year=$year +run.func_args.specified_tiles_file=$3
+else
+    # tiles are split over the array from the zone-grouped items store; no job files needed
+    python -m download.run run=download_inference run.year=$year \
+        run.func_args.job_id=${SLURM_ARRAY_TASK_ID:-0} run.func_args.n_jobs=${SLURM_ARRAY_TASK_COUNT:-1}
+fi
 ;;
 13)
 year=${2:-2020}

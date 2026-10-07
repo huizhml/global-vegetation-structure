@@ -90,7 +90,7 @@ download:
     year: 2020
     sensitivity_threshold: 0.95
     location_dir: ~/data/gvs/gedi/veg_sensitivity_${sens_label:${.sensitivity_threshold}}/all_valid/2020
-    dem_meta_file: ~/data/gvs/assets/dem/cop-dem-glo-30_items.parquet
+    dem_meta_file: ~/data/gvs/00_raw_data/dem/cop-dem-glo-30_items.parquet
     save_dir: ~/data/gvs/gedi/veg_sensitivity_${sens_label:${.sensitivity_threshold}}/all_valid_with_slope/2020
 
   check_slope_distribution:
@@ -218,20 +218,52 @@ download:
     _target_: download.products.sentinel2.inference.WorldS2
     target_type: class
     target_method: download
-    func_args: {}
+    # block job_id of n_jobs over the tiles in items_file (prioritized countries first,
+    # see deploy/schedule_tasks.py; preview with `just dl-preview-jobs`), e.g. in an array:
+    #   just dl-inference run.func_args.job_id=$SLURM_ARRAY_TASK_ID run.func_args.n_jobs=$SLURM_ARRAY_TASK_COUNT
+    func_args:
+      job_id: 0
+      n_jobs: 1
+      prioritized_countries: []
+      s2_grid_file: ~/data/gvs/s2_tiles_with_growing_months.parquet
     year: 2020
     zone: 23J
     rewrite: false
     debug: false
     s2_grid_file: ~/data/gvs/s2_tiles_with_growing_months.parquet
     wc_parq_file: ~/data/gvs/deploy/esa_wc.parquet
+    items_file: ~/data/gvs/deploy/_s2_meta/s2_meta_zone_grouped_{year}.parquet
     store_name: inference
     comp_name: lz4
     comp_level: 7
     max_cloud_cover: 90
     max_water_percentage: 99
     total_splits: 21
-    job_id: 5
+
+  # deploy/schedule_tasks.py
+  # Print how download_inference would split tiles over n_jobs (nothing is written;
+  # each job recomputes the same split). Pass the same countries/n_jobs as the array.
+  preview_job_allocation:
+    _target_: deploy.schedule_tasks.preview_job_allocation
+    target_type: function
+    year: 2020
+    items_file: ~/data/gvs/deploy/_s2_meta/s2_meta_zone_grouped_{year}.parquet
+    n_jobs: 21
+    prioritized_countries: []
+    s2_grid_file: ~/data/gvs/s2_tiles_with_growing_months.parquet
+
+  # download/core/items_store.py
+  # Build the one-row-group-per-zone items store from existing part files and
+  # verify it against them (structure, row counts, per-tile equality, read cost).
+  check_items_store: # this function is a sanity check for aggregating originally downloaded S2 items into a single store
+    _target_: download.core.items_store.check_items_store
+    target_type: function
+    year: 2024
+    src: /projects/dereeco/data/gvs/assets/worklists/slurm_job_files_2024/*part*.parquet
+    out_file: ~/data/gvs/deploy/_s2_meta/s2_meta_zone_grouped_{year}.parquet
+    n_sample_tiles: 200
+    seed: 0
+    overwrite: false
 
   download_downstream_task_data:
     _target_: download.products.sentinel2.train_data.S2DownloaderDownstream

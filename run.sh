@@ -475,7 +475,7 @@ run_id=cg11fpjr
 echo run prediction for model $run_id for tile $tile_id in year $year;
 python run.py predict -c config/predict.yaml --model.backbone config/model/xception_mix_order.yaml \
         --data.init_args.tile_id $tile_id \
-        --data.init_args.metadata_file ~/data/gvs/deploy/slurm_job_files_${year}/deploy_s2_items_${year}_part4.parquet \
+        --data.init_args.metadata_file ~/data/gvs/deploy/_s2_meta/s2_meta_zone_grouped_${year}.parquet \
         --data.init_args.download_data True \
         --data.init_args.pred_fp ~/flash/data/gvs/deploy/inference_${year} \
         --data.init_args.prediction_dir ~/flash/data/gvs/deploy/predictions_GTiff_${year}/${tile_id}_GTiff \
