@@ -489,10 +489,10 @@ tools:
   # tools/task_state.py
   # =========================================================================
   # 用一个 state 目录代替成堆的 {tile}_done 空文件,见模块 docstring。
-  # state 放在所属 task 的目录下: ~/data/gvs/<task>/<year>/state
-  #   python -m tools.run run=state_summary run.path=~/data/gvs/copy_from_lumio/2024/state
+  # state 放在所属 task 的目录下,例: ~/data/gvs/sync/copy_from_lumio/2024_q1
+  #   python -m tools.run run=state_summary run.path=~/data/gvs/sync/copy_from_lumio/2024_q1
   #   python -m tools.run run=import_flags run.flag_dir=~/data/gvs/state/2024/copy_from_lumio_q1 \
-  #       run.path=~/data/gvs/copy_from_lumio/2024/state run.delete=true
+  #       run.path=~/data/gvs/sync/copy_from_lumio/2024_q1 run.delete=true
   state_summary:
     _target_: tools.task_state.state_summary
     target_type: function
