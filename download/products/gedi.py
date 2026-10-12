@@ -488,7 +488,7 @@ class GEDI(DaskDownloader):
         tmp = file.with_name(f'.{file.name}.tmp')
         data.to_parquet(tmp)
         os.replace(tmp, file)
-        print(f'Saved {len(data)} GEDI points for {s2_tile["Name"]} after filtering')
+        print(f'Saved {len(data)} GEDI points for {name} after filtering')
         return len(data)
 
     # --- Orphaned helpers from the per-orbit refactor (see download_all_valid
