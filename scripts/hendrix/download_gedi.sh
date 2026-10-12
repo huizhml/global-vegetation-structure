@@ -116,7 +116,7 @@ for y in ${years//,/ }; do
         python -m tools.run run=state_compact run.path="$state"
         python -m tools.run run=state_summary run.path="$state"
     fi
-    rclone copy "$state" "$dst/${y}_state" --include snapshot.tsv --include 'mgrs_summary_*.tsv' \
+    rclone copy "$state" "$dst/${y}_state" --include snapshot.tsv --include expected.tsv --include 'mgrs_summary_*.tsv' \
         --include uploads.tsv --include 'erda_*.log' "${opts[@]}"
 done
 

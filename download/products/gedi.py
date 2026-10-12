@@ -373,6 +373,9 @@ class GEDI(DaskDownloader):
 
         s2_grid_file = Path(self.s2_grid_file).expanduser()
         s2_table = gpd.read_parquet(s2_grid_file)
+        if self.state is not None:
+            # every S2 tile ends up done or failed; state_summary checks against this
+            self.state.set_expected(s2_table['Name'], source=str(s2_grid_file))
 
         for tmp in self.save_dir.glob('.*.parquet.tmp'):   # left by a killed run
             tmp.unlink()
@@ -401,15 +404,20 @@ class GEDI(DaskDownloader):
         in_growing = pairs.apply(
             lambda r: r['month'] in {int(m) for m in r['growing_months']}, axis=1)
         pairs = pairs[in_growing]
-        orbits_per_tile = pairs.groupby('Name')['table_id'].apply(list).to_dict()
+        orbits_per_row = pairs.groupby(level=0)['table_id'].apply(list).to_dict()
 
-        tasks, no_orbit = [], []
-        for _, row in pending.iterrows():
-            orbit_ids = orbits_per_tile.get(row['Name'], [])
-            if not orbit_ids:
-                no_orbit.append(row['Name'])  # no orbit in this tile's growing season
-                continue
-            tasks.append(self.get_orbit_for_one_s2_tile(row, orbit_ids))
+        # Tiles crossing the antimeridian are two rows with the same Name (25
+        # in the grid). One task per Name, querying each part on its own: the
+        # bbox of their union would span all longitudes.
+        parts_per_tile = defaultdict(list)
+        for i, row in pending.iterrows():
+            orbit_ids = orbits_per_row.get(i, [])
+            if orbit_ids:
+                parts_per_tile[row['Name']].append((row['geometry'], orbit_ids))
+        # no orbit in this tile's growing season
+        no_orbit = sorted(set(pending['Name']) - parts_per_tile.keys())
+        tasks = [self.get_orbit_for_one_s2_tile(name, parts)
+                 for name, parts in parts_per_tile.items()]
         if self.state is not None and no_orbit:
             self.state.mark_many(no_orbit, info='no orbit in growing season')
         print(f'Scheduling {len(tasks)} tile fetches')
@@ -421,20 +429,21 @@ class GEDI(DaskDownloader):
             print(f'state: {self.state.path}')
 
     @dask.delayed
-    def get_orbit_for_one_s2_tile(self, s2_tile: pd.Series, orbit_ids: list):
+    def get_orbit_for_one_s2_tile(self, name: str, parts: list):
         '''
         Download all valid GEDI shots for one S2 tile across its pre-computed
         list of overlapping growing-season orbits.
 
         Args:
-            * s2_tile: row from the S2 table (Name, geometry, growing_months)
-            * orbit_ids: list of GEE FeatureCollection IDs already filtered to
-                tiles this orbit intersects AND the tile's growing months
-                (computed once in download_all_valid via sjoin).
+            * name: S2 tile name
+            * parts: [(geometry, orbit_ids)], one per grid row with this name
+                (two for tiles split at the antimeridian). orbit_ids are GEE
+                FeatureCollection IDs already filtered to orbits that intersect
+                the part AND fall in the tile's growing months (computed once
+                in download_all_valid via sjoin).
         '''
-        name = s2_tile['Name']
         try:
-            n = self._fetch_one_s2_tile(s2_tile, orbit_ids)
+            n = self._fetch_one_s2_tile(name, parts)
         except Exception as e:
             # re-raised so schedule_tasks still retries; a later success
             # overrides this line in the state
@@ -444,28 +453,31 @@ class GEDI(DaskDownloader):
         if self.state is not None and n is not None:
             self.state.mark_done(name, f'{n} shots' if n else 'no valid shots')
 
-    def _fetch_one_s2_tile(self, s2_tile: pd.Series, orbit_ids: list):
+    def _fetch_one_s2_tile(self, name: str, parts: list):
         '''Returns the number of shots saved, or None when the parquet already existed.'''
         self._ensure_authenticated()  # runs on a worker process; ensure this run's key
-        file = self.save_dir / f'{s2_tile["Name"]}.parquet'
+        file = self.save_dir / f'{name}.parquet'
         if file.exists() and not self.rewrite and is_parquet_ok(file):
             print(f'{file} exists and is ok')
             return None
         data = []
-        geom = shapely_to_geojson(s2_tile['geometry'])
-        for orbit_id in orbit_ids:
-            fc = (ee.FeatureCollection(orbit_id)
-                  .filterBounds(geom)
-                  .filter(self.filter)
-                  .filter(ee.Filter.inList('pft_class', list(range(1, 9)))))
-            fc = ee_fc_to_gpd(fc)
-            if fc is None:
-                continue
-            data.append(fc)
+        for geometry, orbit_ids in parts:
+            geom = shapely_to_geojson(geometry)
+            for orbit_id in orbit_ids:
+                fc = (ee.FeatureCollection(orbit_id)
+                      .filterBounds(geom)
+                      .filter(self.filter)
+                      .filter(ee.Filter.inList('pft_class', list(range(1, 9)))))
+                fc = ee_fc_to_gpd(fc)
+                if fc is None:
+                    continue
+                data.append(fc)
         if len(data) == 0:
-            print(f'No GEDI points found for {s2_tile["Name"]}')
+            print(f'No GEDI points found for {name}')
             return 0
         data = pd.concat(data)
+        if len(parts) > 1:      # a shot on the seam between two parts comes twice
+            data = data.drop_duplicates(subset='shot_number')
         data = data.reset_index(drop=True)
         data['system:index'] = data['system:index'].astype(str)
         # S2 tiles overlap, so one shot lands in several tile files; this is

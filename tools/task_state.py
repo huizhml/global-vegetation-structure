@@ -6,6 +6,9 @@ under the folder of the task it tracks, e.g. ~/data/gvs/sync/copy_from_lumio/202
     <path>/log/<host>_<pid>_<job>.tsv   append-only, one file per writer process
     <path>/snapshot.tsv                 merged state, rewritten by compact()
     <path>/offsets.tsv                  how far compact() has read each log
+    <path>/expected.tsv                 optional: every key the task should end
+                                        up with (set_expected), so state_summary
+                                        can count keys that were never started
 
 Every writer process appends only to its own log file, so any number of SLURM
 tasks on any number of nodes can write at the same time with no locking. That
@@ -95,6 +98,7 @@ class TaskState:
         elif not self.path.is_dir():
             raise FileNotFoundError(f'no task state at {self.path}')
         self.snapshot = self.path / 'snapshot.tsv'
+        self.expected_file = self.path / 'expected.tsv'
         self._lock = threading.Lock()
         self._cache = None
 
@@ -149,6 +153,24 @@ class TaskState:
         now = _iso()
         stamps = [_iso(t) for t in times] if times else [now] * len(keys)
         self._write([(k, status, t, info) for k, t in zip(keys, stamps)])
+
+    def set_expected(self, keys, source: str = ''):
+        """Record every key the task should end up with (rewritten each call).
+
+        A key that is in neither done() nor failed() leaves no trace, e.g. when
+        the job was killed while it ran; only this list shows it is missing.
+        """
+        keys = sorted(set(keys))
+        header = f'# {len(keys)} expected keys, from {source or "?"}, written {_iso()}\n'
+        self._replace(self.expected_file, [header] + [f'{k}\n' for k in keys])
+
+    def expected(self):
+        """Keys from set_expected, or None if it was never called."""
+        try:
+            with open(self.expected_file) as fh:
+                return {line.rstrip('\n') for line in fh if not line.startswith('#')}
+        except FileNotFoundError:
+            return None
 
     # ------------------------------------------------------------------- read
     def _read_snapshot(self):
@@ -309,6 +331,23 @@ def state_summary(path: str, **kwargs):
         print(f'  failed  {key}  {failed[key]}')
     if len(failed) > 20:
         print(f'  ... {len(failed) - 20} more failed')
+
+    expected = st.expected()
+    if expected is None:
+        print('  no expected.tsv: total unknown, cannot tell whether keys are missing')
+        return
+    done = st.done(refresh=False)
+    not_started = sorted(expected - done - failed.keys())
+    print(f'  expected {len(expected)}: {len(done & expected)} done, '
+          f'{len(failed.keys() & expected)} failed, {len(not_started)} never started'
+          f'  -> {"COMPLETE" if len(done & expected) == len(expected) else "INCOMPLETE"}')
+    for key in not_started[:20]:
+        print(f'  never started  {key}')
+    if len(not_started) > 20:
+        print(f'  ... {len(not_started) - 20} more never started')
+    extra = done - expected
+    if extra:
+        print(f'  {len(extra)} done keys not in expected.tsv, e.g. {sorted(extra)[:5]}')
 
 
 def compact_state(path: str, idle_hours: float = 24, **kwargs):
