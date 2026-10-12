@@ -374,6 +374,8 @@ class GEDI(DaskDownloader):
         s2_grid_file = Path(self.s2_grid_file).expanduser()
         s2_table = gpd.read_parquet(s2_grid_file)
 
+        for tmp in self.save_dir.glob('.*.parquet.tmp'):   # left by a killed run
+            tmp.unlink()
         # Skip tiles already produced — keeps re-runs cheap.
         existing = {p.stem for p in self.save_dir.glob('*.parquet') if is_parquet_ok(p)}
         if self.state is not None:
@@ -469,7 +471,11 @@ class GEDI(DaskDownloader):
         # S2 tiles overlap, so one shot lands in several tile files; this is
         # the one MGRS square it belongs to (see tools/mgrs_tile.py)
         data['mgrs_tile'] = mgrs_100km(data.geometry.x.values, data.geometry.y.values)
-        data.to_parquet(file)
+        # temp file + rename: a killed worker or a concurrent reader (add_mgrs,
+        # upload_erda) never sees a half-written <tile>.parquet
+        tmp = file.with_name(f'.{file.name}.tmp')
+        data.to_parquet(tmp)
+        os.replace(tmp, file)
         print(f'Saved {len(data)} GEDI points for {s2_tile["Name"]} after filtering')
         return len(data)
 
@@ -715,7 +721,6 @@ def get_unique_shotnumbers(tiles: List[Path]):
     # 每个 shot_number 只保留第一个出现的 tile
     keep = all_shots.drop_duplicates(subset=["shot_number"], keep="first")
     print(f'Before: {len(all_shots)}, after: {len(keep)}')
-    import ipdb; ipdb.set_trace()
     return keep
 
 

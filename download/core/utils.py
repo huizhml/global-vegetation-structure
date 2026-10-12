@@ -592,7 +592,9 @@ def ee_fc_to_gpd(fc: ee.FeatureCollection):
         df = df.set_crs(epsg=4326)
         return df
     else:
-        raise requests.HTTPError(f'Failed to download {fc.getInfo()}')
+        # Status and server message say why (e.g. 429 = EE concurrency limit);
+        # fc.getInfo() here only cost another EE request and hid both.
+        raise requests.HTTPError(f'{res.status_code} {res.reason}: {res.text[:300]}')
     
 def gdf_to_gpkg(gdf: gpd.GeoDataFrame, file: str):
     """

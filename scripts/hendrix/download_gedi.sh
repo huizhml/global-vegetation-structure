@@ -41,8 +41,9 @@ add_mgrs)
 # ---------------------------------------
 #   Add the mgrs_tile column to already downloaded tile parquets (in place,
 #   files that have it are skipped) and write a per-tile summary to
-#   <parq_dir>_state/mgrs_summary_<time>.tsv. Do not run while `download`
-#   writes into the same dir: it writes parquets non-atomically.
+#   <parq_dir>_state/mgrs_summary_<time>.tsv. Run it after `download` has
+#   finished: tiles written meanwhile are missed and the summary is partial
+#   (downloads from before the atomic write could also be read half-written).
 # ---------------------------------------
 # Args: parq_dir (required)
 parse_kv_args "${@:2}" || exit $?
@@ -61,6 +62,63 @@ parse_kv_args "${@:2}" || exit $?
 year=${year:-2019}
 
 python -m tools.run run=gedi_to_s2_tiles run.year=$year run.workers=${workers:-8}
+
+;;
+upload_erda)
+# ---------------------------------------
+#   Copy downloaded all_valid years to ERDA without the all_valid level:
+#     <src>/all_valid/<year>/*.parquet  ->  <dst>/<year>/
+#     <src>/all_valid/<year>_state/     ->  <dst>/<year>_state/  (snapshot, mgrs summaries,
+#                                          upload record uploads.tsv + erda_<time>.log)
+#   `rclone copy`, never `sync`: nothing on ERDA is deleted. Reruns only send
+#   what is missing or changed, then `rclone check` compares sizes per file.
+#   ERDA allows ~10 parallel sftp sessions, hence transfers + checkers <= 10.
+# ---------------------------------------
+# Args: years (comma-separated, required: only years whose download is complete,
+#       check with state_summary first), src, dst, dry_run (any value)
+parse_kv_args "${@:2}" || exit $?
+: "${years:?years=<comma-separated years whose download is complete> is required}"
+src=${src:-/projects/dereeco/data/gvs/modeling/gedi/veg_sensitivity_all}
+dst=${dst:-ucph-erda:GEDI/veg_sensitivity_all}
+opts=(--transfers 6 --checkers 4 --stats 2m --stats-one-line ${dry_run:+--dry-run})
+
+for y in ${years//,/ }; do
+    echo "===== $y: $src/all_valid/$y -> $dst/$y"
+    [ -d "$src/all_valid/$y" ] || { echo "$y: $src/all_valid/$y not found, skipped"; continue; }
+    state="$src/all_valid/${y}_state"
+    if [ -n "$dry_run" ]; then
+        rclone copy "$src/all_valid/$y" "$dst/$y" --include '*.parquet' --include run.log "${opts[@]}"
+        continue
+    fi
+
+    # Upload record, kept in the year's state dir and copied to ERDA with it:
+    #   uploads.tsv            one line per run; columns are named to read on their own
+    #   erda_<time>.log        rclone's per-file log of that run
+    mkdir -p "$state"
+    t=$(date -u +%Y%m%dT%H%M%SZ)
+    rclone copy "$src/all_valid/$y" "$dst/$y" --include '*.parquet' --include run.log "${opts[@]}" \
+        --log-file "$state/erda_$t.log" --log-level INFO
+    if rclone check "$src/all_valid/$y" "$dst/$y" --one-way --size-only --include '*.parquet' \
+            --checkers 8 --log-file "$state/erda_$t.log" --log-level INFO; then
+        same=yes; echo "$y: all parquets on ERDA"
+    else
+        same="no, see erda_$t.log"; echo "$y: CHECK FAILED, rerun to resend (details in $state/erda_$t.log)"
+    fi
+    n_local=$(find "$src/all_valid/$y" -maxdepth 1 -name '*.parquet' | wc -l)
+    read -r n bytes < <(rclone size "$dst/$y" --include '*.parquet' --json \
+        | python -c 'import json, sys; d = json.load(sys.stdin); print(d["count"], d["bytes"])')
+    [ -f "$state/uploads.tsv" ] || printf '%s\n' "#started (UTC)	destination	parquet files local	parquet files at destination	parquet bytes at destination	sizes match local	slurm job id" > "$state/uploads.tsv"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$t" "$dst/$y" "$n_local" "$n" "$bytes" "$same" "${SLURM_JOB_ID:-local}" >> "$state/uploads.tsv"
+
+    # years downloaded before the TaskState existed have no log/ or snapshot
+    if [ -d "$state/log" ] || [ -f "$state/snapshot.tsv" ]; then
+        # merge the per-process logs so snapshot.tsv holds every tile
+        python -m tools.run run=state_compact run.path="$state"
+        python -m tools.run run=state_summary run.path="$state"
+    fi
+    rclone copy "$state" "$dst/${y}_state" --include snapshot.tsv --include 'mgrs_summary_*.tsv' \
+        --include uploads.tsv --include 'erda_*.log' "${opts[@]}"
+done
 
 ;;
 *)

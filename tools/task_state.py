@@ -85,10 +85,15 @@ def _parse(line: str, state: dict):
 
 class TaskState:
 
-    def __init__(self, path):
+    def __init__(self, path, create: bool = True):
+        """create=False for read-only use: a missing state is an error (most
+        likely a wrong path), not an empty state to be made on the spot."""
         self.path = Path(path).expanduser()
         self.log_dir = self.path / 'log'
-        self.log_dir.mkdir(parents=True, exist_ok=True)
+        if create:
+            self.log_dir.mkdir(parents=True, exist_ok=True)
+        elif not self.path.is_dir():
+            raise FileNotFoundError(f'no task state at {self.path}')
         self.snapshot = self.path / 'snapshot.tsv'
         self._lock = threading.Lock()
         self._cache = None
@@ -293,7 +298,7 @@ class TaskState:
 
 # ======================================================== tools.run ops
 def state_summary(path: str, **kwargs):
-    st = TaskState(path)
+    st = TaskState(path, create=False)
     counts = {}
     for status, _, _ in st.load().values():
         counts[status] = counts.get(status, 0) + 1
@@ -307,7 +312,7 @@ def state_summary(path: str, **kwargs):
 
 
 def compact_state(path: str, idle_hours: float = 24, **kwargs):
-    st = TaskState(path)
+    st = TaskState(path, create=False)
     n = st.compact(idle_s=idle_hours * 3600)
     print(f'compacted {st.snapshot}, deleted {n} idle log files')
 
