@@ -76,7 +76,10 @@ download:
     key_file: keys/private-key.json
     gedi_table_index_file: ~/data/gvs/gedi/l2a_orbit_table/l2a_orbit_table_${.year}.parquet
     save_dir: ~/data/gvs/gedi/veg_sensitivity_${sens_label:${.sensitivity_threshold}}/all_valid/${.year}
-    s2_grid_file: ~/data/gvs/state/s2_tiles_with_growing_months.parquet
+    # 每个 tile 的结果(N shots / no valid shots / no orbit / failed),放在
+    # parquet 目录旁边而不是里面,免得读整个目录的 parquet 时混进 tsv。
+    state_dir: ${.save_dir}_state
+    s2_grid_file: ~/data/gvs/01_derived_ancillary/s2_tiles_with_growing_months.parquet
 
   add_slope:
     _target_: download.products.gedi.GEDI

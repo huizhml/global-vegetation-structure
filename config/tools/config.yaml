@@ -484,3 +484,90 @@ tools:
     backup_dir: null          # null -> <catalog>_backup next to the collection
     dry_run: true
     workers: 32
+
+  # =========================================================================
+  # tools/task_state.py
+  # =========================================================================
+  # 用一个 state 目录代替成堆的 {tile}_done 空文件,见模块 docstring。
+  # state 放在所属 task 的目录下: ~/data/gvs/<task>/<year>/state
+  #   python -m tools.run run=state_summary run.path=~/data/gvs/copy_from_lumio/2024/state
+  #   python -m tools.run run=import_flags run.flag_dir=~/data/gvs/state/2024/copy_from_lumio_q1 \
+  #       run.path=~/data/gvs/copy_from_lumio/2024/state run.delete=true
+  state_summary:
+    _target_: tools.task_state.state_summary
+    target_type: function
+    path: ???
+
+  state_compact:
+    _target_: tools.task_state.compact_state
+    target_type: function
+    path: ???
+    # 空闲超过这么久、且已并入 snapshot 的 log 才删
+    idle_hours: 24
+
+  import_flags:
+    _target_: tools.task_state.import_flags
+    target_type: function
+    flag_dir: ???
+    path: ???
+    suffix: _done
+    # 先写入并 compact,确认每个 key 都在 state 里之后才删 flag 文件
+    delete: false
+
+  # =========================================================================
+  # tools/gedi_coverage.py
+  # =========================================================================
+  # 检查 download_all_valid_gedi 是否下全:按同样的 sjoin + 生长季逻辑算出应有的
+  # tile,和 save_dir 里能读的 parquet 对比,missing/corrupt 清单写到 out_dir。
+  #   python -m tools.run run=gedi_coverage run.year=2019 run.save_dir=<all_valid/2019 目录>
+  gedi_coverage:
+    _target_: tools.gedi_coverage.check_all_valid_coverage
+    target_type: function
+    year: 2020
+    save_dir: ???
+    s2_grid_file: ~/data/gvs/01_derived_ancillary/s2_tiles_with_growing_months.parquet
+    gedi_table_index_file: ~/data/gvs/gedi/l2a_orbit_table/l2a_orbit_table_${.year}.parquet
+    # 和 download_all_valid_gedi 的 state_dir 一致;不存在时退化成只看 parquet
+    state_dir: ${.save_dir}_state
+    out_dir: null             # null -> <save_dir>_coverage
+    workers: 32
+
+  # =========================================================================
+  # tools/mgrs_tile.py
+  # =========================================================================
+  # 给已下载的 GEDI 点加 mgrs_tile 列(点所在的 MGRS 100 km 方格,和 S2 tile
+  # 同名)。同一个 shot 在每个 tile 文件里的值都一样,全局合并时只留
+  # mgrs_tile == 文件 tile 的行即可去重。原地改写,已有该列的文件会跳过。
+  #   python -m tools.run run=add_mgrs_tile run.parq_dir=<all_valid/2019 目录>
+  add_mgrs_tile:
+    _target_: tools.mgrs_tile.add_mgrs_tile
+    target_type: function
+    parq_dir: ???
+    # 用来判断孤儿点(所在方格没有 S2 tile);null -> 只看 parq_dir 里有的 tile
+    s2_grid_file: ~/data/gvs/01_derived_ancillary/s2_tiles_with_growing_months.parquet
+    # 每次运行写一份 per-tile 统计 mgrs_summary_<UTC 时间>.tsv,和下载的 state 放一起
+    state_dir: ${.parq_dir}_state
+    workers: 16
+    rewrite: false
+
+  # =========================================================================
+  # tools/gedi_to_s2_tiles.py
+  # =========================================================================
+  # 把老的 GEDI.download 输出(<zone>/<orbit>.parquet,按面积随机抽样、没有生长季
+  # 和 pft 过滤)重新按 S2 tile 存成 <tile>.parquet,加 orbit 和 mgrs_tile 两列。
+  # 分两步:按 zone 拆成 <save_dir>_parts/<tile>/<zone>.parquet,全部拆完再按 tile
+  # 合并。进度在 <save_dir>_state,中断后重跑会接着做。
+  #   python -m tools.run run=gedi_to_s2_tiles run.year=2019
+  gedi_to_s2_tiles:
+    _target_: tools.gedi_to_s2_tiles.regroup_to_s2_tiles
+    target_type: function
+    year: 2019
+    src_dir: /projects/dereeco/data/gvs/modeling/gedi/GEDI_high_sens/${.year}
+    # 命名和 veg_sensitivity_<sens>/all_valid 对应:all = 不按 pft 过滤;sampled =
+    # 按面积随机抽样(不是全部有效点),也没有生长季过滤
+    save_dir: /projects/dereeco/data/gvs/modeling/gedi/all_sensitivity_gt0p95/sampled/${.year}
+    state_dir: ${.save_dir}_state
+    s2_grid_file: ~/data/gvs/01_derived_ancillary/s2_tiles_with_growing_months.parquet
+    # 每个 worker 一次读一个 zone 的全部 orbit 文件,内存随 zone 大小涨
+    workers: 8
+    keep_parts: false

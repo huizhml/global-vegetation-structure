@@ -29,6 +29,8 @@ from dask.distributed import Client, LocalCluster
 from download.core import DaskDownloader
 from download.core.utils import authenticate, ensure_authenticated, shapely_to_geojson, ee_fc_to_gpd, get_aux_df, row_to_stac_item, get_patch, get_epsg_from_tile, buffer_and_snap_bounds, get_total_bounds, check_unfinished_files, read_parquets_with_file_name
 from download.core.constants import dtypes
+from tools.task_state import TaskState
+from tools.mgrs_tile import mgrs_100km
 load_dotenv()
 
 
@@ -173,6 +175,7 @@ class GEDI(DaskDownloader):
                  # download all valid
                  s2_grid_file: str = None,
                  gedi_table_index_file: str = None,
+                 state_dir: str = None,
                  # add slope
                  location_dir: str = None,
                  dem_meta_file: str = None,
@@ -204,6 +207,8 @@ class GEDI(DaskDownloader):
         self.used_parq_dir = used_parq_dir
         self.save_dir = Path(save_dir).expanduser()
         self.save_dir.mkdir(exist_ok=True, parents=True)
+        # Per-tile outcome of download_all_valid; see tools/task_state.py.
+        self.state = TaskState(state_dir) if state_dir is not None else None
 
         # flag_dir is only used by the legacy download_zone path; other methods
         # (e.g. download_all_valid) don't need it.
@@ -345,9 +350,16 @@ class GEDI(DaskDownloader):
         across tile parquets — use `dedup_shots` as a post-processing pass
         if a globally-deduped dataset is needed.
 
+        With state_dir set, every S2 tile ends up in the state: done with
+        "N shots", "no valid shots" or "no orbit in growing season", or
+        failed with the error. A tile without a parquet is then either
+        known-empty or not finished, so completeness is
+        `state_summary` == all tiles done, without asking GEE again.
+
         Args (via __init__ / yaml):
             * s2_grid_file: S2 table with columns Name, geometry, growing_months
             * gedi_table_index_file: GEDI orbit index (downloaded if missing)
+            * state_dir: TaskState directory (optional)
         '''
         cluster = LocalCluster()
         client = Client(cluster)  # timeout
@@ -364,6 +376,13 @@ class GEDI(DaskDownloader):
 
         # Skip tiles already produced — keeps re-runs cheap.
         existing = {p.stem for p in self.save_dir.glob('*.parquet') if is_parquet_ok(p)}
+        if self.state is not None:
+            done = self.state.done()
+            # parquets written before the state existed (or by a run without it)
+            backfill = sorted(existing - done)
+            if backfill:
+                self.state.mark_many(backfill, info='parquet existed')
+            existing |= done
         pending = s2_table[~s2_table['Name'].isin(existing)].reset_index(drop=True)
         print(f'{len(existing)} tiles done, {len(pending)} pending')
         if len(pending) == 0:
@@ -382,14 +401,22 @@ class GEDI(DaskDownloader):
         pairs = pairs[in_growing]
         orbits_per_tile = pairs.groupby('Name')['table_id'].apply(list).to_dict()
 
-        tasks = []
+        tasks, no_orbit = [], []
         for _, row in pending.iterrows():
             orbit_ids = orbits_per_tile.get(row['Name'], [])
             if not orbit_ids:
-                continue  # no orbit in this tile's growing season
+                no_orbit.append(row['Name'])  # no orbit in this tile's growing season
+                continue
             tasks.append(self.get_orbit_for_one_s2_tile(row, orbit_ids))
+        if self.state is not None and no_orbit:
+            self.state.mark_many(no_orbit, info='no orbit in growing season')
         print(f'Scheduling {len(tasks)} tile fetches')
-        self.schedule_tasks(delayed_tasks=tasks)
+        if tasks:
+            nfailed, _ = self.schedule_tasks(delayed_tasks=tasks)
+            print(f'{nfailed} tiles failed after retries')
+        if self.state is not None:
+            self.state.compact()
+            print(f'state: {self.state.path}')
 
     @dask.delayed
     def get_orbit_for_one_s2_tile(self, s2_tile: pd.Series, orbit_ids: list):
@@ -403,11 +430,25 @@ class GEDI(DaskDownloader):
                 tiles this orbit intersects AND the tile's growing months
                 (computed once in download_all_valid via sjoin).
         '''
+        name = s2_tile['Name']
+        try:
+            n = self._fetch_one_s2_tile(s2_tile, orbit_ids)
+        except Exception as e:
+            # re-raised so schedule_tasks still retries; a later success
+            # overrides this line in the state
+            if self.state is not None:
+                self.state.mark_failed(name, repr(e))
+            raise
+        if self.state is not None and n is not None:
+            self.state.mark_done(name, f'{n} shots' if n else 'no valid shots')
+
+    def _fetch_one_s2_tile(self, s2_tile: pd.Series, orbit_ids: list):
+        '''Returns the number of shots saved, or None when the parquet already existed.'''
         self._ensure_authenticated()  # runs on a worker process; ensure this run's key
         file = self.save_dir / f'{s2_tile["Name"]}.parquet'
         if file.exists() and not self.rewrite and is_parquet_ok(file):
             print(f'{file} exists and is ok')
-            return
+            return None
         data = []
         geom = shapely_to_geojson(s2_tile['geometry'])
         for orbit_id in orbit_ids:
@@ -421,12 +462,16 @@ class GEDI(DaskDownloader):
             data.append(fc)
         if len(data) == 0:
             print(f'No GEDI points found for {s2_tile["Name"]}')
-            return
+            return 0
         data = pd.concat(data)
         data = data.reset_index(drop=True)
         data['system:index'] = data['system:index'].astype(str)
+        # S2 tiles overlap, so one shot lands in several tile files; this is
+        # the one MGRS square it belongs to (see tools/mgrs_tile.py)
+        data['mgrs_tile'] = mgrs_100km(data.geometry.x.values, data.geometry.y.values)
         data.to_parquet(file)
         print(f'Saved {len(data)} GEDI points for {s2_tile["Name"]} after filtering')
+        return len(data)
 
     # --- Orphaned helpers from the per-orbit refactor (see download_all_valid
     # docstring for why that approach was abandoned). Kept in case a future
