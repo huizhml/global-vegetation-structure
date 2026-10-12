@@ -70,8 +70,11 @@ upload_erda)
 #     <src>/all_valid/<year>/*.parquet  ->  <dst>/<year>/
 #     <src>/all_valid/<year>_state/     ->  <dst>/<year>_state/  (snapshot, mgrs summaries,
 #                                          upload record uploads.tsv + erda_<time>.log)
-#   `rclone copy`, never `sync`: nothing on ERDA is deleted. Reruns only send
+#   `rclone copy`, never `sync`: no data on ERDA is deleted. Reruns only send
 #   what is missing or changed, then `rclone check` compares sizes per file.
+#   The only deletion: *.partial in <dst>/<year>, temp files of an upload that
+#   was killed mid-transfer (rclone renames them when a file is complete).
+#   So never run two uploads of the same year at once.
 #   ERDA allows ~10 parallel sftp sessions, hence transfers + checkers <= 10.
 # ---------------------------------------
 # Args: years (comma-separated, required: only years whose download is complete,
@@ -88,6 +91,7 @@ for y in ${years//,/ }; do
     state="$src/all_valid/${y}_state"
     if [ -n "$dry_run" ]; then
         rclone copy "$src/all_valid/$y" "$dst/$y" --include '*.parquet' --include run.log "${opts[@]}"
+        rclone delete "$dst/$y" --include '*.partial' --dry-run
         continue
     fi
 
@@ -98,6 +102,7 @@ for y in ${years//,/ }; do
     t=$(date -u +%Y%m%dT%H%M%SZ)
     rclone copy "$src/all_valid/$y" "$dst/$y" --include '*.parquet' --include run.log "${opts[@]}" \
         --log-file "$state/erda_$t.log" --log-level INFO
+    rclone delete "$dst/$y" --include '*.partial' --log-file "$state/erda_$t.log" --log-level INFO
     if rclone check "$src/all_valid/$y" "$dst/$y" --one-way --size-only --include '*.parquet' \
             --checkers 8 --log-file "$state/erda_$t.log" --log-level INFO; then
         same=yes; echo "$y: all parquets on ERDA"
