@@ -32,7 +32,7 @@ class DaskDownloader:
                 n_parallel = min(self.n_parallel, len(ddf))
                 total_tasks = len(ddf)
         elif delayed_tasks is not None:
-            n_parallel = self.n_parallel
+            n_parallel = min(self.n_parallel, len(delayed_tasks))
             total_tasks = len(delayed_tasks)
 
         for i in range(n_parallel):
