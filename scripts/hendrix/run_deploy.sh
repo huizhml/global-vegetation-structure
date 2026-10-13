@@ -95,6 +95,69 @@ run_inference $tile_id True $save_dir none $year \
     --data.init_args.pred_fp ${HOME}/data/gvs/deploy/inputs/timeseries_${year}
 
 ;;
+4)
+# **************************************************************
+#    Reproducibility check: predict one tile with a reference version of the
+#    code and with the current code in this folder, then check the yearly
+#    GeoTIFFs match file by file.
+#    sbatch --time=02:00:00 scripts/hendrix/run_deploy.sh 4 <tile_id> [year] [ref] [quick]
+#
+#    quick=True (default) predicts only the top-left 5x5 patches (debug mode,
+#    the same in old and new code) and compares that 2560x2560 px region.
+#    quick=False predicts and compares the whole tile (~1 h more).
+#    Use a tile whose input h5 already exists, e.g. 32UNG, to skip the download.
+#
+#    This folder is synced by SFTP, not git, so the reference code has to be
+#    uploaded first as a snapshot of the commit. On the laptop, in the repo:
+#      git archive <ref> | ssh ksb781@hendrixgate02fl "mkdir -p ~/gvs_versions/<ref> && tar -x -C ~/gvs_versions/<ref>"
+#
+#    Result: ~/data/gvs/deploy/reproducibility/<ref>_vs_<new_label>/<tile_id>/
+#            per_file_diff.csv + check.log. Predictions are deleted if reproduced.
+# **************************************************************
+tile_id=${2:?usage: run_deploy.sh 4 <tile_id> [year] [ref] [quick]}
+year=${3:-2020}
+ref=${4:-74692d2} # last commit before the "all images in one sample" refactor
+quick=${5:-True}
+new=synced_$(date +%Y%m%d)
+[ "$quick" == "True" ] && new=${new}_quick
+out_dir=${HOME}/data/gvs/deploy/reproducibility/${ref}_vs_${new}/${tile_id}
+repo_dir=$(pwd)
+ref_code=${HOME}/gvs_versions/${ref}
+
+if [ ! -f $ref_code/run.py ]; then
+    echo "Reference code not found at $ref_code. Upload it from the laptop first:" >&2
+    echo "  git archive $ref | ssh ksb781@hendrixgate02fl \"mkdir -p ~/gvs_versions/$ref && tar -x -C ~/gvs_versions/$ref\"" >&2
+    exit 1
+fi
+# run.py downloads the checkpoint into ./artifacts; reuse this folder's copy
+[ -d $repo_dir/artifacts ] && [ ! -e $ref_code/artifacts ] && ln -s $repo_dir/artifacts $ref_code/artifacts
+mkdir -p $ref_code/logs $out_dir/ref $out_dir/new
+
+if [ "$quick" == "True" ]; then
+    predict_args=(--data.init_args.debug True)
+    check_args=("run.region=[0,0,2560,2560]") # 5x5 patches x 512 px (patch_size 544 - 2 x border 16)
+else
+    predict_args=()
+    check_args=()
+fi
+# Streaming input (~/data/gvs/deploy/inputs/inference_<year>/<tile>.h5, downloaded if
+# missing), as in the production runs. The first run downloads, the second reuses it.
+(cd $ref_code && run_inference $tile_id True $out_dir/ref none $year "${predict_args[@]}")
+run_inference $tile_id True $out_dir/new none $year "${predict_args[@]}"
+
+python -m tools.run run=check_reproducibility run.tile_id=$tile_id run.save_dir=$out_dir \
+    run.ref_label=$ref run.new_label=$new "${check_args[@]}" 2>&1 | tee $out_dir/check.log
+
+# A full prediction set is ~73 GB (303 uncompressed GTiffs); keep them only if
+# they differ, for debugging. per_file_diff.csv and check.log always stay.
+if grep -q -- '-> REPRODUCED' $out_dir/check.log; then
+    echo "Reproduced, deleting $out_dir/ref and $out_dir/new"
+    rm -rf $out_dir/ref $out_dir/new
+else
+    echo "Not reproduced (or check failed), keeping predictions in $out_dir for debugging"
+fi
+
+;;
 *)
 echo "Invalid option"
 exit 1

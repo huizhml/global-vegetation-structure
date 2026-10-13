@@ -13,6 +13,7 @@ def check_reproducibility(
         new_label: str = 'new',
         nodata: int = 32767,
         block_rows: int = 1024,
+        region: list = None,
         **kwargs) -> pd.DataFrame:
     """Check that a new version of the deploy code reproduces the reference version's
     per-RH prediction GeoTIFFs (e.g. RH98_Q1.tif) on the same tile, file by file.
@@ -22,11 +23,16 @@ def check_reproducibility(
     git refs that produced them. Rasters are read in row blocks so a full
     10980x10980 tile never sits in memory twice.
 
+    region = [col_off, row_off, width, height] compares only that part of each
+    raster, e.g. the 5x5 patches predicted with --data.init_args.debug True;
+    None compares the whole raster.
+
     Writes <save_dir>/per_file_diff.csv with one row per file:
       n_diff_pixels      pixels whose values differ (nodata included)
       n_nodata_mismatch  pixels that are nodata in one version but not the other
       max_abs_diff       largest |new - ref| where both are valid (stored units, i.e. dm)
-      valid_frac_ref/new fraction of valid pixels in each
+      valid_frac_ref/new fraction of valid pixels in each (within region); check it is
+                         not ~0, otherwise the comparison says little
     and prints a verdict line ending in "-> REPRODUCED" or "-> NOT REPRODUCED".
     """
     ref_dir, new_dir = Path(ref_dir).expanduser(), Path(new_dir).expanduser()
@@ -41,7 +47,7 @@ def check_reproducibility(
     for name in sorted(names_ref | names_new):
         row = {'file': name, 'in_ref': name in names_ref, 'in_new': name in names_new}
         if row['in_ref'] and row['in_new']:
-            row.update(_compare_pair(ref_dir / name, new_dir / name, nodata, block_rows))
+            row.update(_compare_pair(ref_dir / name, new_dir / name, nodata, block_rows, region))
         rows.append(row)
 
     df = pd.DataFrame(rows)
@@ -52,6 +58,8 @@ def check_reproducibility(
     both = df[df['in_ref'] & df['in_new']] if len(df) else df
     n_files_diff = int((both['n_diff_pixels'] > 0).sum()) if len(both) else 0
     reproduced = n_missing == 0 and n_files_diff == 0 and len(both) > 0
+    if len(both) and 'valid_frac_ref' in both:
+        print(f'Valid pixel fraction (ref), median over files: {both["valid_frac_ref"].median():.3f}')
     print(f'{len(both)} files compared, {n_missing} missing in one version, '
           f'{n_files_diff} with differing pixels -> {"REPRODUCED" if reproduced else "NOT REPRODUCED"}')
     if n_files_diff:
@@ -60,14 +68,16 @@ def check_reproducibility(
     return df
 
 
-def _compare_pair(fp_ref, fp_new, nodata, block_rows):
+def _compare_pair(fp_ref, fp_new, nodata, block_rows, region=None):
     with rasterio.open(fp_ref) as ref, rasterio.open(fp_new) as new:
         if (ref.width, ref.height) != (new.width, new.height):
             return {'shape_mismatch': True}
+        col0, row0, width, height = region or (0, 0, ref.width, ref.height)
+        width, height = min(width, ref.width - col0), min(height, ref.height - row0)
         n_diff = n_nodata_mismatch = n_valid_ref = n_valid_new = 0
         max_abs_diff = 0
-        for row_off in range(0, ref.height, block_rows):
-            win = Window(0, row_off, ref.width, min(block_rows, ref.height - row_off))
+        for row_off in range(row0, row0 + height, block_rows):
+            win = Window(col0, row_off, width, min(block_rows, row0 + height - row_off))
             v_ref = ref.read(1, window=win).astype(np.int32)
             v_new = new.read(1, window=win).astype(np.int32)
             valid_ref, valid_new = v_ref != nodata, v_new != nodata
@@ -78,7 +88,7 @@ def _compare_pair(fp_ref, fp_new, nodata, block_rows):
             both = valid_ref & valid_new
             if both.any():
                 max_abs_diff = max(max_abs_diff, int(np.abs(v_new[both] - v_ref[both]).max()))
-        n_pixels = ref.width * ref.height
+        n_pixels = width * height
     return {'shape_mismatch': False, 'n_diff_pixels': n_diff, 'n_nodata_mismatch': n_nodata_mismatch,
             'max_abs_diff': max_abs_diff,
             'valid_frac_ref': n_valid_ref / n_pixels, 'valid_frac_new': n_valid_new / n_pixels}
