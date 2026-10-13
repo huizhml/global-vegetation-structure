@@ -1,0 +1,12 @@
+# Time series: predict every growing-season image of a tile separately instead
+# of the yearly per-pixel median. Load after config/predict.yaml:
+#   python run.py predict -c config/predict.yaml -c config/predict_timeseries.yaml ...
+# Output per tile: <var>.tif with one band per image (band description
+# <date>_<S2 id>, same grid, dm scale and nodata as the yearly product) and
+# images.csv mapping bands to images.
+data:
+  init_args:
+    timeseries: True
+    timeseries_vars: [RH25_Q1, RH98_Q1]  # RH<0-100>_Q<0|1|2>; Q1 = median, Q0/Q2 = 95th/5th percentile
+    max_cloud_cover: 30  # eo:cloud_cover (%) filter in the STAC search
+    max_images: null  # all downloaded images

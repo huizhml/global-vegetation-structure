@@ -11,6 +11,7 @@ run_inference() {
     local save_dir=$3
     local meta_file=$4
     local year=$5
+    shift 5  # anything after year goes to run.py, e.g. -c config/predict_timeseries.yaml
 
     printf '>%.0s' {1..10}
     echo "Processing tile ID: $tile_id"
@@ -37,7 +38,7 @@ run_inference() {
         )
     fi
 
-    python run.py ${args[@]}
+    python run.py ${args[@]} "$@"
     # Capture the exit status of the command
     exit_status=$?
     if [ $exit_status -ne 0 ]; then

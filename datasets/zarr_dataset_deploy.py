@@ -51,6 +51,13 @@ LON_COS_MEAN = 0.3072
 LON_COS_STD = 0.5706 # TODO: load from file
 gdal.UseExceptions()
 
+
+def rh_channel(var: str) -> int:
+    """Model output channel of a variable name, e.g. 'RH98_Q1' -> 98 * 3 + 1 = 295."""
+    rh, q = var.split('_')
+    return int(rh[2:]) * 3 + int(q[1:])
+
+
 class BaseDeployDataset(Dataset):
     """
     Base class for deploy datasets.
@@ -71,10 +78,14 @@ class BaseDeployDataset(Dataset):
                  year=None,
                  max_images: int = None,
                  images_per_forward: int = 10,
+                 timeseries: bool = False,
+                 timeseries_vars: List[str] = None,
                  **kwargs):
         # ********** Set up parameters **********
         self.max_images = max_images # None = use every image in the store
         self.images_per_forward = images_per_forward # model batch size; bounds memory, not the image count
+        self.timeseries = timeseries # True: one band per image instead of the per-pixel median
+        self.timeseries_vars = list(timeseries_vars or ['RH25_Q1', 'RH98_Q1'])
         self.mask_with_scl = mask_with_scl
         self.patch_size = patch_size
         self.border = border
@@ -87,12 +98,7 @@ class BaseDeployDataset(Dataset):
         self.predict_full_profile = predict_full_profile
         self.year = year
         # ********** Set up RH & image indices **********
-        if predict_full_profile:
-            self.rh_idx = slice(0, 303)
-            self.rh_dim = 303
-        else:
-            self.rh_idx = [RH100_idx, RH98_idx]
-            self.rh_dim = 2
+        self._set_output_channels(predict_full_profile)
         self.tile_id = tile_id
         self.bands = bands or slice(12)
         
@@ -157,6 +163,19 @@ class BaseDeployDataset(Dataset):
     
     def __len__(self):
         return len(self.patch_coords_dict)
+
+    def _set_output_channels(self, predict_full_profile):
+        """Model output channels kept after each forward (crop_prediction)."""
+        if self.timeseries:
+            # only the requested variables, so GPU memory stays small with many images
+            self.rh_idx = [rh_channel(v) for v in self.timeseries_vars]
+            self.rh_dim = len(self.rh_idx)
+        elif predict_full_profile:
+            self.rh_idx = slice(0, 303)
+            self.rh_dim = 303
+        else:
+            self.rh_idx = [RH100_idx, RH98_idx]
+            self.rh_dim = 2
     
     def _select_images(self, n_images, metadata_file=None):
         """Store indices of the images to predict on, in the order they are stacked.
@@ -248,7 +267,8 @@ class BaseDeployDataset(Dataset):
         return prediction_no_border, esa_wc
 
     def _apply_masks(self, prediction_no_border, esa_wc, scl):
-        """Mask and take the per-pixel median over all images of one patch location."""
+        """Mask and take the per-pixel median over all images of one patch location
+        (or keep every image when timeseries=True)."""
         scl = scl[:, :, self.border:self.patch_size - self.border, self.border:self.patch_size - self.border]
 
         if self.mask_with_scl:
@@ -273,7 +293,9 @@ class BaseDeployDataset(Dataset):
         water_mask_esa = torch.mode(esa_wc, dim=0).values == ESA_WATER # predicted esa wc
         esa_wc_mask = esa_wc == ESA_SNOW
         prediction_no_border = torch.where(scl_mask | esa_wc_mask, torch.nan, prediction_no_border)
-        if self.save_intermediate_tif:
+        if self.timeseries:
+            pass  # keep every image: (n_images, n_vars, h, w); water/built-up masks below are still per tile
+        elif self.save_intermediate_tif:
             prediction_no_border = prediction_no_border[:, 295, :, :]
         else:
             prediction_no_border, _ = torch.nanmedian(prediction_no_border, dim=0)
@@ -284,6 +306,42 @@ class BaseDeployDataset(Dataset):
         prediction_no_border = prediction_no_border.cpu().numpy().astype(self.output_dtype)
         return prediction_no_border 
         
+
+    def _image_dates_ids(self):
+        """Date (YYYY-MM-DD) and S2 id of each predicted image, in the order they are stacked."""
+        from cftime import num2date
+        tvar = self.store[f'{self.key}time']
+        dates = num2date(tvar[:], tvar.attrs['units'], calendar=tvar.attrs.get('calendar', 'standard'))
+        ids = self.store[f'{self.key}id'][:]
+        img_idx = np.arange(len(dates))[self.img_sel]
+        return ([dates[i].strftime('%Y-%m-%d') for i in img_idx],
+                [ids[i].decode() if isinstance(ids[i], bytes) else str(ids[i]) for i in img_idx])
+
+    def _init_timeseries_output(self):
+        """One GeoTIFF per variable (e.g. RH98_Q1.tif) with one band per image, on the
+        same grid, scale and nodata as the yearly product; images.csv maps bands to images."""
+        dates, ids = self._image_dates_ids()
+        pd.DataFrame({'band': np.arange(1, len(dates) + 1), 'date': dates, 's2_id': ids}).to_csv(
+            self.prediction_dir / 'images.csv', index=False)
+        writers = []
+        for var in self.timeseries_vars:
+            writer = self.init_gtiff(self.prediction_fp.with_stem(var), n_bands=len(dates))
+            for b, (date, img_id) in enumerate(zip(dates, ids), start=1):
+                band = writer.GetRasterBand(b)
+                band.SetDescription(f'{date}_{img_id}')
+                band.SetNoDataValue(self.nodata_value)
+            writers.append(writer)
+        print(f'Time series: {len(dates)} images x {self.timeseries_vars} -> {self.prediction_dir}')
+        return writers
+
+    def _write_timeseries_patch(self, prediction, esa_wc, scl, idx):
+        y_topleft, x_topleft = self.patch_coords_dict[idx]
+        prediction_no_border = self._apply_masks(prediction, esa_wc, scl)  # (n_images, n_vars, h, w)
+        for v, writer in enumerate(self.tiff_writers):
+            for b in range(prediction_no_border.shape[0]):
+                writer.GetRasterBand(b + 1).WriteArray(prediction_no_border[b, v],
+                                                       xoff=x_topleft + self.border, yoff=y_topleft + self.border)
+
      
 class CachedDeployDataset(BaseDeployDataset):
     """
@@ -401,6 +459,9 @@ class ChunkedWriteDataset(BaseDeployDataset):
             'COMPRESS=None',
             'INTERLEAVE=BAND'
         ]
+        if self.timeseries:
+            self.tiff_writers = self._init_timeseries_output()
+            return
         if self.predict_full_profile:
             output_files = [self.prediction_fp.with_stem(f'RH{i}_Q{j}') for i in range(self.rh_dim//3) for j in range(3)]
         else:
@@ -415,6 +476,8 @@ class ChunkedWriteDataset(BaseDeployDataset):
         self.pred_table = np.empty((len(output_files)), dtype=dtype)
         
     def write_patch_predictions(self, prediction, esa_wc, scl, idx):
+        if self.timeseries:
+            return self._write_timeseries_patch(prediction, esa_wc, scl, idx)
         y_topleft, x_topleft = self.patch_coords_dict[idx]
         y_topleft = y_topleft + self.border
         x_topleft = x_topleft + self.border
@@ -426,7 +489,7 @@ class ChunkedWriteDataset(BaseDeployDataset):
         darr.compute(scheduler='threads')
 
 
-    def init_gtiff(self, prediction_fp: Path):
+    def init_gtiff(self, prediction_fp: Path, n_bands: int = 1):
         prediction_fp = prediction_fp.with_suffix('.tif')
         if prediction_fp.exists():
             os.remove(prediction_fp)
@@ -435,7 +498,7 @@ class ChunkedWriteDataset(BaseDeployDataset):
             str(prediction_fp),
             xsize=self.img_width,
             ysize=self.img_height,
-            bands=1,
+            bands=n_bands,
             eType=gdal.GDT_Int16,
             options=self.options
         )
@@ -468,7 +531,7 @@ class ChunkedWriteDataset(BaseDeployDataset):
 
     def finalize_output(self):
         """Called once after the last batch: write the per-image report, then close all GDAL datasets."""
-        if self.save_intermediate_tif:
+        if self.save_intermediate_tif and not self.timeseries:
             write_per_image_report(
                 out_dir=self.per_image_dir,
                 meta=self.per_image_meta,
@@ -576,9 +639,15 @@ class S2DatasetStream(BaseDeployDataset):
                  save_intermediate_tif: bool = False,
                  max_images: int = None,
                  images_per_forward: int = 10,
+                 timeseries: bool = False,
+                 timeseries_vars: List[str] = None,
+                 max_cloud_cover: float = 90,
                  **kwargs):
         self.max_images = max_images
         self.images_per_forward = images_per_forward
+        self.timeseries = timeseries # True: one band per image instead of the per-pixel median
+        self.timeseries_vars = list(timeseries_vars or ['RH25_Q1', 'RH98_Q1'])
+        self.max_cloud_cover = max_cloud_cover # STAC eo:cloud_cover filter when downloading
         if metadata_file != 'none':
             self.metadata_file = Path(metadata_file).expanduser()
         else:
@@ -609,7 +678,9 @@ class S2DatasetStream(BaseDeployDataset):
             self.h5_file.parent.mkdir(parents=True, exist_ok=True)
             print(f'{self.h5_file} does not exist, downloading...')
             if self.metadata_file is None:
-                self.download_tile_by_api()
+                self.download_tile_by_api(max_cloud_cover=self.max_cloud_cover)
+            elif self.timeseries:
+                raise ValueError('timeseries picks its images from the STAC API; set metadata_file to none')
             else:
                 self.download_tile()
         self.store = h5py.File(self.h5_file, 'r')
@@ -646,12 +717,7 @@ class S2DatasetStream(BaseDeployDataset):
             self.coords_input = np.stack([lat, sin_lon, cos_lon], axis=0).astype(np.float32)
 
         # ********** Set up RH & image indices **********
-        if predict_full_profile:
-            self.rh_idx = slice(0, 303)
-            self.rh_dim = 303
-        else:
-            self.rh_idx = [RH100_idx, RH98_idx]
-            self.rh_dim = 2
+        self._set_output_channels(predict_full_profile)
         self.tile_id = tile_id
         self.bands = slice(12)
         
@@ -770,6 +836,30 @@ class S2DatasetStream(BaseDeployDataset):
             print(f'{tile} has no images, bbox={bbox}, skipping...')
             self.h5_file.with_name(f'{tile}_no_images_in_growing_months').touch()
             raise RuntimeError(f'{tile} has no images in growing months, bbox={bbox}, skipping...')
+        if self.timeseries:
+            # every growing-season image under the cloud threshold (applied in the search)
+            df = df.drop_duplicates(subset='id')
+        else:
+            df = self._pick_best_images(df)
+        df = gpd.GeoDataFrame(df, geometry='geometry', crs='EPSG:4326')
+        # df.to_parquet(self.save_dir/ f'{self.year}_{tile}_images.parquet')
+        epsg = int(items[0].properties['proj:code'][5:])
+        items = [item for item in items.items if item.id in df['id'].values]
+        images = stack(items, bands, dtype='uint16', fill_value=np.uint16(0), epsg=epsg, resolution=10, rescale=False)
+        images = harmonize_to_old(images)
+        assert images.shape[2] == images.shape[3] == 10980, f'{tile} has incorrect shape {images.shape}'
+        images.name = 's2'
+        del images.attrs['spec']
+        del images.attrs['crs']
+        images = images.reset_coords(['proj:bbox'], drop=True)
+        t0=time.time()
+        images.to_netcdf(self.h5_file, engine='h5netcdf', encoding={'s2': {'zlib': False, 'chunksizes': (1, 1, 1024, 1024)}})
+        print(f'Time taken to save image: {time.time() - t0:.2f} seconds')
+        
+        
+    def _pick_best_images(self, df):
+        '''Yearly product: keep up to n_iamges_per_tile images, preferring full-coverage
+        orbits and low cloud cover.'''
         # get top 30 images, 10 from the best orbits and 20 from the rest
         df['s2:nodata_pixel_percentage'] = df['s2:nodata_pixel_percentage'].round()
         if (df['s2:nodata_pixel_percentage']==0).sum() > 0:
@@ -802,22 +892,8 @@ class S2DatasetStream(BaseDeployDataset):
             else:
                 idx = df.groupby('orbit')['eo:cloud_cover'].nsmallest(self.n_iamges_per_tile//2).index.get_level_values(1)
                 df = df.loc[idx]
-        df = gpd.GeoDataFrame(df, geometry='geometry', crs='EPSG:4326')
-        # df.to_parquet(self.save_dir/ f'{self.year}_{tile}_images.parquet')
-        epsg = int(items[0].properties['proj:code'][5:])
-        items = [item for item in items.items if item.id in df['id'].values]
-        images = stack(items, bands, dtype='uint16', fill_value=np.uint16(0), epsg=epsg, resolution=10, rescale=False)
-        images = harmonize_to_old(images)
-        assert images.shape[2] == images.shape[3] == 10980, f'{tile} has incorrect shape {images.shape}'
-        images.name = 's2'
-        del images.attrs['spec']
-        del images.attrs['crs']
-        images = images.reset_coords(['proj:bbox'], drop=True)
-        t0=time.time()
-        images.to_netcdf(self.h5_file, engine='h5netcdf', encoding={'s2': {'zlib': False, 'chunksizes': (1, 1, 1024, 1024)}})
-        print(f'Time taken to save image: {time.time() - t0:.2f} seconds')
-        
-        
+        return df
+
     def initialize_output(self):
         self.options = [
             'TILED=YES',
@@ -828,6 +904,9 @@ class S2DatasetStream(BaseDeployDataset):
             'COMPRESS=None',
             'INTERLEAVE=BAND'
         ]
+        if self.timeseries:
+            self.tiff_writers = self._init_timeseries_output()
+            return
         if self.predict_full_profile:
             output_files = [self.prediction_fp.with_stem(f'RH{i}_Q{j}') for i in range(self.rh_dim//3) for j in range(3)]
         else:
@@ -840,6 +919,8 @@ class S2DatasetStream(BaseDeployDataset):
         self.pred_table = np.empty((self.rh_dim), dtype=dtype)
         
     def write_patch_predictions(self, prediction, esa_wc, scl, idx):
+        if self.timeseries:
+            return self._write_timeseries_patch(prediction, esa_wc, scl, idx)
         y_topleft, x_topleft = self.patch_coords_dict[idx]
         y_topleft = y_topleft + self.border
         x_topleft = x_topleft + self.border
@@ -851,7 +932,7 @@ class S2DatasetStream(BaseDeployDataset):
         darr.compute(scheduler='threads')
 
 
-    def init_gtiff(self, prediction_fp: Path):
+    def init_gtiff(self, prediction_fp: Path, n_bands: int = 1):
         prediction_fp = prediction_fp.with_suffix('.tif')
         if prediction_fp.exists():
             os.remove(prediction_fp)
@@ -860,7 +941,7 @@ class S2DatasetStream(BaseDeployDataset):
             str(prediction_fp),
             xsize=self.img_width,
             ysize=self.img_height,
-            bands=1,
+            bands=n_bands,
             eType=gdal.GDT_Int16,
             options=self.options
         )
@@ -870,6 +951,18 @@ class S2DatasetStream(BaseDeployDataset):
         tiff_output.SetMetadataItem('Sentinel-2 tile', self.tile_id)
         return tiff_output
 
+
+    def _image_dates_ids(self):
+        with xr.open_dataset(self.h5_file, engine='h5netcdf') as ds:
+            img_idx = np.arange(ds.sizes['time'])[self.img_sel]
+            dates = pd.to_datetime(ds['time'].values[img_idx]).strftime('%Y-%m-%d').tolist()
+            ids = [str(i) for i in ds['id'].values[img_idx]] if 'id' in ds.coords else [''] * len(img_idx)
+        return dates, ids
+
+    def finalize_output(self):
+        for writer in self.tiff_writers:
+            writer.FlushCache()
+        self.tiff_writers = None
 
     def __del__(self):
         if hasattr(self, 'store'):

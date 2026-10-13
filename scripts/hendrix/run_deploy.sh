@@ -73,6 +73,28 @@ echo "meta_file: $meta_file"
 run_inference $tile_id $stream_input $save_dir $meta_file $year
 
 ;;
+3)
+# **************************************************************
+#    Time series: predict every growing-season image (cloud cover below
+#    max_cloud_cover) of one tile separately, no yearly median.
+#    Variables and threshold: config/predict_timeseries.yaml
+#    sbatch scripts/hendrix/run_deploy.sh 3 <tile_id> [year]
+#
+#    Inputs go to their own folder, so they never mix with the yearly
+#    20-image h5 files of the same tile.
+#    Result: ~/data/gvs/deploy/timeseries/<year>/<tile_id>/RH25_Q1.tif,
+#            RH98_Q1.tif (one band per image) + images.csv
+# **************************************************************
+tile_id=${2:?usage: run_deploy.sh 3 <tile_id> [year]}
+year=${3:-2020}
+save_dir=${HOME}/data/gvs/deploy/timeseries/${year}
+mkdir -p $save_dir
+
+run_inference $tile_id True $save_dir none $year \
+    -c config/predict_timeseries.yaml \
+    --data.init_args.pred_fp ${HOME}/data/gvs/deploy/inputs/timeseries_${year}
+
+;;
 *)
 echo "Invalid option"
 exit 1
