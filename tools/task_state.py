@@ -129,6 +129,8 @@ class TaskState:
         # Open-append-close per call, so a log is never held open and an idle
         # one can be deleted by compact(); the next write recreates it.
         with self._lock, open(self._log_file(), 'a') as fh:
+            if fh.tell() == 0:      # new log: same header as snapshot.tsv
+                lines.insert(0, _HEADER)
             fh.write(''.join(lines))
         if self._cache is not None:
             for key, status, t, info in rows:

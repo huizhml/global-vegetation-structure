@@ -182,8 +182,10 @@ _state_mark() {
     now=$(date -u +%Y-%m-%dT%H:%M:%S.%6NZ)
     [[ "${now}" == *N* ]] && now=$(date -u +%Y-%m-%dT%H:%M:%S.000000Z)   # BSD date
     mkdir -p "${dir}/log"
-    printf '%s\t%s\t%s\t%s\n' "${key}" "${status}" "${now}" "${info}" \
-        >> "${dir}/log/$(hostname -s)_$$_${job}.tsv"
+    local log="${dir}/log/$(hostname -s)_$$_${job}.tsv"
+    # new log: same header as snapshot.tsv (TaskState writes it too)
+    [ -s "${log}" ] || printf '#key\tstatus\ttime (UTC)\tinfo\n' >> "${log}"
+    printf '%s\t%s\t%s\t%s\n' "${key}" "${status}" "${now}" "${info}" >> "${log}"
 }
 
 # Usage: _state_done_keys <DIR>   -> keys whose newest status is done
