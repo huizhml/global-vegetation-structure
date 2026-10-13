@@ -29,6 +29,8 @@ data:
     chunk_size: 512
     predict_full_profile: True
     output_format: gtiff 
+    max_images: 20  # global deploy uses at most the 20 best images per tile; null = all images in the store
+    images_per_forward: 10  # images per model forward; lower it if GPU memory runs out
 
 model:
   class_path: models.vs_regression.VSRegression

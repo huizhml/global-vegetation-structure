@@ -26,7 +26,6 @@ import dask
 import dask.array as da
 import h5py
 import xarray as xr
-from collections import defaultdict
 from pystac_client.stac_api_io import StacApiIO
 import planetary_computer
 import pystac_client
@@ -70,8 +69,12 @@ class BaseDeployDataset(Dataset):
                  chunk_size=512,
                  debug=False,
                  year=None,
+                 max_images: int = None,
+                 images_per_forward: int = 10,
                  **kwargs):
         # ********** Set up parameters **********
+        self.max_images = max_images # None = use every image in the store
+        self.images_per_forward = images_per_forward # model batch size; bounds memory, not the image count
         self.mask_with_scl = mask_with_scl
         self.patch_size = patch_size
         self.border = border
@@ -118,28 +121,8 @@ class BaseDeployDataset(Dataset):
         self.crs = f'EPSG:{self.store[f"{self.key}epsg"][()].item()}'
         transformer = Transformer.from_crs(self.crs, "EPSG:4326", always_xy=True)
         n_images = self.store[f'{self.key}s2'].shape[0]
-        
-        if n_images <= 10: # Less than 10 images available, no need to cache predictions
-            self.img_slices = [slice(None)]
-        else:
-            if metadata_file != 'none':
-                self.metadata_file = Path(metadata_file).expanduser()
-                df = read_items_for_tiles(self.metadata_file, [self.tile_id],
-                                          columns=['id', 'eo:cloud_cover', 's2:mgrs_tile', 's2:nodata_pixel_percentage', 'orbit'])
-                if len(df) == 0:
-                    raise RuntimeError(f'No images found for tile {self.tile_id} in metadata file {self.metadata_file}')
-                ids_from_zarr = self.store[f'{self.key}id'][:]
-                df = df[df['id'].isin(ids_from_zarr)]
-                df = df.reset_index(drop=True)
-                df['s2:nodata_pixel_percentage'] = df['s2:nodata_pixel_percentage'].round()
-                df = df.sort_values(['s2:nodata_pixel_percentage', 'eo:cloud_cover']).iloc[:20]
-                ids = df['id']
-                idx = [np.where(ids_from_zarr == i)[0][0] for i in ids]# there exists duplicated images in the zarr store
-                self.img_slices = [idx[:10], idx[10:]]
-            else:
-                self.img_slices = [slice(0, 10), slice(10, 20)]
-            
-        
+        self.img_sel = self._select_images(n_images, metadata_file)
+
         if self.input_lat_lon:
             lon_mask = self.store[f'{self.key}x'][:].astype(np.float32) # in local crs
             lat_mask = self.store[f'{self.key}y'][:].astype(np.float32)
@@ -165,8 +148,7 @@ class BaseDeployDataset(Dataset):
         self.scl_exclude_labels = torch.tensor(SCL_EXCLUDE_LABELS, dtype=torch.uint16, device=device) # scl is uint16
         # self.esa_exclude_labels = torch.tensor([5, 8], dtype=torch.uint8, device=device) # built-up, water
         # self.scl_zero_canopy_height = torch.tensor([5, 6], dtype=torch.uint16, device=device)  # "not vegetated", "water"
-        self.prediction_cache = defaultdict(list)
-        
+
         if not prediction_dir:
             self.prediction_dir = zarr_store_path.parent / f'predictions_{self.year}' / self.tile_id
         else:
@@ -176,9 +158,31 @@ class BaseDeployDataset(Dataset):
     def __len__(self):
         return len(self.patch_coords_dict)
     
+    def _select_images(self, n_images, metadata_file=None):
+        """Store indices of the images to predict on, in the order they are stacked.
+
+        With a metadata file, images are ranked by nodata % then cloud cover and
+        duplicates in the store are dropped; otherwise they keep store order.
+        `max_images` keeps the first N (None = all), e.g. 20 for the global deploy.
+        """
+        if metadata_file is None or metadata_file == 'none':
+            return slice(0, self.max_images)
+        self.metadata_file = Path(metadata_file).expanduser()
+        df = read_items_for_tiles(self.metadata_file, [self.tile_id],
+                                  columns=['id', 'eo:cloud_cover', 's2:mgrs_tile', 's2:nodata_pixel_percentage', 'orbit'])
+        if len(df) == 0:
+            raise RuntimeError(f'No images found for tile {self.tile_id} in metadata file {self.metadata_file}')
+        ids_from_zarr = self.store[f'{self.key}id'][:]
+        df = df[df['id'].isin(ids_from_zarr)]
+        df = df.reset_index(drop=True)
+        df['s2:nodata_pixel_percentage'] = df['s2:nodata_pixel_percentage'].round()
+        df = df.sort_values(['s2:nodata_pixel_percentage', 'eo:cloud_cover']).iloc[:self.max_images]
+        return [np.where(ids_from_zarr == i)[0][0] for i in df['id']] # there exists duplicated images in the zarr store
+
     def __getitem__(self, idx):
-        img_batch_idx, y_topleft, x_topleft = self.patch_coords_dict[idx]
-        # img_batch_idx is either :10 or 10:
+        # One sample = every selected image at one patch location; the model
+        # splits it into chunks of images_per_forward.
+        y_topleft, x_topleft = self.patch_coords_dict[idx]
         # Extract patch with border handling
         if y_topleft < 0:
             pad_h = (self.border, 0)
@@ -193,7 +197,7 @@ class BaseDeployDataset(Dataset):
         else:
             pad_w = (0, 0)
 
-        patch = self.store[f'{self.key}s2'][img_batch_idx, :,  max(y_topleft, 0):y_topleft+self.patch_size, max(x_topleft, 0):x_topleft+self.patch_size]
+        patch = self.store[f'{self.key}s2'][self.img_sel, :,  max(y_topleft, 0):y_topleft+self.patch_size, max(x_topleft, 0):x_topleft+self.patch_size]
         patch = np.pad(patch, ((0,0), (0,0), pad_h, pad_w), mode='symmetric')
         image = patch[:, :-1, :, :]
         scl = patch[:, -1:, :, :]
@@ -226,37 +230,27 @@ class BaseDeployDataset(Dataset):
                 if x_coord > x_dim - self.patch_size:
                     # move last patch left if it would exceed the image right border
                     x_coord = x_dim - self.patch_size
-                for img_slice in self.img_slices:
-                    patch_coords_dict[patch_idx] = (img_slice, y_coord - self.border, x_coord - self.border)
-                    patch_idx += 1
-                # patch_coords_dict[patch_idx] = (slice(0,10), y_coord - self.border, x_coord - self.border)
-                # patch_coords_dict[patch_idx+1] = (slice(10,20), y_coord - self.border, x_coord - self.border)
-                # patch_idx += 2 # 2 images per patch
+                patch_coords_dict[patch_idx] = (y_coord - self.border, x_coord - self.border)
+                patch_idx += 1
         return patch_coords_dict
 
-    
-    def _apply_masks(self, prediction, scl, x_topleft, y_topleft):
-        
-        prediction_no_border = prediction[:, self.rh_idx, self.border:self.patch_size - self.border, self.border:self.patch_size - self.border]
-        esa_wc = prediction[:, -12:, self.border:self.patch_size - self.border, self.border:self.patch_size - self.border]
-        esa_wc = torch.argmax(esa_wc, dim=1, keepdim=True).to(torch.int8)
+    def crop_prediction(self, prediction):
+        """Keep what _apply_masks needs from one forward chunk: the RH channels and
+        the ESA WorldCover class, border removed.
+
+        Called right after each forward so the full output (with border and all
+        channels) can be freed before the next chunk; contiguous() makes the crop
+        its own copy rather than a view that would keep the full tensor alive.
+        """
+        inner = slice(self.border, self.patch_size - self.border)
+        prediction_no_border = prediction[:, self.rh_idx, inner, inner].contiguous()
+        esa_wc = torch.argmax(prediction[:, -12:, inner, inner], dim=1, keepdim=True).to(torch.int8)
+        return prediction_no_border, esa_wc
+
+    def _apply_masks(self, prediction_no_border, esa_wc, scl):
+        """Mask and take the per-pixel median over all images of one patch location."""
         scl = scl[:, :, self.border:self.patch_size - self.border, self.border:self.patch_size - self.border]
-        
-        location_key = f'{y_topleft}_{x_topleft}'
-        if len(self.img_slices) > 1 and len(self.prediction_cache[location_key]) < len(self.img_slices)-1:
-            self.prediction_cache[location_key].append(prediction_no_border)
-            self.prediction_cache[f'{location_key}_scl'].append(scl)
-            self.prediction_cache[f'{location_key}_esa_wc'].append(esa_wc)
-            return None
-        
-        if len(self.img_slices) > 1 and len(self.prediction_cache[location_key]) == len(self.img_slices)-1:
-            prediction_no_border = torch.cat(self.prediction_cache[location_key] + [prediction_no_border], dim=0)
-            scl = torch.cat(self.prediction_cache[f'{location_key}_scl'] + [scl], dim=0)
-            esa_wc = torch.cat(self.prediction_cache[f'{location_key}_esa_wc'] + [esa_wc], dim=0)
-            del self.prediction_cache[location_key]
-            del self.prediction_cache[f'{location_key}_scl']
-            del self.prediction_cache[f'{location_key}_esa_wc']
-            
+
         if self.mask_with_scl:
             # mask snow and cloud (medium and high density). In some cases the probability cloud mask might miss some clouds
             scl_mask = torch.isin(scl, self.scl_exclude_labels)
@@ -268,7 +262,7 @@ class BaseDeployDataset(Dataset):
         scl[nodata_mask] = float('nan')
         esa_wc = esa_wc.to(torch.float32)
         esa_wc[nodata_mask] = float('nan')
-        nodata_mask = nodata_mask.repeat(1, 303, 1, 1)
+        nodata_mask = nodata_mask.repeat(1, prediction_no_border.shape[1], 1, 1)
         prediction_no_border[nodata_mask] = float('nan') # mask the prediction when input is nodata
         water_mask_scl = torch.mode(scl, dim=0).values == SCL_WATER #!!! this is not nan mode,mode value could be nan, resulting in all-false water mask
         
@@ -308,13 +302,11 @@ class CachedDeployDataset(BaseDeployDataset):
         self.prediction_fp = self.prediction_dir / f'{self.tile_id}'
         self.prediction_fp.mkdir(exist_ok=True)
         
-    def write_patch_predictions(self, patch_pred, scl, idx):
-        y_topleft, x_topleft = self.patch_coords_dict[idx][1:]
+    def write_patch_predictions(self, patch_pred, esa_wc, scl, idx):
+        y_topleft, x_topleft = self.patch_coords_dict[idx]
         y_topleft = y_topleft + self.border
-        x_topleft = x_topleft + self.border     
-        prediction_no_border = self._apply_masks(patch_pred, scl, x_topleft, y_topleft)
-        if prediction_no_border is None:
-            return
+        x_topleft = x_topleft + self.border
+        prediction_no_border = self._apply_masks(patch_pred, esa_wc, scl)
         self.full_pred[:,y_topleft:y_topleft + self.patch_size_no_border, x_topleft:x_topleft + self.patch_size_no_border] = prediction_no_border
             
             
@@ -422,13 +414,11 @@ class ChunkedWriteDataset(BaseDeployDataset):
         )
         self.pred_table = np.empty((len(output_files)), dtype=dtype)
         
-    def write_patch_predictions(self, prediction,scl, idx):
-        y_topleft, x_topleft = self.patch_coords_dict[idx][1:]
+    def write_patch_predictions(self, prediction, esa_wc, scl, idx):
+        y_topleft, x_topleft = self.patch_coords_dict[idx]
         y_topleft = y_topleft + self.border
         x_topleft = x_topleft + self.border
-        prediction_no_border = self._apply_masks(prediction, scl, x_topleft, y_topleft)
-        if prediction_no_border is None:
-            return
+        prediction_no_border = self._apply_masks(prediction, esa_wc, scl)
         for i in range(len(self.tiff_writers)):
             self.pred_table[i] = (self.tiff_writers[i], prediction_no_border[i])
         darr = da.from_array(self.pred_table, chunks=(1,))
@@ -461,8 +451,8 @@ class ChunkedWriteDataset(BaseDeployDataset):
         tvar = self.store[f'{self.key}time']
         dates = num2date(tvar[:], tvar.attrs['units'], calendar=tvar.attrs.get('calendar', 'standard'))
         ids = self.store[f'{self.key}id'][:]
-        # _apply_masks concatenates images in img_slices order, so outputs must follow the same order
-        img_idx = np.concatenate([np.arange(len(dates))[s] for s in self.img_slices])
+        # predictions are stacked in img_sel order, so outputs must follow the same order
+        img_idx = np.arange(len(dates))[self.img_sel]
         self.per_image_meta = pd.DataFrame({
             'img_idx': img_idx,
             'date': [dates[i].strftime('%Y-%m-%d') for i in img_idx],
@@ -584,7 +574,11 @@ class S2DatasetStream(BaseDeployDataset):
                  impute_cloud_with_mean: bool = False,
                  download_data: bool = False,
                  save_intermediate_tif: bool = False,
+                 max_images: int = None,
+                 images_per_forward: int = 10,
                  **kwargs):
+        self.max_images = max_images
+        self.images_per_forward = images_per_forward
         if metadata_file != 'none':
             self.metadata_file = Path(metadata_file).expanduser()
         else:
@@ -665,12 +659,10 @@ class S2DatasetStream(BaseDeployDataset):
             self.img_idx = slice(None)
         else:
             self.img_idx = slice(img_idx, img_idx + 1)
-        n_images = self.store[f'{self.key}s2'].shape[0]
-        if n_images <= 10: # no need to cache predictions
-            self.img_slices = [slice(None)]
-        else:
-            self.img_slices = [slice(0,10), slice(10,20)]
-        
+        # The h5 file already holds the images picked at download time, so no
+        # metadata re-ranking here; h5py also needs a slice or increasing indices.
+        self.img_sel = slice(0, self.max_images)
+
         self.patch_coords_dict = self._get_patch_coords()
         print('--------------------------------')
         print(f"Image shape: {self.img_width}, {self.img_height}")
@@ -693,8 +685,7 @@ class S2DatasetStream(BaseDeployDataset):
         self.esa_built_up = 5
         self.esa_water = 8
         # self.scl_zero_canopy_height = torch.tensor([5, 6], dtype=torch.uint16, device=device)  # "not vegetated", "water"
-        self.prediction_cache = defaultdict(list)
-        
+
         if not prediction_dir:
             self.prediction_dir = self.h5_file.parent.parent / f'predictions_{self.year}' / self.tile_id
         else:
@@ -848,22 +839,16 @@ class S2DatasetStream(BaseDeployDataset):
         )
         self.pred_table = np.empty((self.rh_dim), dtype=dtype)
         
-    def write_patch_predictions(self, prediction,scl, idx):
-        y_topleft, x_topleft = self.patch_coords_dict[idx][1:]
+    def write_patch_predictions(self, prediction, esa_wc, scl, idx):
+        y_topleft, x_topleft = self.patch_coords_dict[idx]
         y_topleft = y_topleft + self.border
         x_topleft = x_topleft + self.border
-        prediction_no_border = self._apply_masks(prediction, scl, x_topleft, y_topleft)
-        if prediction_no_border is None:
-            return
+        prediction_no_border = self._apply_masks(prediction, esa_wc, scl)
         for i in range(self.rh_dim):
             self.pred_table[i] = (self.tiff_writers[i], prediction_no_border[i])
         darr = da.from_array(self.pred_table, chunks=(1,))
         darr = darr.map_blocks(write_patch_predictions, x_topleft, y_topleft, self.nodata_value, meta=np.array((1,2), dtype=darr.dtype))
         darr.compute(scheduler='threads')
-        if self.prediction_cache.get(f'{y_topleft}_{x_topleft}') is not None:
-            del self.prediction_cache[f'{y_topleft}_{x_topleft}']
-            del self.prediction_cache[f'{y_topleft}_{x_topleft}_scl']
-            del self.prediction_cache[f'{y_topleft}_{x_topleft}_esa_wc']
 
 
     def init_gtiff(self, prediction_fp: Path):

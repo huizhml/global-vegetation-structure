@@ -245,15 +245,17 @@ class BaseModel(LightningModule):
     
     @torch.no_grad()
     def _predict_step_for_large_tile(self, sample, batch_idx):
-        # y_topleft, x_topleft = self.trainer.datamodule.pred_dataset.patch_coords_dict[batch_idx][1]
         if self.feed_latlon:
             x = self.transform(sample[0])
             x = torch.cat([x, sample[-1]], dim=1)
         else:
             x = self.transform(sample[0])
-        # y_hat = self.forward(x.half())
-        y_hat = self.forward(x.float())
-        self.trainer.datamodule.pred_dataset.write_patch_predictions(y_hat, sample[1], batch_idx)
+        # One sample holds every image at this patch location. Run them through
+        # the model in chunks to bound memory, cropping each chunk's output at once.
+        ds = self.trainer.datamodule.pred_dataset
+        k = ds.images_per_forward
+        rh, esa_wc = zip(*(ds.crop_prediction(self.forward(x[i:i + k].float())) for i in range(0, len(x), k)))
+        ds.write_patch_predictions(torch.cat(rh), torch.cat(esa_wc), sample[1], batch_idx)
 
         
     @torch.no_grad()

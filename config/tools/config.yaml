@@ -100,6 +100,24 @@ tools:
     row_labels: null  # keep the rh index (RH10..RH100); set a list only for single-row tables
 
   # =========================================================================
+  # tools/check_reproducibility.py
+  # =========================================================================
+  # Check that new deploy code reproduces the reference (old) code's per-RH
+  # GeoTIFFs on the same tile, file by file. Writes per_file_diff.csv to
+  # save_dir. Predict the tile with both code versions first (ref_dir, new_dir).
+  #   python -m tools.run run=check_reproducibility run.tile_id=32UNG
+  check_reproducibility:
+    _target_: tools.check_reproducibility.check_reproducibility
+    target_type: function
+    tile_id: ???
+    save_dir: ${root_data_dir}/deploy/reproducibility/{tile_id}
+    ref_dir: ${.save_dir}/ref/{tile_id}  # run_inference writes into <dir>/<tile_id>
+    new_dir: ${.save_dir}/new/{tile_id}
+    ref_label: ref  # shown in the report, e.g. the git ref behind ref_dir
+    new_label: new
+    nodata: 32767
+
+  # =========================================================================
   # tools/gedi_penetration_bias.py
   # =========================================================================
   # Diagnose whether VSM sheds raw GEDI's low-sensitivity penetration bias,
