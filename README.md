@@ -33,9 +33,9 @@ Taken together, RH0 … RH100 for a pixel make a cumulative vertical profile. Yo
 
 ### Environment
 
-There is no pinned `requirements.txt`. The main dependencies are:
+The main dependencies are:
 
-- **Modelling:** `torch`, `lightning`, `jsonargparse`, `kornia`, `timm`, `ffcv`, `wandb`, `onnxruntime-gpu`
+- **Modelling:** `torch`, `lightning`, `jsonargparse`, `kornia`, `timm`, `ffcv`, `wandb`
 - **Geospatial:** `gdal`, `rasterio`, `rio-cogeo`, `geopandas`, `dask-geopandas`, `xarray`, `stackstac`, `pystac`, `planetary-computer`, `earthengine-api`
 - **Data / compute:** `dask`, `dask-jobqueue`, `h5py`, `zarr`, `pyarrow`, `numpy`, `pandas`, `scipy`, `scikit-learn`
 - **Config / plotting:** `hydra-core`, `omegaconf`, `matplotlib`, `seaborn`, `contextily`
