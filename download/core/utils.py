@@ -575,12 +575,26 @@ def shapely_to_geojson(geom: gpd.GeoSeries):
     return geom
 
 
+# A dropped stream (ChunkedEncodingError) or a stalled one (read timeout) is
+# retried here for this one table, instead of failing the whole dask task.
+@backoff.on_exception(backoff.expo,
+                      (requests.ConnectionError, requests.Timeout,
+                       requests.exceptions.ChunkedEncodingError),
+                      max_tries=5,
+                      max_value=60,
+                      # not backoff_hdlr: it prints args, here the whole serialized fc
+                      on_backoff=lambda d: print(
+                          f"ee_fc_to_gpd retry {d['tries']} in {d['wait']:.0f}s: {d['exception']!r}"),
+)
 def ee_fc_to_gpd(fc: ee.FeatureCollection):
     """
     Convert an Earth Engine feature collection to a GeoPandas GeoDataFrame.
     """
     download_id = ee.data.getTableDownloadId({'table': fc, 'fileFormat': 'csv'})
-    res = requests.get(ee.data.makeTableDownloadUrl(download_id))
+    # Without a timeout a connection GEE stops sending on hangs the worker
+    # forever. The read timeout is per gap between bytes, not the whole download;
+    # GEE computes the table before the first byte, hence the long one.
+    res = requests.get(ee.data.makeTableDownloadUrl(download_id), timeout=(30, 600))
     if res.status_code == 200:
         data = StringIO(res.content.decode('utf-8'))
         if data.getvalue().strip() == '':
