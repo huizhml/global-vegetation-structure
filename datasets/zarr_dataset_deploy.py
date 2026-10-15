@@ -826,7 +826,6 @@ class S2DatasetStream(BaseDeployDataset):
         
         if len(items) == 0:
             print(f'{tile} has no images, bbox={bbox}, skipping...')
-            self.h5_file.with_name(f'{tile}_no_images').touch()
             raise RuntimeError(f'{tile} has no images, bbox={bbox}, skipping...')
         df = gpd.GeoDataFrame.from_features(items.to_dict(), crs='epsg:4326')
         df['id'] = df['s2:product_uri'].str.replace(r'_[A-Z]\d{4}', '', regex=True).str.replace('.SAFE', '')
@@ -834,7 +833,6 @@ class S2DatasetStream(BaseDeployDataset):
         df = df[month.isin(row.growing_months)]
         if len(df) == 0:
             print(f'{tile} has no images, bbox={bbox}, skipping...')
-            self.h5_file.with_name(f'{tile}_no_images_in_growing_months').touch()
             raise RuntimeError(f'{tile} has no images in growing months, bbox={bbox}, skipping...')
         if self.timeseries:
             # every growing-season image under the cloud threshold (applied in the search)

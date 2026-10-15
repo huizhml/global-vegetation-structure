@@ -141,7 +141,7 @@ def main(cfg: DictConfig):
     #         idx = i
     #         break
     idx = 0
-    for i in range(idx, idx+2):
+    for i in range(idx, idx+1):  # one sample holds every image at a patch location
         image, scl, latlon = dataset[i]
         # image = image[5:6]
         # scl = scl[5:6]

@@ -251,6 +251,20 @@ download:
     prioritized_countries: []
     s2_grid_file: ~/data/gvs/s2_tiles_with_growing_months.parquet
 
+  # deploy/schedule_tasks.py
+  # Worklist (tile_id,year) of the S2 tiles of some countries over several years
+  # for yearly (median) prediction, one row per array task:
+  #   python -m download.run run=country_tile_years
+  #   sbatch --array=1-<rows> scripts/hendrix/run_deploy.sh predict_worklist <out_file>
+  #   sbatch --array=1-<rows> scripts/hendrix/run_cpu.sh translate_worklist <out_file>  # COG
+  country_tile_years:
+    _target_: deploy.schedule_tasks.write_country_tile_years
+    target_type: function
+    countries: [Denmark]  # ADMIN names in the Natural Earth countries file
+    years: [2018, 2019, 2021, 2022, 2023, 2024, 2025]  # 2020 skipped: the global product has it
+    out_file: ~/data/gvs/01_derived_ancillary/dk_tile_years_2018_2025.csv
+    s2_grid_file: ~/data/gvs/01_derived_ancillary/s2_tiles_with_growing_months.parquet
+
   # download/core/items_store.py
   # Build the one-row-group-per-zone items store from existing part files and
   # verify it against them (structure, row counts, per-tile equality, read cost).

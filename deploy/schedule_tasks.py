@@ -72,3 +72,27 @@ def preview_job_allocation(items_file: str, n_jobs: int, prioritized_countries=N
     print(f'tiles/job min={df.n_tiles.min()} max={df.n_tiles.max()} | '
           f'zones/job median={int(df.n_zones.median())} max={df.n_zones.max()}')
     return df
+
+
+def write_country_tile_years(countries, years, out_file: str, s2_grid_file: str,
+                             countries_file: str = COUNTRIES_FILE, **kwargs):
+    """Write a worklist CSV (tile_id,year) with every S2 tile intersecting `countries`
+    for each of `years`, one row per array task of `run_deploy.sh predict_worklist`
+    and `run_cpu.sh translate_worklist`.
+
+    Also records the expected keys (<year>_<tile_id>) of both steps in
+    <out_file without .csv>_state/{predict,translate}, so state_summary can count
+    tile-years that were never started.
+    """
+    from tools.task_state import TaskState
+    tiles = sorted(prioritized_tiles(countries, s2_grid_file, countries_file))
+    df = pd.DataFrame([(t, y) for y in years for t in tiles], columns=['tile_id', 'year'])
+    out_file = Path(out_file).expanduser()
+    out_file.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(out_file, index=False)
+    keys = [f'{y}_{t}' for t, y in zip(df['tile_id'], df['year'])]
+    for step in ['predict', 'translate']:
+        TaskState(out_file.parent / f'{out_file.stem}_state' / step).set_expected(keys, source=str(out_file))
+    print(f'{len(tiles)} tiles x {len(years)} years = {len(df)} rows -> {out_file}')
+    print('Tiles:', ' '.join(tiles))
+    return df

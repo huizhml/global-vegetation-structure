@@ -26,6 +26,40 @@ echo "********************************************************************"
 
 source scripts/hendrix/utils.sh
 
+# Translate one tile-year of a worklist to COG per array task.
+# Same worklist as `run_deploy.sh predict_worklist` (CSV with header tile_id,year);
+# run it after the predictions are done. Progress: <worklist without .csv>_state/translate
+#   conda activate inference
+#   sbatch --array=1-<n_rows> scripts/hendrix/run_cpu.sh translate_worklist \
+#       ~/data/gvs/01_derived_ancillary/dk_tile_years_2018_2025.csv
+translate_worklist() {
+    local worklist=${1:?usage: run_cpu.sh translate_worklist <worklist.csv> [variant]}
+    local variant=${2:-original}
+    local line_num=$(( ${SLURM_ARRAY_TASK_ID:-1} + 1 )) # line 1 is the header
+    local tile_id year
+    IFS=, read -r tile_id year <<< "$(sed -n "${line_num}p" $worklist | tr -d '\r')"
+    [ -z "$tile_id" ] && { echo "No row $line_num in $worklist" >&2; return 1; }
+
+    local state_dir=${worklist%.*}_state key=${year}_${tile_id}
+    if [ "$(state_status $state_dir/translate $key | cut -f1)" == done ]; then
+        echo "$key already translated, skipping"
+        return 0
+    fi
+    if [ "$(state_status $state_dir/predict $key | cut -f1)" != done ]; then
+        echo "$key is not predicted yet ($state_dir/predict), skipping" >&2
+        return 1
+    fi
+    local t0=$SECONDS rc
+    run_translate $tile_id $year $variant
+    rc=$?
+    if [ $rc -eq 0 ]; then
+        state_mark $state_dir/translate $key done "$(( SECONDS - t0 ))s"
+    else
+        state_mark $state_dir/translate $key failed "run_translate rc=$rc"
+    fi
+    return $rc
+}
+
 case $1 in
 1) 
 # **************************************************************
@@ -113,6 +147,9 @@ srun --ntasks=${SLURM_NTASKS:-1} --cpus-per-task=${SLURM_CPUS_PER_TASK:-1} \
         run.worklist=$tile_id_file \
         run.src_root=${base}/geotiff run.dst_root=${base}/cog \
         run.pattern="$pattern" || exit $?
+;;
+translate_worklist)
+"$@"
 ;;
 *)
 echo "Invalid option"

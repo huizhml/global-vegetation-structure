@@ -103,7 +103,7 @@ tools:
   # Check that new deploy code reproduces the reference (old) code's per-RH
   # GeoTIFFs on the same tile, file by file. Writes per_file_diff.csv to
   # save_dir. Predict the tile with both code versions first (ref_dir, new_dir);
-  # `run_deploy.sh 4` does all of it.
+  # `run_deploy.sh check_reproducibility` does all of it.
   #   python -m tools.run run=check_reproducibility run.tile_id=32UNG
   check_reproducibility:
     _target_: tools.check_reproducibility.check_reproducibility
