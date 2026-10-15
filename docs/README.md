@@ -6,12 +6,13 @@
   </a>
 </p>
 
-VSM brings a vertical dimension to global vegetation mapping, extending beyond canopy height to characterzing vegetation structure at 10 m resolution. 
+The VSM brings a vertical dimension to global vegetation mapping, extending beyond canopy height to characterzing vegetation structure at 10 m resolution. 
 Trained with 178 million sparse [GEDI](https://gedi.umd.edu/) lidar observations, a deep learning model translates Sentinel-2 imagery into continuous maps of 101 relative height metrics (RH0–RH100), each with predictive quantiles that describe its uncertainty.
 By capturing vegetation structure beyond canopy height, VSM supports applications in forest monitoring, biodiversity assessment, and ecosystem research.
 
 ## Explore
 
+- 📄 **Preprint:** [eartharxiv.org/repository/view/15380](https://eartharxiv.org/repository/view/15380/)
 - 🗺️ **Interactive map:** [huizhml.github.io/map-explorer](https://huizhml.github.io/map-explorer/)
 - 💻 **Code:** [github.com/huizhml/global-vegetation-structure](https://github.com/huizhml/global-vegetation-structure) 
 - 📦 **Storage:** `s3://geoai-ucph/gvsm/` on the endpoint `https://data.source.coop`
@@ -21,7 +22,7 @@ By capturing vegetation structure beyond canopy height, VSM supports application
 | | |
 |---|---|
 | Variable | Relative height profile (RH0 - RH100) , in decimeters |
-| Uncertainty | Median (Q1) available,  $5^{th}$ percentile(Q2) and $95^{th}$ percentile(Q0) coming soon |
+| Uncertainty | Median (Q1) available; 5th percentile (Q2) and 95th percentile (Q0) coming soon |
 | Resolution | 10 m (main product), 1 km (global mosaics) |
 | Coverage | Global land |
 | Years | 2020 (available), 2024 (in preparation) |
@@ -138,7 +139,19 @@ The COGs also open directly in QGIS (*Layer → Add Raster Layer → Protocol: H
 
 ## Citation
 
-*Paper in preparation. Citation will be added here.*
+Zhang, Hui, Nico Lang, Mikolaj Mazurczyk, Stefan Oehmcke, Ke Huang, Martin Brandt, Rasmus Fensholt, Ankit Kariryaa, and Christian Igel. "A vertical vegetation structure model of the Earth." EarthArXiv preprint (2026). [https://doi.org/10.31223/X5M22F](https://doi.org/10.31223/X5M22F)
+
+```bibtex
+@misc{zhang2026vertical,
+  title     = {A vertical vegetation structure model of the {Earth}},
+  author    = {Zhang, Hui and Lang, Nico and Mazurczyk, Mikolaj and Oehmcke, Stefan and Huang, Ke and Brandt, Martin and Fensholt, Rasmus and Kariryaa, Ankit and Igel, Christian},
+  year      = {2026},
+  publisher = {EarthArXiv},
+  note      = {Preprint},
+  doi       = {10.31223/X5M22F},
+  url       = {https://doi.org/10.31223/X5M22F}
+}
+```
 
 ## Contact
 
