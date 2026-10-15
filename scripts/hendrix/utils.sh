@@ -46,10 +46,11 @@ run_inference() {
         rm -rf $save_dir/${tile_id}
     else
         echo "Prediction command completed successfully"
-        touch ${inference_flag}
+        # Only submit.sh sets inference_flag; bare `touch` errors without it.
+        [ -n "${inference_flag}" ] && touch "${inference_flag}"
     fi
     printf '>%.0s' {1..10}
-
+    return $exit_status
 }
 
 # GeoTIFF -> COG for one tile.
@@ -141,4 +142,49 @@ read_line_from_csv() {
         year=2017
     fi
     echo $tile_id $year
+}
+
+# ----------------------------- task state -----------------------------------
+# Per-key progress in the tools/task_state.py format (append-only logs, one per
+# process), instead of one flag file per key. Read it with
+#   python -m tools.run run=state_summary run.path=<DIR>
+
+# Usage: state_mark <DIR> <KEY> <started|done|failed|reset> [INFO]
+state_mark() {
+    local dir=$1 key=$2 status=$3 info=${4:-}
+    local job=${SLURM_JOB_ID:-local}
+    [ -n "${SLURM_PROCID:-}" ] && job="${job}.${SLURM_PROCID}"
+    info=$(printf '%s' "${info}" | tr '\t\n\r' '   ' | cut -c1-500)
+    # UTC, fixed width, so string order is time order (see task_state.py)
+    local now=$(date -u +%Y-%m-%dT%H:%M:%S.%6NZ)
+    [[ "${now}" == *N* ]] && now=$(date -u +%Y-%m-%dT%H:%M:%S.000000Z)   # BSD date
+    mkdir -p "${dir}/log"
+    local log="${dir}/log/$(hostname -s)_$$_${job}.tsv"
+    [ -s "${log}" ] || printf '#key\tstatus\ttime (UTC)\tinfo\n' >> "${log}"
+    printf '%s\t%s\t%s\t%s\n' "${key}" "${status}" "${now}" "${info}" >> "${log}"
+}
+
+# Usage: state_status <DIR> <KEY>  -> "<status>\t<info>" of the newest line for
+# KEY (same rule as TaskState.load), nothing if KEY was never marked.
+state_status() {
+    local dir=$1 key=$2 files=() f
+    for f in "${dir}/snapshot.tsv" "${dir}"/log/*.tsv; do
+        [ -f "${f}" ] && files+=("${f}")
+    done
+    [ "${#files[@]}" -eq 0 ] && return 0
+    awk -F'\t' -v k="${key}" 'NF == 4 && $1 == k && ($2 == "done" || $2 == "failed" || $2 == "reset" || $2 == "started") {
+            if (t == "" || ($3 "") >= t) { t = $3 ""; s = $2; i = $4 }
+        }
+        END { if (s != "") print s "\t" i }' "${files[@]}"
+}
+
+# Usage: job_alive <SLURM_JOB_ID>  -> 0 the job is in squeue, 1 it is not,
+# 2 unknown (squeue failed, e.g. slurmctld not responding). Callers must treat 2
+# as "maybe alive". `squeue -j` cannot be used: it also fails for a finished job.
+# A "started" key whose job is not alive was interrupted (see task_state.py).
+job_alive() {
+    [ -n "$1" ] || return 1
+    local jobs
+    jobs=$(squeue -h -u "${USER}" -o %A 2>/dev/null) || return 2
+    grep -qxF -- "$1" <<< "${jobs}"
 }

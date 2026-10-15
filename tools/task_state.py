@@ -44,14 +44,20 @@ Bash can append in the same format (one line per write, to its own file):
 import os
 import re
 import socket
+import subprocess
 import threading
 import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-DONE, FAILED, RESET = 'done', 'failed', 'reset'
-_STATUSES = {DONE, FAILED, RESET}
+DONE, FAILED, RESET, STARTED = 'done', 'failed', 'reset', 'started'
+# started: the work began and has not finished yet. Never stored as "running":
+# a job killed by SIGKILL, OOM or a node failure cannot write anything, so a
+# stored running would outlive it. running vs interrupted is decided when the
+# state is read, from the job id in the info ("job <id> ...") and squeue.
+_STATUSES = {DONE, FAILED, RESET, STARTED}
+_JOB = re.compile(r'\bjob (\d+)')
 _OFFSET = '#offset'     # offsets line: #offset \t log name \t inode \t bytes read
 _HEADER = '#key\tstatus\ttime (UTC)\tinfo\n'
 # Must not start with _OFFSET; _parse skips it (second field is not a status).
@@ -138,6 +144,10 @@ class TaskState:
 
     def mark_done(self, key: str, info: str = ''):
         self._write([(key, DONE, _iso(), info)])
+
+    def mark_started(self, key: str, info: str = ''):
+        """Info starts with "job <SLURM_JOB_ID>" so readers can check the job is alive."""
+        self._write([(key, STARTED, _iso(), f'job {os.environ.get("SLURM_JOB_ID", "local")} {info}'.strip())])
 
     def mark_failed(self, key: str, reason: str = ''):
         self._write([(key, FAILED, _iso(), reason)])
@@ -244,6 +254,26 @@ class TaskState:
         """{key: reason} for keys whose latest status is failed."""
         return {k: info for k, (s, _, info) in self._state(refresh).items() if s == FAILED}
 
+    def started(self, refresh: bool = True) -> dict:
+        """{key: info} for keys started but not finished (running or killed)."""
+        return {k: info for k, (s, _, info) in self._state(refresh).items() if s == STARTED}
+
+    def running(self, refresh: bool = True):
+        """Split started keys by asking SLURM: ({key: info} running, {key: info} interrupted).
+
+        A key is running only while the job in its info is still in squeue, so a
+        job that ended in any way is never reported as running. Returns (None, None)
+        when squeue cannot be asked (not on a SLURM cluster).
+        """
+        alive = alive_jobs()
+        if alive is None:
+            return None, None
+        run, gone = {}, {}
+        for k, info in self.started(refresh).items():
+            m = _JOB.search(info)
+            (run if m and m.group(1) in alive else gone)[k] = info
+        return run, gone
+
     def is_done(self, key: str, refresh: bool = False) -> bool:
         """Cached after the first call; refresh=True to see other jobs' writes."""
         entry = self._state(refresh).get(key)
@@ -320,6 +350,16 @@ class TaskState:
         os.replace(tmp, path)
 
 
+def alive_jobs():
+    """Job ids (as in SLURM_JOB_ID) of this user's jobs in squeue, or None without squeue."""
+    try:
+        out = subprocess.run(['squeue', '-h', '-u', os.environ.get('USER', ''), '-o', '%A'],
+                             capture_output=True, text=True, timeout=60, check=True).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return set(out.split())
+
+
 # ======================================================== tools.run ops
 def state_summary(path: str, **kwargs):
     st = TaskState(path, create=False)
@@ -333,15 +373,30 @@ def state_summary(path: str, **kwargs):
         print(f'  failed  {key}  {failed[key]}')
     if len(failed) > 20:
         print(f'  ... {len(failed) - 20} more failed')
+    started = st.started(refresh=False)
+    running, interrupted = st.running(refresh=False)
+    if running is None:
+        groups = [('started (no squeue here: running or interrupted unknown)', started)]
+    else:
+        groups = [('running', running), ('interrupted (job gone, no done/failed)', interrupted)]
+    for label, keys in groups:
+        for key in sorted(keys)[:20]:
+            print(f'  {label}  {key}  {keys[key]}')
+        if len(keys) > 20:
+            print(f'  ... {len(keys) - 20} more {label.split()[0]}')
 
     expected = st.expected()
     if expected is None:
         print('  no expected.tsv: total unknown, cannot tell whether keys are missing')
         return
     done = st.done(refresh=False)
-    not_started = sorted(expected - done - failed.keys())
-    print(f'  expected {len(expected)}: {len(done & expected)} done, '
-          f'{len(failed.keys() & expected)} failed, {len(not_started)} never started'
+    not_started = sorted(expected - done - failed.keys() - started.keys())
+    if running is None:
+        n_started = f'{len(started.keys() & expected)} started'
+    else:
+        n_started = f'{len(running.keys() & expected)} running, {len(interrupted.keys() & expected)} interrupted'
+    print(f'  expected {len(expected)}: {len(done & expected)} done, {len(failed.keys() & expected)} failed, '
+          f'{n_started}, {len(not_started)} never started'
           f'  -> {"COMPLETE" if len(done & expected) == len(expected) else "INCOMPLETE"}')
     for key in not_started[:20]:
         print(f'  never started  {key}')
