@@ -46,6 +46,43 @@ tools:
     validate_cols: [shot_number, geometry]
 
   # =========================================================================
+  # tools/gedi_extract_cols.py
+  # =========================================================================
+  # 派生 copy 多出来的列 -> 只含 shot_number + 新列的附表,base 不动。
+  # 共有列逐值比对,值变了的也收进附表(报告里 changed_cols)。
+  #   sbatch scripts/hendrix/gedi_extract_cols.sh extract split=cal variant=original_with_sota_chms name=sota_chms
+  gedi_extract_cols:
+    _target_: tools.gedi_extract_cols.extract_cols
+    target_type: function
+    gedi_dir: /projects/dereeco/data/gvs/modeling/gedi/veg_sensitivity_gt0p95
+    split: cal
+    year: 2020
+    variant: original_with_sota_chms
+    name: sota_chms
+    base_dir: '{gedi_dir}/subset_{split}/original/{year}'
+    # per-tile 目录,或一个带 tile_id 列的合并 parquet
+    derived: '{gedi_dir}/subset_{split}/{variant}/{year}'
+    out_dir: '{gedi_dir}/subset_{split}/cols/{name}/{year}'
+    # 已抽出的附表:其中的列只比对、不重复抽
+    known_dirs: []
+    key_col: shot_number
+    ignore_cols: [geometry, tile_id]
+    workers: 8
+    overwrite: false
+    dry_run: false
+
+  # derived 里的点在 base 找不到时:是不是 shot_number 被 float64 舍入了(h5 抽取的旧 bug)
+  #   python -m tools.run run=gedi_diagnose_keys run.split=val
+  gedi_diagnose_keys:
+    _target_: tools.gedi_extract_cols.diagnose_keys
+    target_type: function
+    gedi_dir: /projects/dereeco/data/gvs/modeling/gedi/veg_sensitivity_gt0p95
+    split: val
+    base_dir: '{gedi_dir}/all_valid/2020'
+    derived: '{gedi_dir}/subset_{split}/original/2020'
+    n_tiles: 20
+
+  # =========================================================================
   # tools/make_world_grid.py
   # =========================================================================
   make_world_grid:
