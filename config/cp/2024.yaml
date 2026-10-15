@@ -1,0 +1,76 @@
+# Conformal calibration of the 2024 VSM Q0 (upper) / Q2 (lower).
+# Points: tools/cp_points.py (scripts/hendrix/cp_points.sh sample + combine),
+# GEDI 2024 sensitivity >= 0.95, split into cal/test by S2 tile.
+#   python3 scripts/cp/run_cp.py --config_path config/cp/2024.yaml
+# Same RH levels as the 2020 run (extended-config.yaml) to compare the two;
+# applying offsets to the rasters needs all 101.
+output_dir: ~/data/gvs/conformal/2024
+plot:
+  # Skip Tundra due to insufficient data
+  skip_biomes: [11]
+  coverage:
+    fig_width_pt: 350
+    fig_height_pt: 130
+    flatten: false
+    legend_loc: "outside right"
+    plot_style:
+      axes.titlesize: 6
+      legend.fontsize: 7
+  avg_width:
+    fig_width_pt: 372
+    fig_height_pt: 230
+eval:
+  data_path: /projects/dereeco/data/gvs/conformal/2024/points/test.parquet
+  # values are in metres
+  preprocess_data: true
+cp:
+  alpha: 0.1
+  cqr_methods:
+  - CQR
+  - SE-CQR
+  cal_data_path: /projects/dereeco/data/gvs/conformal/2024/points/cal.parquet
+  preprocess_data: true
+data:
+  biome_col: BIOME
+  rh_cols:
+    10:
+      ground_truth: rh10
+      q_hi: RH10_Q0
+      q_lo: RH10_Q2
+      q_med: RH10_Q1
+    25:
+      ground_truth: rh25
+      q_hi: RH25_Q0
+      q_lo: RH25_Q2
+      q_med: RH25_Q1
+    50:
+      ground_truth: rh50
+      q_hi: RH50_Q0
+      q_lo: RH50_Q2
+      q_med: RH50_Q1
+    75:
+      ground_truth: rh75
+      q_hi: RH75_Q0
+      q_lo: RH75_Q2
+      q_med: RH75_Q1
+    95:
+      ground_truth: rh95
+      q_hi: RH95_Q0
+      q_lo: RH95_Q2
+      q_med: RH95_Q1
+    98:
+      ground_truth: rh98
+      q_hi: RH98_Q0
+      q_lo: RH98_Q2
+      q_med: RH98_Q1
+  other_cols:
+  - tile
+  - split
+  - shot_number
+  - beam
+  - sensitivity
+  - BIOME
+  - ECO_ID
+  - lon
+  - lat
+  - geometry

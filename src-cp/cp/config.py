@@ -171,3 +171,5 @@ class GVSCPConfig:
         self.cp = RunCPConfig(config["cp"])
         self.eval = EvalCPConfig(config["eval"])
         self.plot = PlotCPConfig(config["plot"])
+        # Where results and figures go; default: the config file's directory
+        self.output_dir = config.get("output_dir")

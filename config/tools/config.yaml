@@ -626,3 +626,46 @@ tools:
     # 每个 worker 一次读一个 zone 的全部 orbit 文件,内存随 zone 大小涨
     workers: 8
     keep_parts: false
+
+  # =========================================================================
+  # tools/cp_points.py
+  # =========================================================================
+  # Conformal 校准用的点:GEDI 点配上当年 VSM 的 Q0/Q1/Q2,按 tile 名的 md5 分
+  # cal/test(不是按点分)。每个 tile 只在几个 1024px 块里抽点,因为 Q0/Q2 只在
+  # LUMI-O 上,逐点读 S3 太贵。需要 AWS_* 环境变量(scripts/hendrix/cp_points.sh 设)。
+  #   sbatch --array=1-4 scripts/hendrix/cp_points.sh sample year=2024
+  sample_cp_points:
+    _target_: tools.cp_points.sample_cp_points
+    target_type: function
+    year: 2024
+    gedi_dir: /projects/dereeco/data/gvs/modeling/gedi/veg_sensitivity_all/all_valid/${.year}
+    save_dir: ~/data/gvs/conformal/${.year}/points
+    state_dir: ${.save_dir}_state
+    biome_file: ~/data/GEDI/ecoregions/wwf_terr_ecos.shp
+    # Q1 已搬到 hendrix 的就从这里读(LUMI-O 上的会被删),按顺序找,找不到读 LUMI-O
+    local_cog_dirs:
+      - ~/data/gvs/products/vsm/${..year}/blended/tiles/cog
+      - ~/data/gvs/products/vsm/${..year}/bias_corrected/tiles/cog
+    cal_pct: 50
+    test_pct: 50
+    sensitivity_min: 0.95
+    blocks_per_tile: 4
+    shots_per_block: 50
+    min_shots_per_block: 10
+    seed: 42
+    workers: 8
+    threads: 16
+    # 一行一个 tile;null -> gedi_dir 里全部 tile
+    tiles_file: null
+    chunk: 1
+    n_chunks: 1
+
+  # 合成一张表 <save_dir>/<split>.parquet,每个 BIOME 最多 max_per_biome 个点
+  #   python -m tools.run run=combine_cp_points run.split=cal
+  combine_cp_points:
+    _target_: tools.cp_points.combine_cp_points
+    target_type: function
+    save_dir: ~/data/gvs/conformal/2024/points
+    split: cal
+    max_per_biome: 200000
+    seed: 42
