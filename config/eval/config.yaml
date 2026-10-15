@@ -787,7 +787,7 @@ protected_area_analysis:
     stac_col_dir:      ${root_data_dir}/products/gvsm_stac_catalog/vsm_local_masked
     rh_10m_filename_pattern: "RH{level}_Q{q_idx}.tif"
     q_idx: 1
-    s2_grid_file:      ~/data/gvs/state/s2_tiles_with_growing_months.parquet
+    s2_grid_file:      ~/data/gvs/01_derived_ancillary/s2_tiles_with_growing_months.parquet
     max_workers: 8
     rh_10m_in_decimetres: true
     n_rh_bands: 101

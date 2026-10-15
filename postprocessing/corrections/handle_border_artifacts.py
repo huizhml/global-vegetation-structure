@@ -311,7 +311,7 @@ class VSMCorrection(Blending):
 @dataclass
 class AggGediToS2:
     year: int = 2020
-    s2_grid_file: str = '~/data/gvs/state/s2_tiles_with_growing_months.parquet'
+    s2_grid_file: str = '~/data/gvs/01_derived_ancillary/s2_tiles_with_growing_months.parquet'
     output_dir: str = f'~/data/gvs/products/vsm/{year}/blended'
     correction_stats_dir: str = f'~/data/gvs/postprocess/bias_correction/per_tile_bias/slope_lt20_minpoints2000/{year}/none'
     stac_collection_dir: str = '~/data/gvs/products/gvsm_stac_catalog/vsm_local'

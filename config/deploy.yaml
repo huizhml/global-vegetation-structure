@@ -4,7 +4,7 @@ quantize_model: False
 data:
   class_path: datasets._zarr_dataset_deploy.DeployDataModel
   init_args: 
-    pred_fp: ~/data/gvs/deploy/inference_2020.zarr 
+    pred_fp: ~/data/gvs/deploy/inputs/inference_2020
     tile_id: 32MQE
     num_workers: 8
     prediction_dir: ~/data/gvs/deploy/2020/predictions

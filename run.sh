@@ -421,7 +421,7 @@ python run.py predict -c config/predict.yaml --model.backbone config/model/xcept
         --data.init_args.tile_id $tile_id \
         --data.init_args.stream_input False \
         --data.init_args.metadata_file none  \
-        --data.init_args.pred_fp ~/data/gvs/inputs/inference_${year}.zarr \
+        --data.init_args.pred_fp ~/data/gvs/deploy/inputs/inference_${year}.zarr \
         --data.init_args.prediction_dir ~/data/gvs/products/vsm/predictions_GTiff_${year}_test/${tile_id}_GTiff \
         --data.init_args.year $year \
         --correct_bias True \

@@ -28,7 +28,7 @@ visualization:
     rh_idx: 98
     q_idx: 1
     pred_dir: ~/data/gvs/products/vsm/2020/blended/tiles/geotiff/
-    s2_grid_file: ~/data/gvs/state/s2_tiles_with_growing_months.parquet
+    s2_grid_file: ~/data/gvs/01_derived_ancillary/s2_tiles_with_growing_months.parquet
     save_dir: ~/data/gvs/products/vsm/2020/blended/mosaic/
 
   create_global_mosaic:
@@ -130,7 +130,7 @@ visualization:
     tif_dir: ~/data/gvs/products/vsm/2020/blended/tiles/cog/
     tile_id_file: ~/data/gvs/assets/worklists/tiles_system_biased.txt
     pdf_file: ~/data/gvs/diagnostics/pred_thumbs/system_biased_tiles.pdf
-    s2_grid_file: ~/data/gvs/state/s2_tiles_with_growing_months.parquet
+    s2_grid_file: ~/data/gvs/01_derived_ancillary/s2_tiles_with_growing_months.parquet
     stac_collection_dir: ~/data/gvs/products/gvsm_stac_catalog/vsm_local
     year: 2020
     resolution: 100
@@ -191,9 +191,9 @@ visualization:
   create_cloud_cover_boxplot:
     _target_: visualization.core.create_boxplot.make_cloud_cover_boxplot
     target_type: function
-    h5_dir: ~/data/gvs/inputs/inference_2020/
+    h5_dir: ~/data/gvs/deploy/inputs/inference_2020/
     tile_id_file: ~/data/gvs/assets/worklists/tiles_system_biased.txt
     pdf_file: ~/data/gvs/diagnostics/pred_thumbs/system_biased_tiles_cloud_cover.pdf
-    s2_grid_file: ~/data/gvs/state/s2_tiles_with_growing_months.parquet
+    s2_grid_file: ~/data/gvs/01_derived_ancillary/s2_tiles_with_growing_months.parquet
     year: 2020
     max_cloud_cover: 90

@@ -45,7 +45,7 @@ def check_water_mask(image):
 class CheckInputImages:
     def __init__(self, year):
         self.year = year
-        self.zarr_store_path = Path(f'~/data/gvs/inputs/inference_{year}.zarr').expanduser()
+        self.zarr_store_path = Path(f'~/data/gvs/deploy/inputs/inference_{year}.zarr').expanduser()
 
 
     def plot_input_images(self, tile_id, save_dir=None):
@@ -152,7 +152,7 @@ def check_n_images_per_tile():
 
 
 def convert_rgb_to_geotiff(year, tile_id):
-    ds = xr.open_zarr(f'~/data/gvs/inputs/inference_{year}.zarr', group=tile_id)
+    ds = xr.open_zarr(f'~/data/gvs/deploy/inputs/inference_{year}.zarr', group=tile_id)
     rgb = ds.s2.sel(band=['B04', 'B03', 'B02'])
     save_dir = Path(f'~/data/gvs/debug/').expanduser()
     save_dir.mkdir(parents=True, exist_ok=True)
@@ -296,7 +296,7 @@ def check_intermediate_preds(tile_ids, year):
 
 @dataclass
 class MyConfig:
-    zarr_store_path: str = '~/data/gvs/inputs/inference_2024.zarr'
+    zarr_store_path: str = '~/data/gvs/deploy/inputs/inference_2024.zarr'
     year: int = 2024
     tile_id: str = '20XNR'
     output_dir: str = '~/data/gvs/deploy/check_input_images_2024'

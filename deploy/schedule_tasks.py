@@ -12,7 +12,7 @@ import pandas as pd
 
 from download.core.items_store import list_tiles, split_block
 
-COUNTRIES_FILE = '~/data/00_raw_data/ne_10m_admin_0_countries/ne_10m_admin_0_countries.shp'
+COUNTRIES_FILE = '~/data/gvs/00_raw_data/ne_10m_admin_0_countries/ne_10m_admin_0_countries.shp'
 
 
 def prioritized_tiles(prioritized_countries, s2_grid_file: str, countries_file: str = COUNTRIES_FILE):
