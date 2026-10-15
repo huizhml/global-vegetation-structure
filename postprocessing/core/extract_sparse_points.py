@@ -252,7 +252,7 @@ def extract_gedi_from_h5(h5_file: str, index_table_dir: str, save_dir: str, year
         if len(groups) == 0:
             print(f'No groups found for {tile_id}, maybe no data sampled for this split for this tile, or from other splits')
             return
-        data_list = []
+        data_list, shot_list = [], []
         with h5py.File(h5_file, 'r') as data:
             for group in groups:
                 in_partition_idx = df[df['path'] == f'{group}']['in_partition_idx'].values
@@ -261,12 +261,15 @@ def extract_gedi_from_h5(h5_file: str, index_table_dir: str, save_dir: str, year
                 slope = data[f'{group}/slope'][in_partition_idx, 7,7:8]
                 lc = data[f'{group}/image'][in_partition_idx, 13, 7, 7:8]
                 latlon = data[f'{group}/latlon'][in_partition_idx]
-                shot_number = data[f'{group}/shot_number'][in_partition_idx][:, np.newaxis]
+                # kept out of the float concat below: float64 rounds 17-digit shot numbers
+                shot_list.append(data[f'{group}/shot_number'][in_partition_idx].astype(np.uint64))
                 index_df_keep = df[df['path'] == f'{group}'][keep_columns].values
-                _data = np.concatenate([rhs, gedi_attrs, slope, lc, latlon, shot_number, index_df_keep], axis=1)
+                _data = np.concatenate([rhs, gedi_attrs, slope, lc, latlon, index_df_keep], axis=1)
                 data_list.append(_data)
             da = np.concatenate(data_list, axis=0)
-            df_gedi = pd.DataFrame(da, columns=cols)
+            df_gedi = pd.DataFrame(da, columns=[c for c in cols if c != 'shot_number'])
+            df_gedi['shot_number'] = np.concatenate(shot_list)
+            df_gedi = df_gedi[cols]
             assert df_gedi.lon.max() - df_gedi.lon.min() < 6, f'lon range is too large for tile {tile_id}, {df_gedi.lon.max()} - {df_gedi.lon.min()}'
             assert df_gedi.lat.max() - df_gedi.lat.min() < 2, f'lat range is too large for tile {tile_id}, {df_gedi.lat.max()} - {df_gedi.lat.min()}'
             df_gedi = df_gedi.astype(dtype)
