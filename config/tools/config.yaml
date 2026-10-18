@@ -553,6 +553,7 @@ tools:
   # at geotiff/ until they are converted too. Dry run by default:
   #   python -m tools.run run=stac_retarget                  # report only
   #   python -m tools.run run=stac_retarget run.dry_run=false
+  # 改写后 2020 的 release manifest 就过期了,接着重跑 run=release_manifest。
   stac_retarget:
     _target_: tools.stac_retarget.retarget_stac_assets
     target_type: function
@@ -569,6 +570,70 @@ tools:
     # 未压缩的原件,而且全程不报错。
     asset_glob: ${priority_rh_assets}
     backup_dir: null          # null -> <catalog>_backup next to the collection
+    dry_run: true
+    workers: 32
+
+  # =========================================================================
+  # tools/release_manifest.py
+  # =========================================================================
+  # 一个 release 年份每个 tile 的文件在哪 -> <products_root>/<year>/<release>.tsv,
+  # 一个 tile 一行(tile_id, q0_root, q1_root, q2_root, file_suffix, n_files, size_bytes),
+  # Q<q> 的 101 个文件是 <q<q>_root>/<tile_id>/RH{0..100}_Q<q><file_suffix>。
+  # 数 q*_root 列就是每个版本的 tile 数。下载不用再读 STAC。
+  #   python -m tools.run run=release_manifest run.year=2020
+  #   python -m tools.run run=release_manifest run.year=2024
+  release_manifest:
+    _target_: tools.release_manifest.write_release_manifest
+    target_type: function
+    year: 2020
+    release: released_v0
+    # release 的定义:每年从哪里取文件。
+    sources:
+      # 发到 Source Coop 的 collection(见 scripts/hendrix/run_source_coop.sh)
+      "2020": {catalog: ~/data/gvs/products/gvsm_stac_catalog/vsm_local_masked}
+      # 不在任何 collection 里;布局 <TILE>/RH*_Q*.tif(2026-10-16 由 <TILE>_cog/*.cog.tif 改名,run=rename_tile_dirs)
+      "2024": {dir: ~/data/gvs/products/vsm/2024/masked/tiles/cog}
+    products_root: ~/data/gvs/products/vsm
+    out_fp: ~/data/gvs/products/vsm/{year}/{release}.tsv
+    workers: 32
+
+  # =========================================================================
+  # tools/vsm_snapshot.py
+  # =========================================================================
+  # 每个版本目录(original、masked、blended…)现在有什么,见 docs/data/vsm_snapshot.md:
+  #   <year>/snapshot_versions.tsv       一个版本一行:tile 数、cog/geotiff 覆盖、mosaic 的 RH/Q/格式
+  #   <year>/<版本>/snapshot.tsv         一个 tile 一行:cog_q0..geotiff_q2 是 RH 文件数(完整 101)
+  #   <year>/<版本>/snapshot_mosaic.tsv  mosaic 一个 RH 一行,每种文件(kind_quantile.format)一列
+  # 预测/转换/retarget 之后会过期,重跑即可。
+  #   python -m tools.run run=vsm_snapshot run.year=2024
+  #   python -m tools.run run=vsm_snapshot run.year=2020 'run.versions=[masked,blended]'
+  vsm_snapshot:
+    _target_: tools.vsm_snapshot.write_vsm_snapshot
+    target_type: function
+    year: 2024
+    products_root: ~/data/gvs/products/vsm
+    versions: null            # null -> 年份下所有带 tiles/ 或 mosaic/ 的子目录
+    formats: [cog, geotiff]   # tiles/<fmt>/<TILE>/ 和 mosaic/<fmt>/;决定列
+    out_name: snapshot.tsv
+    mosaic_out_name: snapshot_mosaic.tsv
+    versions_out_name: snapshot_versions.tsv
+    workers: 32
+
+  # =========================================================================
+  # tools/rename_tile_dirs.py
+  # =========================================================================
+  # <TILE>_cog/RH*_Q*.cog.tif -> <TILE>/RH*_Q*.tif(.aux.xml 跟着改),只改名不拷数据。
+  # 默认 dry run;有冲突的 tile 不动、记 failed;中断后重跑即可续上。
+  #   python -m tools.run run=rename_tile_dirs                    # dry run
+  #   python -m tools.run run=rename_tile_dirs run.dry_run=false
+  rename_tile_dirs:
+    _target_: tools.rename_tile_dirs.rename_tile_dirs
+    target_type: function
+    tiles_dir: ~/data/gvs/products/vsm/2024/masked/tiles/cog
+    dir_suffix: _cog
+    old_ext: .cog.tif
+    new_ext: .tif
+    state_dir: ~/data/gvs/deploy/rename_tile_dirs/2024_masked_cog
     dry_run: true
     workers: 32
 

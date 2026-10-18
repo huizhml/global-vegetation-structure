@@ -60,6 +60,32 @@ translate_worklist() {
     return $rc
 }
 
+# File manifest of a release year -> ~/data/gvs/products/vsm/<year>/released_v0.tsv
+# (tools/release_manifest.py; sources per year in config/tools/config.yaml).
+# Rerun for 2020 after every `stac_retarget run.dry_run=false`.
+#   sbatch --job-name=release_manifest scripts/hendrix/run_cpu.sh release_manifest 2020
+release_manifest() {
+    local year=${1:?usage: run_cpu.sh release_manifest <year>}
+    python -m tools.run run=release_manifest run.year=$year
+}
+
+# What each version dir of a year holds -> <year>/<version>/snapshot.tsv
+# (+ snapshot_mosaic.tsv); tools/vsm_snapshot.py. Rerun after a prediction,
+# translation or retarget changes a version.
+#   sbatch --job-name=vsm_snapshot scripts/hendrix/run_cpu.sh vsm_snapshot 2024
+vsm_snapshot() {
+    local year=${1:?usage: run_cpu.sh vsm_snapshot <year>}
+    python -m tools.run run=vsm_snapshot run.year=$year
+}
+
+# <TILE>_cog/RH*_Q*.cog.tif -> <TILE>/RH*_Q*.tif in one tiles dir (default
+# 2024/masked/tiles/cog; tools/rename_tile_dirs.py). Dry run unless "false".
+#   sbatch --job-name=rename_tile_dirs scripts/hendrix/run_cpu.sh rename_tile_dirs false
+rename_tile_dirs() {
+    local dry_run=${1:-true}
+    python -m tools.run run=rename_tile_dirs run.dry_run=$dry_run
+}
+
 case $1 in
 1) 
 # **************************************************************
@@ -148,7 +174,7 @@ srun --ntasks=${SLURM_NTASKS:-1} --cpus-per-task=${SLURM_CPUS_PER_TASK:-1} \
         run.src_root=${base}/geotiff run.dst_root=${base}/cog \
         run.pattern="$pattern" || exit $?
 ;;
-translate_worklist)
+translate_worklist|release_manifest|vsm_snapshot|rename_tile_dirs)
 "$@"
 ;;
 *)
