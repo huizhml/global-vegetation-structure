@@ -731,7 +731,9 @@ copy_bulk_slurm() {
     mkdir -p "${STATE_DIR}" "${DST_BASE}"
     _check_delete_config || return 1
     _write_readme "${year}"
-    srun bash "${self}" chunk "${year}" "${worklist}"
+    # A task that ends with failed tiles exits 1; without this, Hendrix's
+    # KillOnBadExit makes srun terminate the other tasks mid-chunk.
+    srun --kill-on-bad-exit=0 bash "${self}" chunk "${year}" "${worklist}"
 }
 
 # Usage: copy_bulk_chunk [YEAR] [WORKLIST]   (one task's share; called by srun)
