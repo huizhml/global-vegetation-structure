@@ -83,6 +83,38 @@ tools:
     n_tiles: 20
 
   # =========================================================================
+  # tools/gedi_orbit_overview.py
+  # =========================================================================
+  # 每个 S2 tile 每年有几条 orbit 经过、几条在 growing months 里、是否异常地少
+  # (按 8 度纬度带中位数比),以及下载 state 里的点数。
+  #   python -m tools.run run=gedi_orbit_overview
+  gedi_orbit_overview:
+    _target_: tools.gedi_orbit_overview.gedi_orbit_overview
+    target_type: function
+    s2_grid_file: ~/data/gvs/01_derived_ancillary/growing_months/s2_tiles_with_growing_months.parquet
+    index_pattern: ~/data/gvs/gedi/l2a_orbit_table/l2a_orbit_table_{{year}}.parquet
+    state_pattern: ~/data/gvs/gedi/veg_sensitivity_all/{{year}}_state
+    save_dir: ~/data/gvs/gedi/veg_sensitivity_all/orbit_overview
+    years: [2019, 2020, 2021, 2022, 2023, 2024]
+    few_ratio: 0.4
+
+  # =========================================================================
+  # tools/growing_season_audit.py
+  # =========================================================================
+  # 每个 S2 tile 的 growing_months 是哪条规则来的(>50% 像元 / 不足 5 个月取前 5 /
+  # 无物候用默认),以及 "no orbit in growing season" 是没有 orbit 还是 orbit 都在月份外。
+  #   python -m tools.run run=growing_season_audit run.year=2020
+  growing_season_audit:
+    _target_: tools.growing_season_audit.audit_growing_months
+    target_type: function
+    year: 2020
+    s2_grid_file: ~/data/gvs/01_derived_ancillary/growing_months/s2_tiles_with_growing_months.parquet
+    gedi_table_index_file: ~/data/gvs/gedi/l2a_orbit_table/l2a_orbit_table_{year}.parquet
+    state_dir: /projects/dereeco/data/gvs/gedi/veg_sensitivity_all/{year}_state
+    biome_file: ~/data/GEDI/ecoregions/wwf_terr_ecos.shp
+    save_dir: ~/data/gvs/01_derived_ancillary/growing_months/growing_months_audit/{year}
+
+  # =========================================================================
   # tools/make_world_grid.py
   # =========================================================================
   make_world_grid:
