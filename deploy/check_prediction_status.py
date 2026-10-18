@@ -220,7 +220,7 @@ def get_tiles_covered_by_gedi(s2_grid_file: str, save_dir: str = None):
 
 @dataclass
 class MyConfig:
-    s2_grid_file: str = '~/data/gvs/s2_tiles_with_growing_months.parquet'
+    s2_grid_file: str = '~/data/gvs/01_derived_ancillary/growing_months/s2_tiles_with_growing_months.parquet'
     flag_dir: str = '~/data/gvs/deploy/translate_flags'
     prediction_dir: str = '~/data/gvs/deploy/predictions'
     save_dir: str = '~/data/gvs/deploy'

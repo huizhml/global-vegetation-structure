@@ -79,7 +79,7 @@ download:
     # 每个 tile 的结果(N shots / no valid shots / no orbit / failed),放在
     # parquet 目录旁边而不是里面,免得读整个目录的 parquet 时混进 tsv。
     state_dir: ${.save_dir}_state
-    s2_grid_file: ~/data/gvs/01_derived_ancillary/s2_tiles_with_growing_months.parquet
+    s2_grid_file: ~/data/gvs/01_derived_ancillary/growing_months/s2_tiles_with_growing_months.parquet
 
   add_slope:
     _target_: download.products.gedi.GEDI
@@ -108,7 +108,7 @@ download:
     target_method: get_used_gedi_points
     func_args: {}
     year: 2020
-    s2_grid_file: ~/data/gvs/s2_tiles_with_growing_months.parquet
+    s2_grid_file: ~/data/gvs/01_derived_ancillary/growing_months/s2_tiles_with_growing_months.parquet
     used_parq_dir: ~/data/gvs/train_subsets
     save_dir: ~/data/gvs/fitting_data_coord_partitions
 
@@ -118,7 +118,7 @@ download:
     target_method: get_tiles_covered_by_gedi
     func_args: {}
     year: 2020
-    s2_grid_file: ~/data/gvs/s2_tiles_with_growing_months.parquet
+    s2_grid_file: ~/data/gvs/01_derived_ancillary/growing_months/s2_tiles_with_growing_months.parquet
     gedi_table_index_file: ~/data/gvs/gedi/l2a_orbit_table/l2a_orbit_table_2020.parquet
     save_dir: ~/data/gvs/deploy/correction_2020
 
@@ -224,12 +224,12 @@ download:
       job_id: 0
       n_jobs: 1
       prioritized_countries: []
-      s2_grid_file: ~/data/gvs/s2_tiles_with_growing_months.parquet
+      s2_grid_file: ~/data/gvs/01_derived_ancillary/growing_months/s2_tiles_with_growing_months.parquet
     year: 2020
     zone: 23J
     rewrite: false
     debug: false
-    s2_grid_file: ~/data/gvs/s2_tiles_with_growing_months.parquet
+    s2_grid_file: ~/data/gvs/01_derived_ancillary/growing_months/s2_tiles_with_growing_months.parquet
     wc_parq_file: ~/data/gvs/deploy/esa_wc.parquet
     items_file: ~/data/gvs/deploy/_s2_meta/s2_meta_zone_grouped_{year}.parquet
     store_name: inference
@@ -249,7 +249,7 @@ download:
     items_file: ~/data/gvs/deploy/_s2_meta/s2_meta_zone_grouped_{year}.parquet
     n_jobs: 21
     prioritized_countries: []
-    s2_grid_file: ~/data/gvs/s2_tiles_with_growing_months.parquet
+    s2_grid_file: ~/data/gvs/01_derived_ancillary/growing_months/s2_tiles_with_growing_months.parquet
 
   # deploy/schedule_tasks.py
   # Worklist (tile_id,year) of the S2 tiles of some countries over several years
@@ -263,7 +263,7 @@ download:
     countries: [Denmark]  # ADMIN names in the Natural Earth countries file
     years: [2018, 2019, 2021, 2022, 2023, 2024, 2025]  # 2020 skipped: the global product has it
     out_file: ~/data/gvs/01_derived_ancillary/dk_tile_years_2018_2025.csv
-    s2_grid_file: ~/data/gvs/01_derived_ancillary/s2_tiles_with_growing_months.parquet
+    s2_grid_file: ~/data/gvs/01_derived_ancillary/growing_months/s2_tiles_with_growing_months.parquet
 
   # download/core/items_store.py
   # Build the one-row-group-per-zone items store from existing part files and
@@ -286,7 +286,7 @@ download:
     task_name: ''
     crowd_source_data_file: ~/data/gvs/downstream_task_data/naturalness/reference_data_set_updated.csv
     output_dir: ~/data/gvs/downstream_task_data
-    s2_parquet: ~/data/gvs/s2_tiles_with_growing_months.parquet
+    s2_parquet: ~/data/gvs/01_derived_ancillary/growing_months/s2_tiles_with_growing_months.parquet
     wc_dem_meta_dir: ~/data/GEDI
     n_parallel: 100
     maxCloudCover: 50
@@ -306,4 +306,4 @@ download:
     year: 2020
     version: v1
     asset_id: projects/gisproject-1/assets/sentinel_2_shapefile_with_growing_month_counts
-    save_dir: ~/data/gvs/state
+    save_dir: ~/data/gvs/01_derived_ancillary/growing_months

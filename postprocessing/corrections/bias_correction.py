@@ -673,7 +673,7 @@ class BiasCorrectionConfig:
     tile_id: str = '20MRS'
 
     gedi_fps: str = '~/data/gvs/train_subsets/train*_filtered_v1.parquet'
-    s2_fp: str = '~/data/gvs/s2_tiles_with_growing_months.parquet'
+    s2_fp: str = '~/data/gvs/01_derived_ancillary/growing_months/s2_tiles_with_growing_months.parquet'
     output_dir: str = '~/data/gvs/gedi_with_biome_slope_s2_tile_train_partitions/'
     sota_chm_dir: str = '~/data/gvs/GEDI_for_correction/partitions_with_sota_chm_2020'  # output dir
     sota_and_ours_dir: str = '~/data/gvs/deploy/correction_2020/partitions_with_sota_and_ours_2020'
@@ -686,7 +686,7 @@ class BiasCorrectionConfig:
     gedi_table_index_file: str = f'~/data/gvs/GEDI_for_correction/l2a_table_index_{year}.parquet'
 
     # test config
-    diagnose_folder: str = f'~/data/gvs/diagnostics/bias_correction/'
+    diagnose_folder: str = f'~/data/gvs/deploy/bias_correction/'
     mgrs_tiles: str = '20M,21M,20L,21L'
     s2_tiles: str = '20MRS,21MTM,20LRR,21LTL'
     debug: bool = False

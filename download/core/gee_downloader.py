@@ -215,7 +215,7 @@ class GEEDownloader:
 class Config:
     asset_url: str = 'GOOGLE/SATELLITE_EMBEDDING/V1/ANNUAL'
     asset_type: str = 'ImageCollection'
-    s2_grid_file: str = '~/data/gvs/s2_tiles_with_growing_months.parquet'
+    s2_grid_file: str = '~/data/gvs/01_derived_ancillary/growing_months/s2_tiles_with_growing_months.parquet'
     locations: str = '~/data/gvs/evaluation/downstream_tasks/naturalness/reference_data_set_updated.csv'
     output_dir: str = '~/data/gvs/evaluation/downstream_tasks/naturalness/alphaearth_embeddings'
     merge_as_h5: bool = True

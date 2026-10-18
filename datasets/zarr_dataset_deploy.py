@@ -441,7 +441,7 @@ class ChunkedWriteDataset(BaseDeployDataset):
         BaseDeployDataset (_type_): _description_
     """
     
-    def __init__(self, save_intermediate_tif: bool = False, diagnostics_dir: str = '~/data/gvs/diagnostics', **kwargs):
+    def __init__(self, save_intermediate_tif: bool = False, diagnostics_dir: str = '~/data/gvs/deploy/per_image_predictions', **kwargs):
         super().__init__(**kwargs)
         self.prediction_fp = self.prediction_dir / f'{self.tile_id}'
         self.transform = Affine(*self.transform).to_gdal()

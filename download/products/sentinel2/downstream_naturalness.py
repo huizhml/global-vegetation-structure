@@ -360,7 +360,7 @@ class Config:
     task_name: str = ""  # The name of the task for which the data is being downloaded.
     crowd_source_data_file: str = "~/data/gvs/downstream_task_data/naturalness/reference_data_set_updated.csv"  # Path to the CSV file containing crowd-sourced data.
     output_dir: str = "~/data/gvs/downstream_task_data"  # Directory where the downloaded data will be saved.
-    s2_parquet: str = '~/data/gvs/s2_tiles_with_growing_months.parquet'  # Path to the Parquet file containing S2 tiles with growing months information.
+    s2_parquet: str = '~/data/gvs/01_derived_ancillary/growing_months/s2_tiles_with_growing_months.parquet'  # Path to the Parquet file containing S2 tiles with growing months information.
     wc_dem_meta_dir: str = '~/data/GEDI'
     n_parallel: int = 100
     maxCloudCover: int = 50

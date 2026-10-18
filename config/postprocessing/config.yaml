@@ -125,14 +125,14 @@ postprocessing:
     _target_: postprocessing.core.s2_tiling.get_tiles_reblend
     target_type: function
     tiles_list_file: ~/data/gvs/assets/worklists/tiles_reblend_2020.txt
-    s2_grid_file: ~/data/gvs/01_derived_ancillary/s2_tiles_with_growing_months.parquet
+    s2_grid_file: ~/data/gvs/01_derived_ancillary/growing_months/s2_tiles_with_growing_months.parquet
 
   get_tiles_wo_enough_gedi_gt:
     _target_: postprocessing.core.s2_tiling.get_tiles_wo_enough_gedi_gt
     target_type: function
     tiles_list_file: ~/data/gvs/assets/worklists/total_tiles_2020.txt
     bias_stats_dir: ~/data/gvs/postprocess/bias_correction/per_tile_bias/slope_all_minpoints200/2020/stats_by_tile
-    s2_grid_file: ~/data/gvs/01_derived_ancillary/s2_tiles_with_growing_months.parquet
+    s2_grid_file: ~/data/gvs/01_derived_ancillary/growing_months/s2_tiles_with_growing_months.parquet
 
   # =========================================================================
   # postprocessing/core/translate.py
@@ -262,7 +262,7 @@ postprocessing:
     output_dir: ~/data/gvs/products/vsm/2020/blended/tiles
     stac_collection_dir: ~/data/gvs/products/gvsm_stac_catalog/vsm_local
     distance_map_dir: ~/data/gvs/postprocess/blending/0_distance_maps
-    s2_grid_file: ~/data/gvs/01_derived_ancillary/s2_tiles_with_growing_months.parquet
+    s2_grid_file: ~/data/gvs/01_derived_ancillary/growing_months/s2_tiles_with_growing_months.parquet
     costal_tiles_file: ~/data/gvs/assets/worklists/tiles_coastal_snow_regions.txt
     chunksize: 1024
     use_flash: false

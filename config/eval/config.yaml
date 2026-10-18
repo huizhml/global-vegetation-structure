@@ -114,7 +114,7 @@ on_lvis:
     _target_: evaluation.on_lvis.partition_lvis_by_s2_tile
     target_type: function
     txt_dir: ${eval_dir}/with_airborne_lidar/LVIS2_Gabon${..lvis_year}/${..lvis_product}/raw
-    s2_grid_file: ${root_data_dir}/state/s2_tiles_with_growing_months.parquet
+    s2_grid_file: ${root_data_dir}/01_derived_ancillary/growing_months/s2_tiles_with_growing_months.parquet
     save_dir: ${eval_dir}/with_airborne_lidar/LVIS2_Gabon${..lvis_year}/${..lvis_product}/s2_tiled
     n_workers: 8
     rewrite: false
@@ -191,7 +191,7 @@ on_lvis:
     _target_: evaluation.on_lvis.partition_lvis_metrics_by_s2_tile
     target_type: function
     csv_dir: ${eval_dir}/with_airborne_lidar/LVIS2_Gabon${.lvis_year}/${.lvis_product}/raw
-    s2_grid_file: ${root_data_dir}/state/s2_tiles_with_growing_months.parquet
+    s2_grid_file: ${root_data_dir}/01_derived_ancillary/growing_months/s2_tiles_with_growing_months.parquet
     save_dir: ${eval_dir}/with_airborne_lidar/LVIS2_Gabon${.lvis_year}/${.lvis_product}/s2_tiled
     n_workers: 8
     rewrite: false
@@ -408,7 +408,7 @@ forest_mask:
     _target_: evaluation.forest_mask.build_stable_forest_mask
     target_type: function
     meta_file: ${eval_dir}/with_airborne_lidar/meta_lvis2016_profile.csv
-    s2_grid_file: ${root_data_dir}/state/s2_tiles_with_growing_months.parquet
+    s2_grid_file: ${root_data_dir}/01_derived_ancillary/growing_months/s2_tiles_with_growing_months.parquet
     # Any year-stamped VSM tile dir works as the 10 m UTM grid reference
     # (all VSM tiles share the S2 tile grid by construction). Point at
     # 2017 for the LVIS-year comparison; switch to 2020 for the GEDI-year
@@ -503,7 +503,7 @@ utils:
     _target_: evaluation.utils.partition_points_by_tile
     target_type: function
     gdf_file: ${root_data_dir}/analysis/biome_anlaysis/random_sample_100000_points_per_biome_veg/random_sample_100000_points_per_biome.parquet
-    s2_tile_file: ${root_data_dir}/state/s2_tiles_with_growing_months.parquet
+    s2_tile_file: ${root_data_dir}/01_derived_ancillary/growing_months/s2_tiles_with_growing_months.parquet
     save_dir: ${root_data_dir}/analysis/biome_anlaysis/random_sample_100000_points_per_biome_veg_by_tile
 
   # Click-to-build (slide animation) version of on_naturalness.plot_bars:
@@ -787,7 +787,7 @@ protected_area_analysis:
     stac_col_dir:      ${root_data_dir}/products/gvsm_stac_catalog/vsm_local_masked
     rh_10m_filename_pattern: "RH{level}_Q{q_idx}.tif"
     q_idx: 1
-    s2_grid_file:      ~/data/gvs/01_derived_ancillary/s2_tiles_with_growing_months.parquet
+    s2_grid_file:      ~/data/gvs/01_derived_ancillary/growing_months/s2_tiles_with_growing_months.parquet
     max_workers: 8
     rh_10m_in_decimetres: true
     n_rh_bands: 101

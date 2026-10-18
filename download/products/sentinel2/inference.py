@@ -415,7 +415,7 @@ class WorldS2(DaskDownloader):
 
     def check_images_per_tile(self):
         import matplotlib.pyplot as plt
-        s2_tile = gpd.read_parquet(self.save_dir.parent / f's2_tiles_with_growing_months.parquet')
+        s2_tile = gpd.read_parquet(self.s2_parquet)
         s2_tile = s2_tile.set_index('Name')
         df = pd.read_parquet(self.items_file, columns=['s2:mgrs_tile'])
         print(len(df))
@@ -560,7 +560,7 @@ class WorldS2(DaskDownloader):
 @dataclass
 class MyConfig:
     year: int = 2020
-    s2_grid_file: str = '~/data/gvs/s2_tiles_with_growing_months.parquet'
+    s2_grid_file: str = '~/data/gvs/01_derived_ancillary/growing_months/s2_tiles_with_growing_months.parquet'
     store_name: str = 'inference'
     wc_parq_file:str = '~/data/gvs/deploy/esa_wc.parquet'
     comp_name: str = 'lz4'

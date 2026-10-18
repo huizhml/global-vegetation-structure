@@ -310,7 +310,7 @@ def main(cfg: DictConfig):
 
     check_input_images = CheckInputImages(cfg.year)
     if cfg.task == 'plot_input_images':
-        save_dir = cfg.get('save_dir', f'~/data/gvs/diagnostics/check_input_images/{cfg.year}')
+        save_dir = cfg.get('save_dir', f'~/data/gvs/deploy/check_input_images_{cfg.year}')
         check_input_images.plot_input_images(cfg.tile_id, save_dir=save_dir)
     elif cfg.task == 'check_images_order':
         check_images_order()

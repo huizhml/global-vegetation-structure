@@ -1,7 +1,7 @@
 """Per-key task state ("done flags") without one empty file per key.
 
 Replaces the `{tile}_done` pattern. A state lives in one directory, kept
-under the folder of the task it tracks, e.g. ~/data/gvs/sync/copy_from_lumio/2024_q1:
+under the folder of the task it tracks, e.g. ~/data/gvs/deploy/copy_from_lumio/2024_q1:
 
     <path>/log/<host>_<pid>_<job>.tsv   append-only, one file per writer process
     <path>/snapshot.tsv                 merged state, rewritten by compact()

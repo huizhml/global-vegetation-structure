@@ -73,7 +73,7 @@ run_inference() {
     args=(predict -c config/predict.yaml --model.backbone config/model/xception_mix_order.yaml
             --data.init_args.tile_id $tile_id
             --data.init_args.metadata_file none
-            --data.init_args.s2_grid_file ${HOME}/data/gvs/01_derived_ancillary/s2_tiles_with_growing_months.parquet
+            --data.init_args.s2_grid_file ${HOME}/data/gvs/01_derived_ancillary/growing_months/s2_tiles_with_growing_months.parquet
             --data.init_args.pred_fp ${data_root_dir}/inputs/inference_${year}
             --data.init_args.prediction_dir ${save_dir}/geotiff/${tile_id}
             --data.init_args.year $year

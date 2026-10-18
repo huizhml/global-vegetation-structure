@@ -48,8 +48,8 @@
 #  picks up exactly what did not finish. Progress is a tools/task_state.py
 #  state dir (a few append-only logs + snapshot.tsv instead of one flag file
 #  per tile), one per year and asset selection:
-#      ${ROOT_DATA_DIR}/sync/copy_from_lumio/<year>_q1    INCLUDE='RH*_Q1.tif'
-#      ${ROOT_DATA_DIR}/sync/copy_from_lumio/<year>_all   INCLUDE='**'
+#      ${ROOT_DATA_DIR}/deploy/copy_from_lumio/<year>_q1    INCLUDE='RH*_Q1.tif'
+#      ${ROOT_DATA_DIR}/deploy/copy_from_lumio/<year>_all   INCLUDE='**'
 #  Inspect / re-copy one tile:
 #      python -m tools.run run=state_summary run.path=<STATE_DIR>
 #      printf '%s\treset\t%s\t\n' 32MRE "$(date -u +%Y-%m-%dT%H:%M:%S.%6NZ)" \
@@ -619,7 +619,7 @@ _state_dir_default() {
         *) echo "ERROR: no default STATE_DIR for INCLUDE='${INCLUDE}', set STATE_DIR" >&2
            return 1 ;;
     esac
-    echo "${ROOT_DATA_DIR}/sync/copy_from_lumio/${year}_${tag}"
+    echo "${ROOT_DATA_DIR}/deploy/copy_from_lumio/${year}_${tag}"
 }
 
 # Shared setup for `slurm` / `chunk` / `audit`: median-only unless the caller

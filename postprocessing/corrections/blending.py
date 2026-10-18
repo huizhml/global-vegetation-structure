@@ -308,7 +308,7 @@ class Blending:
 class Config:
     stac_collection_dir: str = '~/data/gvs/products/gvsm_stac_catalog/vsm_local'
     distance_map_dir: str = '~/data/gvs/postprocess/blending/0_distance_maps'
-    s2_grid_file: str = '~/data/gvs/01_derived_ancillary/s2_tiles_with_growing_months.parquet'
+    s2_grid_file: str = '~/data/gvs/01_derived_ancillary/growing_months/s2_tiles_with_growing_months.parquet'
     
     output_dir: str = '~/data/gvs/sanity_checks/blending'
     tile_id: str = '21MXQ'

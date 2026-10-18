@@ -12,7 +12,7 @@ stac_collection_dir: "~/data/gvs/products/gvsm_stac_catalog/vsm_local"
 
 task: make_vertical_profile_plot
 task_args:
-  s2_grid_file: "~/data/gvs/01_derived_ancillary/s2_tiles_with_growing_months.parquet"
+  s2_grid_file: "~/data/gvs/01_derived_ancillary/growing_months/s2_tiles_with_growing_months.parquet"
   q_idx: 1
   max_height: 50
   min_height: -5
