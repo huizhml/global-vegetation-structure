@@ -13,7 +13,7 @@
 # (parsed by parse_kv_args in scripts/core/utils.sh).
 #
 #   sbatch scripts/hendrix/download_gedi.sh download year=2020
-#   sbatch scripts/hendrix/download_gedi.sh add_mgrs parq_dir=<.../all_valid/2019>
+#   sbatch scripts/hendrix/download_gedi.sh add_mgrs parq_dir=<.../veg_sensitivity_all/2019>
 #   sbatch scripts/hendrix/download_gedi.sh to_s2_tiles year=2019
 
 source scripts/core/utils.sh
@@ -24,17 +24,32 @@ export PYTHONUNBUFFERED=1
 case $1 in
 download)
 # ---------------------------------------
-#   Download all valid GEDI L2A orbits for each S2 tile's growing season.
-#   Writes to ~/data/gvs/gedi/veg_sensitivity_all/all_valid/<year>/
+#   Download all valid GEDI L2A shots of every orbit over each S2 tile.
+#   Writes to ~/data/gvs/gedi/veg_sensitivity_all/<year>/
 #   (sensitivity_threshold defaults to null — no sensitivity filter).
 #   Per-tile outcomes go to <save_dir>_state (tools/task_state.py).
+#   A year first downloaded with orbit_months=growing is filled in place:
+#   only the orbits outside each tile's growing months are fetched.
 # ---------------------------------------
-# Args: year (default: 2020), save_dir (optional, overrides the config path)
+# Args: year (default: 2020), save_dir (optional, overrides the config path),
+#       orbit_months (all|growing, default: all)
 parse_kv_args "${@:2}" || exit $?
 # year=${year:-2020}
 
 python -m download.run run=download_all_valid_gedi run.year=$year run.key_file=$key_file \
-    ${save_dir:+run.save_dir=$save_dir}
+    ${save_dir:+run.save_dir=$save_dir} ${orbit_months:+run.orbit_months=$orbit_months}
+
+;;
+drop_water)
+# ---------------------------------------
+#   Drop shots on water (no DEM / Landsat water persistence >= 50) in place from
+#   an already downloaded year, the same filter the download now applies.
+#   Not while a download of that year runs. Report in <year>_state/water_filter_*.tsv.
+# ---------------------------------------
+# Args: year (required)
+parse_kv_args "${@:2}" || exit $?
+: "${year:?year=<year> is required}"
+python -m download.run run=drop_water_gedi run.year=$year run.workers=${SLURM_CPUS_PER_TASK:-16}
 
 ;;
 add_mgrs)
@@ -66,9 +81,9 @@ python -m tools.run run=gedi_to_s2_tiles run.year=$year run.workers=${workers:-8
 ;;
 upload_erda)
 # ---------------------------------------
-#   Copy downloaded all_valid years to ERDA without the all_valid level:
-#     <src>/all_valid/<year>/*.parquet  ->  <dst>/<year>/
-#     <src>/all_valid/<year>_state/     ->  <dst>/<year>_state/  (snapshot, mgrs summaries,
+#   Copy downloaded years to ERDA (same layout on both sides):
+#     <src>/<year>/*.parquet  ->  <dst>/<year>/
+#     <src>/<year>_state/     ->  <dst>/<year>_state/  (snapshot, mgrs summaries,
 #                                          upload record uploads.tsv + erda_<time>.log)
 #   `rclone copy`, never `sync`: no data on ERDA is deleted. Reruns only send
 #   what is missing or changed, then `rclone check` compares sizes per file.
@@ -81,16 +96,16 @@ upload_erda)
 #       check with state_summary first), src, dst, dry_run (any value)
 parse_kv_args "${@:2}" || exit $?
 : "${years:?years=<comma-separated years whose download is complete> is required}"
-src=${src:-/projects/dereeco/data/gvs/modeling/gedi/veg_sensitivity_all}
+src=${src:-$HOME/data/gvs/gedi/veg_sensitivity_all}
 dst=${dst:-ucph-erda:GEDI/veg_sensitivity_all}
 opts=(--transfers 6 --checkers 4 --stats 2m --stats-one-line ${dry_run:+--dry-run})
 
 for y in ${years//,/ }; do
-    echo "===== $y: $src/all_valid/$y -> $dst/$y"
-    [ -d "$src/all_valid/$y" ] || { echo "$y: $src/all_valid/$y not found, skipped"; continue; }
-    state="$src/all_valid/${y}_state"
+    echo "===== $y: $src/$y -> $dst/$y"
+    [ -d "$src/$y" ] || { echo "$y: $src/$y not found, skipped"; continue; }
+    state="$src/${y}_state"
     if [ -n "$dry_run" ]; then
-        rclone copy "$src/all_valid/$y" "$dst/$y" --include '*.parquet' --include run.log "${opts[@]}"
+        rclone copy "$src/$y" "$dst/$y" --include '*.parquet' --include run.log "${opts[@]}"
         rclone delete "$dst/$y" --include '*.partial' --dry-run
         continue
     fi
@@ -100,16 +115,16 @@ for y in ${years//,/ }; do
     #   erda_<time>.log        rclone's per-file log of that run
     mkdir -p "$state"
     t=$(date -u +%Y%m%dT%H%M%SZ)
-    rclone copy "$src/all_valid/$y" "$dst/$y" --include '*.parquet' --include run.log "${opts[@]}" \
+    rclone copy "$src/$y" "$dst/$y" --include '*.parquet' --include run.log "${opts[@]}" \
         --log-file "$state/erda_$t.log" --log-level INFO
     rclone delete "$dst/$y" --include '*.partial' --log-file "$state/erda_$t.log" --log-level INFO
-    if rclone check "$src/all_valid/$y" "$dst/$y" --one-way --size-only --include '*.parquet' \
+    if rclone check "$src/$y" "$dst/$y" --one-way --size-only --include '*.parquet' \
             --checkers 8 --log-file "$state/erda_$t.log" --log-level INFO; then
         same=yes; echo "$y: all parquets on ERDA"
     else
         same="no, see erda_$t.log"; echo "$y: CHECK FAILED, rerun to resend (details in $state/erda_$t.log)"
     fi
-    n_local=$(find "$src/all_valid/$y" -maxdepth 1 -name '*.parquet' | wc -l)
+    n_local=$(find "$src/$y" -maxdepth 1 -name '*.parquet' | wc -l)
     read -r n bytes < <(rclone size "$dst/$y" --include '*.parquet' --json \
         | python -c 'import json, sys; d = json.load(sys.stdin); print(d["count"], d["bytes"])')
     [ -f "$state/uploads.tsv" ] || printf '%s\n' "#started (UTC)	destination	parquet files local	parquet files at destination	parquet bytes at destination	sizes match local	slurm job id" > "$state/uploads.tsv"

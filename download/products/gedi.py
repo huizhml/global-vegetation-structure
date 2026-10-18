@@ -87,6 +87,65 @@ def download_gedi_table_index( year: int, out_file: Path, rewrite: bool = False)
     else:
         raise requests.HTTPError(f'Failed to download {out_file}')
 
+# State info prefix of a tile done by a download with the antimeridian-safe
+# orbit join (2026-10-15 on): ALL_MONTHS = every orbit over it, GROWING_MONTHS =
+# the orbits in its growing months (all months when none is). Done lines
+# without a prefix come from earlier growing-months runs.
+ALL_MONTHS = 'all months'
+GROWING_MONTHS = 'growing months'
+
+
+def water_filter_expr(max_water_persistence: float = None, drop_no_dem: bool = True) -> str:
+    """GEE filter expression that drops shots on water ('' = keep all).
+
+    No DEM (digital_elevation_model == -999999) is open sea in practice: flat
+    ~3 m "canopies" with a land pft_class next to islands and coasts.
+    landsat_water_persistence (% of Landsat observations with water) catches
+    lakes and rivers, which do have a DEM.
+    """
+    parts = (['digital_elevation_model>-1000'] if drop_no_dem else []) + \
+            ([f'landsat_water_persistence<{max_water_persistence}'] if max_water_persistence is not None else [])
+    return ' && '.join(parts)
+
+
+def water_mask(df: pd.DataFrame, max_water_persistence: float = None, drop_no_dem: bool = True) -> pd.Series:
+    """True for shots water_filter_expr keeps, for data downloaded without it."""
+    keep = pd.Series(True, index=df.index)
+    if drop_no_dem:
+        keep &= df['digital_elevation_model'] > -1000
+    if max_water_persistence is not None:
+        keep &= df['landsat_water_persistence'] < max_water_persistence
+    return keep
+
+
+def tile_orbit_pairs(s2_table: gpd.GeoDataFrame, gedi_index: gpd.GeoDataFrame) -> pd.DataFrame:
+    """Every (S2 grid row, GEDI orbit table) pair whose footprints intersect.
+
+    Returns columns row (index into s2_table), Name, table_id, month (of the
+    table's time_start), in_growing (month in the tile's growing_months) and
+    wrapped (only found with the tile shifted by +-360 deg, see below).
+
+    Granules crossing the antimeridian come with continuous longitudes beyond
+    180 in the GEE index (about 8% of them, e.g. 179 -> 200), so on their own
+    they miss every tile west of -180 they actually cover (zone 01/02 tiles,
+    the western half of tiles split at 180, ...). Each tile is therefore also
+    tested shifted by -+360 deg. Downloads before 2026-10-15 did not do this:
+    their orbits are the pairs with wrapped == False.
+    """
+    if 'month' not in gedi_index:
+        gedi_index = gedi_index.assign(month=gedi_index['time_start'].str[5:7].astype(int))
+    tiles = s2_table[['Name', 'geometry', 'growing_months']].rename_axis('row')
+    shifted = [tiles.assign(geometry=tiles.translate(xoff=dx), wrapped=dx != 0) for dx in (0, 360, -360)]
+    tiles = gpd.GeoDataFrame(pd.concat(shifted), geometry='geometry', crs=s2_table.crs)
+    pairs = gpd.sjoin(tiles, gedi_index[['table_id', 'month', 'geometry']],
+                      predicate='intersects', how='inner')
+    # a pair found unshifted keeps wrapped == False
+    pairs = pairs.reset_index().sort_values('wrapped').drop_duplicates(['row', 'table_id'])
+    pairs['in_growing'] = [m in {int(g) for g in gm}
+                           for m, gm in zip(pairs['month'], pairs['growing_months'])]
+    return pd.DataFrame(pairs[['row', 'Name', 'table_id', 'month', 'in_growing', 'wrapped']]).sort_index()
+
+
 class GEDI(DaskDownloader):
     """
     A class for filtering, sampling(stratified, per orbit & per cell) and downloading GEDI data from Google Earth Engine.
@@ -187,6 +246,10 @@ class GEDI(DaskDownloader):
                  flag_dir: str = None,
                  key_file: str = None, npartitions=100,
                  sensitivity_threshold: float = 0.95,
+                 orbit_months: str = 'growing',
+                 tiles: list = None,
+                 max_water_persistence: float = None,
+                 drop_no_dem: bool = False,
                  n_parallel=40, row_group_size=100, random_state: int = 42, rewrite: bool = False, **kwargs):
         """
         Initializes a GEDI object.
@@ -222,11 +285,22 @@ class GEDI(DaskDownloader):
         self.row_group_size = row_group_size
         self.year = year
         self.sensitivity_threshold = sensitivity_threshold
+        assert orbit_months in ('all', 'growing'), orbit_months
+        self.orbit_months = orbit_months
+        # only these S2 tiles (e.g. a trial run into a copy of a few tiles); None = all
+        self.tiles = None if tiles is None else [str(t) for t in tiles]
         base_filter = 'quality_flag==1 && degrade_flag==0 && region_class>0 && leaf_off_flag!=1'
         self.filter = (
             f'{base_filter} && sensitivity>={sensitivity_threshold}'
             if sensitivity_threshold is not None else base_filter
         )
+        # shots on water (see water_filter_expr); also applied to the rows of
+        # a parquet that a download appends to
+        self.max_water_persistence = max_water_persistence
+        self.drop_no_dem = drop_no_dem
+        water = water_filter_expr(max_water_persistence, drop_no_dem)
+        if water:
+            self.filter = f'{self.filter} && {water}'
         self.random_state = random_state
         self.rewrite = rewrite
         self.key_file = key_file
@@ -350,16 +424,38 @@ class GEDI(DaskDownloader):
         across tile parquets — use `dedup_shots` as a post-processing pass
         if a globally-deduped dataset is needed.
 
-        With state_dir set, every S2 tile ends up in the state: done with
-        "N shots", "no valid shots" or "no orbit in growing season", or
-        failed with the error. A tile without a parquet is then either
-        known-empty or not finished, so completeness is
-        `state_summary` == all tiles done, without asking GEE again.
+        Which orbits (orbit_months)
+        ---------------------------
+        'growing' (default): orbits whose month is in the tile's
+        growing_months (s2_grid_file); a tile with no such orbit takes the
+        orbits of all months instead. 'all': every orbit over the tile.
+        Shots in leaf-off conditions are dropped per shot by leaf_off_flag != 1
+        either way, and shots on water by max_water_persistence / drop_no_dem.
+
+        Orbits come from tile_orbit_pairs, which also finds the antimeridian
+        granules (wrapped) that downloads before 2026-10-15 missed. A tile
+        those downloads did (parquet, or done in the state without a prefix)
+        is repaired in place: only orbits it should have and was not given
+        (wrapped ones, other months for 'all', all months for a tile without
+        growing-month orbits) are fetched and appended to its parquet (dedup
+        on shot_number); its old rows get the same water filter. This assumes
+        s2_grid_file and the orbit index are the ones those downloads used.
+
+        With state_dir set, every S2 tile ends up in the state: done or failed
+        with the error. Done info starts with "growing months:" or
+        "all months:" (e.g. "growing months: 5321 shots (+830 from 12
+        orbits)"), "no valid shots" or "no GEDI orbit over tile"; lines
+        without that prefix come from earlier downloads and are redone. A
+        year is complete when every tile is done with the prefix of the
+        orbit_months it was run with ("all months" also counts for growing).
 
         Args (via __init__ / yaml):
             * s2_grid_file: S2 table with columns Name, geometry, growing_months
             * gedi_table_index_file: GEDI orbit index (downloaded if missing)
             * state_dir: TaskState directory (optional)
+            * orbit_months: 'growing' or 'all'
+            * tiles: only these tiles (trial runs), None = all
+            * max_water_persistence, drop_no_dem: water filter, see water_filter_expr
         '''
         cluster = LocalCluster()
         client = Client(cluster)  # timeout
@@ -373,38 +469,48 @@ class GEDI(DaskDownloader):
 
         s2_grid_file = Path(self.s2_grid_file).expanduser()
         s2_table = gpd.read_parquet(s2_grid_file)
+        if self.tiles is not None:
+            s2_table = s2_table[s2_table['Name'].isin(self.tiles)].reset_index(drop=True)
+            print(f'tiles: {s2_table["Name"].nunique()} of {len(self.tiles)} requested are in the grid')
         if self.state is not None:
             # every S2 tile ends up done or failed; state_summary checks against this
             self.state.set_expected(s2_table['Name'], source=str(s2_grid_file))
 
         for tmp in self.save_dir.glob('.*.parquet.tmp'):   # left by a killed run
             tmp.unlink()
-        # Skip tiles already produced — keeps re-runs cheap.
-        existing = {p.stem for p in self.save_dir.glob('*.parquet') if is_parquet_ok(p)}
-        if self.state is not None:
-            done = self.state.done()
-            # parquets written before the state existed (or by a run without it)
-            backfill = sorted(existing - done)
-            if backfill:
-                self.state.mark_many(backfill, info='parquet existed')
-            existing |= done
-        pending = s2_table[~s2_table['Name'].isin(existing)].reset_index(drop=True)
-        print(f'{len(existing)} tiles done, {len(pending)} pending')
+        files = {p.stem for p in self.save_dir.glob('*.parquet') if is_parquet_ok(p)}
+        state = self.state.load() if self.state is not None else {}
+        done = {k: info for k, (st, _, info) in state.items() if st == 'done'}
+        tag = ALL_MONTHS if self.orbit_months == 'all' else GROWING_MONTHS
+        tagged = {k: info.split(':')[0] for k, info in done.items()
+                  if info.startswith((ALL_MONTHS, GROWING_MONTHS))}
+        # all months covers growing months; growing months is complete for 'growing' only
+        complete = {k for k, t in tagged.items() if t == ALL_MONTHS or t == tag}
+        # downloaded before the antimeridian-safe join: its growing-month,
+        # unshifted orbits are in (a parquet without a state line counts too)
+        legacy = (files | done.keys()) - tagged.keys()
+        pending = s2_table[~s2_table['Name'].isin(complete)].reset_index(drop=True)
+        print(f'orbit_months={self.orbit_months}: {len(complete)} tiles done, {len(pending)} pending')
         if len(pending) == 0:
             print('All tiles done.')
             return
 
-        # One-shot sjoin (pending × orbits) + growing-month filter, replaces the
-        # per-tile linear intersects() scan over the full orbit index (was
-        # O(N_pending × N_orbits) Python ops; now one R-tree sjoin).
-        pairs = gpd.sjoin(
-            pending[['Name', 'geometry', 'growing_months']],
-            gedi_index[['table_id', 'month', 'geometry']],
-            predicate='intersects', how='inner')
-        in_growing = pairs.apply(
-            lambda r: r['month'] in {int(m) for m in r['growing_months']}, axis=1)
-        pairs = pairs[in_growing]
-        orbits_per_row = pairs.groupby(level=0)['table_id'].apply(list).to_dict()
+        # One-shot sjoin (pending × orbits), replaces the per-tile linear
+        # intersects() scan over the full orbit index (one R-tree sjoin).
+        pairs = tile_orbit_pairs(pending, gedi_index)
+        any_orbit = set(pairs['Name'])
+        # a tile with no orbit in its growing months takes the orbits of all months
+        no_growing = set(pairs['Name']) - set(pairs.loc[pairs['in_growing'], 'Name'])
+        if self.orbit_months == 'all':
+            target = pd.Series(True, index=pairs.index)
+        else:
+            target = pairs['in_growing'] | pairs['Name'].isin(no_growing)
+        is_legacy = pairs['Name'].isin(legacy)
+        is_growing_tagged = pairs['Name'].map(tagged).eq(GROWING_MONTHS)
+        fetched = ((is_legacy & pairs['in_growing'] & ~pairs['wrapped'])
+                   | (is_growing_tagged & (pairs['in_growing'] | pairs['Name'].isin(no_growing))))
+        pairs = pairs[target & ~fetched]
+        orbits_per_row = pairs.groupby('row')['table_id'].apply(list).to_dict()
 
         # Tiles crossing the antimeridian are two rows with the same Name (25
         # in the grid). One task per Name, querying each part on its own: the
@@ -414,12 +520,21 @@ class GEDI(DaskDownloader):
             orbit_ids = orbits_per_row.get(i, [])
             if orbit_ids:
                 parts_per_tile[row['Name']].append((row['geometry'], orbit_ids))
-        # no orbit in this tile's growing season
-        no_orbit = sorted(set(pending['Name']) - parts_per_tile.keys())
-        tasks = [self.get_orbit_for_one_s2_tile(name, parts)
+        nothing_to_fetch = sorted(set(pending['Name']) - parts_per_tile.keys())
+        note = lambda n: ', no orbit in growing months: all months' if (
+            self.orbit_months == 'growing' and n in no_growing) else ''
+        tasks = [self.get_orbit_for_one_s2_tile(name, parts, append=name in files, note=note(name))
                  for name, parts in parts_per_tile.items()]
-        if self.state is not None and no_orbit:
-            self.state.mark_many(no_orbit, info='no orbit in growing season')
+        if self.state is not None and nothing_to_fetch:
+            # tells GEDI coverage (e.g. beyond ~51.6 deg) apart from the rest
+            uncovered = [n for n in nothing_to_fetch if n not in any_orbit]
+            if uncovered:
+                self.state.mark_many(uncovered, info=f'{tag}: no GEDI orbit over tile')
+            for n in nothing_to_fetch:
+                if n in any_orbit:      # every orbit it needs was fetched before
+                    rows = pq.ParquetFile(self.save_dir / f'{n}.parquet').metadata.num_rows if n in files else 0
+                    self.state.mark_done(n, f'{tag}: {rows} shots (nothing missing{note(n)})'
+                                         if rows else f'{tag}: no valid shots{note(n)}')
         print(f'Scheduling {len(tasks)} tile fetches')
         if tasks:
             nfailed, _ = self.schedule_tasks(delayed_tasks=tasks)
@@ -429,37 +544,58 @@ class GEDI(DaskDownloader):
             print(f'state: {self.state.path}')
 
     @dask.delayed
-    def get_orbit_for_one_s2_tile(self, name: str, parts: list):
+    def get_orbit_for_one_s2_tile(self, name: str, parts: list, append: bool = False, note: str = ''):
         '''
         Download all valid GEDI shots for one S2 tile across its pre-computed
-        list of overlapping growing-season orbits.
+        list of overlapping orbits.
 
         Args:
             * name: S2 tile name
             * parts: [(geometry, orbit_ids)], one per grid row with this name
                 (two for tiles split at the antimeridian). orbit_ids are GEE
-                FeatureCollection IDs already filtered to orbits that intersect
-                the part AND fall in the tile's growing months (computed once
-                in download_all_valid via sjoin).
+                FeatureCollection IDs of the orbits that intersect the part and
+                still have to be fetched (growing months only for
+                orbit_months='growing'; computed once in download_all_valid).
+            * append: add the shots to the tile's existing parquet (orbits an
+                earlier download missed or left out)
+            * note: appended to the state info
         '''
         try:
-            n = self._fetch_one_s2_tile(name, parts)
+            res = self._fetch_one_s2_tile(name, parts, append)
         except Exception as e:
             # re-raised so schedule_tasks still retries; a later success
             # overrides this line in the state
             if self.state is not None:
                 self.state.mark_failed(name, repr(e))
             raise
-        if self.state is not None and n is not None:
-            self.state.mark_done(name, f'{n} shots' if n else 'no valid shots')
+        if self.state is None or res is None:
+            return
+        n, n_new, n_dup, n_water = res
+        tag = ALL_MONTHS if self.orbit_months == 'all' else GROWING_MONTHS
+        n_orbits = sum(len(ids) for _, ids in parts)
+        extra = (f', {n_dup} already there' if n_dup else '') + \
+                (f', {n_water} old shots on water dropped' if n_water else '') + note
+        info = f'{n} shots (+{n_new} from {n_orbits} orbits{extra})' if n else f'no valid shots{extra}'
+        self.state.mark_done(name, f'{tag}: {info}')
 
-    def _fetch_one_s2_tile(self, name: str, parts: list):
-        '''Returns the number of shots saved, or None when the parquet already existed.'''
+    def _fetch_one_s2_tile(self, name: str, parts: list, append: bool = False):
+        '''Returns (shots in the parquet, shots added, fetched shots that were
+        already there, old shots dropped as water), or None when the parquet
+        already existed (not append).'''
         self._ensure_authenticated()  # runs on a worker process; ensure this run's key
         file = self.save_dir / f'{name}.parquet'
-        if file.exists() and not self.rewrite and is_parquet_ok(file):
+        if not append and file.exists() and not self.rewrite and is_parquet_ok(file):
             print(f'{file} exists and is ok')
             return None
+        old = gpd.read_parquet(file) if append and file.exists() else None
+        n_water = 0
+        if old is not None:     # same water filter as the GEE query
+            keep = water_mask(old, self.max_water_persistence, self.drop_no_dem)
+            n_water = int((~keep).sum())
+            old = old[keep]
+        n_old = 0 if old is None else len(old)
+        if old is not None and 'mgrs_tile' not in old:     # written before add_mgrs
+            old['mgrs_tile'] = mgrs_100km(old.geometry.x.values, old.geometry.y.values)
         data = []
         for geometry, orbit_ids in parts:
             geom = shapely_to_geojson(geometry)
@@ -473,8 +609,12 @@ class GEDI(DaskDownloader):
                     continue
                 data.append(fc)
         if len(data) == 0:
-            print(f'No GEDI points found for {name}')
-            return 0
+            print(f'No new GEDI points found for {name}')
+            if n_water:
+                tmp = file.with_name(f'.{file.name}.tmp')
+                old.to_parquet(tmp)
+                os.replace(tmp, file)
+            return n_old, 0, 0, n_water
         data = pd.concat(data)
         if len(parts) > 1:      # a shot on the seam between two parts comes twice
             data = data.drop_duplicates(subset='shot_number')
@@ -483,13 +623,24 @@ class GEDI(DaskDownloader):
         # S2 tiles overlap, so one shot lands in several tile files; this is
         # the one MGRS square it belongs to (see tools/mgrs_tile.py)
         data['mgrs_tile'] = mgrs_100km(data.geometry.x.values, data.geometry.y.values)
+        n_dup = 0
+        if old is not None:
+            # a column that is text on one side (e.g. system:index from an older
+            # download) must be text on both, or the parquet write fails
+            for c in old.columns.intersection(data.columns).drop('geometry', errors='ignore'):
+                if (old[c].dtype == object) != (data[c].dtype == object):
+                    old[c], data[c] = old[c].astype(str), data[c].astype(str)
+            # fetched shots already in the file mean an orbit was fetched twice
+            n_dup = int(data['shot_number'].isin(old['shot_number']).sum())
+            data = pd.concat([old, data[~data['shot_number'].isin(old['shot_number'])]],
+                             ignore_index=True)
         # temp file + rename: a killed worker or a concurrent reader (add_mgrs,
         # upload_erda) never sees a half-written <tile>.parquet
         tmp = file.with_name(f'.{file.name}.tmp')
         data.to_parquet(tmp)
         os.replace(tmp, file)
         print(f'Saved {len(data)} GEDI points for {name} after filtering')
-        return len(data)
+        return len(data), len(data) - n_old, n_dup, n_water
 
     # --- Orphaned helpers from the per-orbit refactor (see download_all_valid
     # docstring for why that approach was abandoned). Kept in case a future
@@ -757,3 +908,44 @@ def dedup_shots(parq_dir: str, **kwargs):
             df.to_parquet(str(t) + ".tmp")
             os.replace(str(t) + ".tmp", str(t))
 
+
+
+def _drop_water_one(fp: Path, max_water_persistence, drop_no_dem):
+    cols = ['digital_elevation_model', 'landsat_water_persistence']
+    head = pq.read_table(fp, columns=cols, partitioning=None).to_pandas()
+    keep = water_mask(head, max_water_persistence, drop_no_dem)
+    if keep.all():
+        return fp.stem, len(keep), len(keep)
+    df = gpd.read_parquet(fp)
+    df = df[keep.to_numpy()]
+    tmp = fp.with_name(f'.{fp.name}.tmp')
+    df.to_parquet(tmp)
+    os.replace(tmp, fp)
+    return fp.stem, len(keep), len(df)
+
+
+def drop_water_shots(parq_dir: str, max_water_persistence: float = 50, drop_no_dem: bool = True,
+                     workers: int = 8, **kwargs) -> pd.DataFrame:
+    '''
+    Apply the download water filter (water_filter_expr) in place to tile
+    parquets downloaded without it. Idempotent: a file with nothing to drop is
+    not rewritten. Writes <parq_dir>_state/water_filter_<UTC time>.tsv with
+    the shots per tile before and after. Do not run it while a download
+    writes to the same directory.
+    '''
+    from concurrent.futures import ProcessPoolExecutor
+    parq_dir = Path(parq_dir).expanduser()
+    files = sorted(p for p in parq_dir.glob('*.parquet') if is_parquet_ok(p))
+    print(f'{len(files)} tiles in {parq_dir}, filter: {water_filter_expr(max_water_persistence, drop_no_dem)}')
+    with ProcessPoolExecutor(workers) as pool:
+        rows = list(pool.map(_drop_water_one, files, [max_water_persistence] * len(files),
+                             [drop_no_dem] * len(files), chunksize=8))
+    report = pd.DataFrame(rows, columns=['tile', 'shots_before', 'shots_after'])
+    state_dir = Path(f'{parq_dir}_state')
+    state_dir.mkdir(exist_ok=True)
+    out = state_dir / f'water_filter_{datetime.utcnow():%Y%m%dT%H%M%SZ}.tsv'
+    report.to_csv(out, sep='\t', index=False)
+    before, after = report['shots_before'].sum(), report['shots_after'].sum()
+    print(f'{(report.shots_before > report.shots_after).sum()} tiles rewritten, '
+          f'{before - after} of {before} shots dropped ({(before - after) / max(before, 1):.2%}) -> {out}')
+    return report

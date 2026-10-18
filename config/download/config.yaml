@@ -72,14 +72,34 @@ download:
     # save_dir folder name (`veg_sensitivity_<label>`) is derived via the
     # `sens_label` resolver registered in download/run.py.
     sensitivity_threshold: null
+    # growing = tile growing_months 内的 orbit,生长月份内没有 orbit 的 tile 用全年;
+    # all = 全年所有 orbit。已有的年份会原地补漏:只下之前漏掉的 orbit(跨 180° 的
+    # granule、全年兜底),追加进原 parquet,原有的行也按同样的水体条件过滤。
+    orbit_months: growing
+    # 只处理这些 tile(试跑用,配合一个拷贝出来的 save_dir);null = 全部
+    tiles: null
+    # 水上的点:没有 DEM(-999999,基本是海面)和 Landsat 水体出现频率 >= 50% 的点不下载
+    drop_no_dem: true
+    max_water_persistence: 50
     n_parallel: 100
     key_file: keys/private-key.json
     gedi_table_index_file: ~/data/gvs/gedi/l2a_orbit_table/l2a_orbit_table_${.year}.parquet
-    save_dir: ~/data/gvs/gedi/veg_sensitivity_${sens_label:${.sensitivity_threshold}}/all_valid/${.year}
+    save_dir: ~/data/gvs/gedi/veg_sensitivity_${sens_label:${.sensitivity_threshold}}/${.year}
     # 每个 tile 的结果(N shots / no valid shots / no orbit / failed),放在
     # parquet 目录旁边而不是里面,免得读整个目录的 parquet 时混进 tsv。
     state_dir: ${.save_dir}_state
     s2_grid_file: ~/data/gvs/01_derived_ancillary/growing_months/s2_tiles_with_growing_months.parquet
+
+  # 已下载的 tile 按下载时同样的水体条件原地过滤(没有 DEM、Landsat 水体出现频率 >= 50%)
+  #   sbatch scripts/hendrix/download_gedi.sh drop_water year=2020
+  drop_water_gedi:
+    _target_: download.products.gedi.drop_water_shots
+    target_type: function
+    year: 2020
+    parq_dir: ~/data/gvs/gedi/veg_sensitivity_all/${.year}
+    drop_no_dem: true
+    max_water_persistence: 50
+    workers: 16
 
   add_slope:
     _target_: download.products.gedi.GEDI
