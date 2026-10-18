@@ -274,15 +274,27 @@ download:
   # deploy/schedule_tasks.py
   # Worklist (tile_id,year) of the S2 tiles of some countries over several years
   # for yearly (median) prediction, one row per array task:
-  #   python -m download.run run=country_tile_years
+  #   python -m download.run run=dk_tile_years
   #   sbatch --array=1-<rows> scripts/hendrix/run_deploy.sh predict_worklist <out_file>
   #   sbatch --array=1-<rows> scripts/hendrix/run_cpu.sh translate_worklist <out_file>  # COG
-  country_tile_years:
+  # Never rerun one while its array is still queued: the rows are renumbered.
+  dk_tile_years:
     _target_: deploy.schedule_tasks.write_country_tile_years
     target_type: function
     countries: [Denmark]  # ADMIN names in the Natural Earth countries file
-    years: [2018, 2019, 2021, 2022, 2023, 2024, 2025]  # 2020 skipped: the global product has it
+    # 2020 skipped: the global product has it. 2024 is also in the global product,
+    # but the CSV already has it (array tasks 101-120 were cancelled); keep it here
+    # so the rows of the submitted array keep their numbers.
+    years: [2018, 2019, 2021, 2022, 2023, 2024, 2025]
     out_file: ~/data/gvs/01_derived_ancillary/dk_tile_years_2018_2025.csv
+    s2_grid_file: ~/data/gvs/01_derived_ancillary/growing_months/s2_tiles_with_growing_months.parquet
+
+  fi_tile_years:
+    _target_: deploy.schedule_tasks.write_country_tile_years
+    target_type: function
+    countries: [Finland]  # Natural Earth has Åland as its own ADMIN "Aland"
+    years: [2018, 2019, 2021, 2022, 2023, 2025]  # 2020 and 2024: the global product has them
+    out_file: ~/data/gvs/01_derived_ancillary/fi_tile_years_2018_2025.csv
     s2_grid_file: ~/data/gvs/01_derived_ancillary/growing_months/s2_tiles_with_growing_months.parquet
 
   # download/core/items_store.py

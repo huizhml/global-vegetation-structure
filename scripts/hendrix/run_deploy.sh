@@ -109,7 +109,7 @@ check_reproducibility() {
 }
 
 # Yearly (median) prediction for a worklist of tile-years, one per array task.
-# Worklist: CSV with header tile_id,year (python -m download.run run=country_tile_years)
+# Worklist: CSV with header tile_id,year (python -m download.run run=dk_tile_years / fi_tile_years)
 #   sbatch --array=1-<n_rows> scripts/hendrix/run_deploy.sh predict_worklist <worklist>
 # Progress: <worklist without .csv>_state/predict, key <year>_<tile_id>
 #   python -m tools.run run=state_summary run.path=<worklist without .csv>_state/predict
