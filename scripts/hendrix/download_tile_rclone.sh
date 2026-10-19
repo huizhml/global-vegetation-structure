@@ -19,16 +19,27 @@
 #         quantile has its own dir (2020: Q1 in cog/, Q0/Q2 in geotiff/), one
 #         rclone call each. The manifest is cached as {DEST_ROOT}/{YEAR}/{RELEASE}.tsv,
 #         the index of where each tile came from.
+#     download_q1 <dk|fi>...                    (years $YEARS, default 2018..2025)
+#         the Q1 (median) of every tile of these countries, one country after
+#         the other, all years of a tile before the next tile. Tiles are those of
+#         ~/data/gvs/01_derived_ancillary/<c>_tile_years_2018_2025.csv (cached as
+#         {DEST_ROOT}/<c>_tiles.txt). Source per year:
+#            2020    q1_root of {YEAR}/released_v0.tsv   -> {YEAR}/released_v0/{TILE}
+#            2024    2024/bias_corrected/tiles/cog       -> 2024/bias_corrected/{TILE}
+#            other   {YEAR}/original/tiles/cog           -> {YEAR}/original/{TILE}
+#         A tile-year missing on hendrix is reported as [miss] and skipped.
 #
 #  Env knobs:
 #     DEST_ROOT   (default "/Volumes/One Touch/VSM_hui/")
 #     RELEASE     (default released_v0, download_manifest only)
 #     INCLUDE     rclone filter for a subset, e.g. INCLUDE='RH98_Q*.tif' (download_dir only)
+#     YEARS       (default "2018 2019 2020 2021 2022 2023 2024 2025", download_q1 only)
 #     DRY_RUN=1   only list what would be copied
 #
 #  Examples:
 #     bash scripts/hendrix/download_tile_rclone.sh download_dir 32UNG 2019
 #     bash scripts/hendrix/download_tile_rclone.sh download_manifest 2020 32UPG 32UPF 33VUC 32UNG
+#     bash scripts/hendrix/download_tile_rclone.sh download_q1 dk fi
 #
 #  Re-running is safe: rclone copy skips files that are already complete and
 #  verifies the md5 of every file it transfers (md5sum run on hendrix). The
@@ -119,8 +130,54 @@ download_manifest() {
     return $rc
 }
 
+download_q1() {
+    [ $# -gt 0 ] || { echo "usage: download_q1 <dk|fi>..." >&2; return 1; }
+    _check_dest
+    local years=${YEARS:-2018 2019 2020 2021 2022 2023 2024 2025}
+    local release=released_v0 year c tile tiles src version dst n rc=0
+    # Q1 only: in 2020 the q1_root also holds Q0/Q2 of some tiles
+    local filter=(--include 'RH*_Q1.tif' --include 'RH*_Q1.cog.tif')
+    _copy_args
+    case " $years " in *" 2020 "*)
+        rclone copyto "$REMOTE/products/vsm/2020/$release.tsv" "$DEST_ROOT/2020/$release.tsv" ;;
+    esac
+    for c in "$@"; do
+        tiles="$DEST_ROOT/${c}_tiles.txt"
+        rclone cat "$REMOTE/01_derived_ancillary/${c}_tile_years_2018_2025.csv" \
+            | awk -F, 'NR > 1 {print $1}' | sort -u > "$tiles"
+        echo "#### $c: $(wc -l < "$tiles" | tr -d ' ') tiles, years $years"
+        while read -r tile <&3; do
+            for year in $years; do
+                case $year in
+                2020)
+                    version=$release
+                    src=$(awk -F'\t' -v t="$tile" 'NR > 1 && $1 == t {print $3}' "$DEST_ROOT/2020/$release.tsv")
+                    [ -z "$src" ] && { echo "[miss] 2020 $tile not in $release.tsv" >&2; rc=3; continue; }
+                    src=$REMOTE/products/vsm/$src/$tile ;;
+                2024)
+                    version=bias_corrected
+                    src=$REMOTE/products/vsm/2024/bias_corrected/tiles/cog/$tile ;;
+                *)
+                    version=original
+                    src=$REMOTE/products/vsm/$year/original/tiles/cog/$tile ;;
+                esac
+                dst="$DEST_ROOT/$year/$version/$tile"
+                echo "== $c $tile $year: $src -> $dst"
+                if ! rclone copy "$src" "$dst" "${filter[@]}" "${copy_args[@]}"; then
+                    echo "[miss] $year $version $tile: copy failed" >&2; rc=1; continue
+                fi
+                [ "${DRY_RUN:-0}" = 1 ] && continue
+                rclone check "$src" "$dst" "${filter[@]}" --one-way --size-only || rc=1
+                n=$(ls "$dst" 2>/dev/null | grep -cE '^RH[0-9]+_Q1(\.cog)?\.tif$' || true)
+                [ "$n" -lt 101 ] && { echo "[incomplete] $year $version $tile: $n of 101 Q1 files" >&2; rc=1; }
+            done
+        done 3< "$tiles"
+    done
+    return $rc
+}
+
 case ${1:-} in
-download_dir|download_manifest)
+download_dir|download_manifest|download_q1)
     "$@" ;;
 *)
     awk 'NR > 1 && !/^#/ {exit} NR > 1' "$0"
