@@ -6,12 +6,12 @@
 
 ## 位置
 
-Hendrix：`~/data/gvs/products/vsm/<year>/released_v0.tsv`，和 `original/`、`masked/` 同级。
+Hendrix：`~/data/gvs/products/vsm/<year>/released_v0.tsv`，和各版本目录同级。
 
 | 年份 | 来源 | 说明 |
 |---|---|---|
 | 2020 | STAC `gvsm_stac_catalog/vsm_local_masked` 的 asset href | 发到 Source Coop 的 collection。item 分散在 `original/tiles/{cog,geotiff}` 和 `masked/tiles/geotiff` 三个 root；Q1 已转 COG，Q0/Q2 还在 geotiff/ |
-| 2024 | 目录 `2024/masked/tiles/cog/<TILE>/` | 不在任何 collection 里；文件名 `RH*_Q*.tif`（2026-10-16 由 `<TILE>_cog/RH*_Q*.cog.tif` 改名而来，见 `run=rename_tile_dirs`） |
+| 2024 | 目录 `2024/bias_corrected/tiles/cog/<TILE>/` | 不在任何 collection 里；文件名 `RH*_Q*.tif`。2026-10-23 前指向 `masked/`（另一次预测，已删）。目前只有 Q1，Q0/Q2 等 conformal 校准后才放进来，在那之前清单会报每个 tile 缺文件 |
 
 来源定义在 `config/tools/config.yaml` 的 `release_manifest.sources`。其他年份没有 release，用 `original/`。
 
@@ -22,9 +22,7 @@ Hendrix：`~/data/gvs/products/vsm/<year>/released_v0.tsv`，和 `original/`、`
 ```
 tile_id  q0_root                    q1_root                q2_root                    file_suffix  n_files  size_bytes
 32UNG    2020/masked/tiles/geotiff  2020/masked/tiles/cog  2020/masked/tiles/geotiff  .tif         303      ...
-32UNG    2024/masked/tiles/cog      2024/masked/tiles/cog  2024/masked/tiles/cog      .tif         303      ...
 ```
-（第二行在 `2024/released_v0.tsv` 里。）
 
 - 分位数 Q`q` 的 101 个文件是 `<q{q}_root>/<tile_id>/RH{0..100}_Q{q}<file_suffix>`；Q1 是中位数，Q0/Q2 是区间下/上界。
 - `q*_root` 相对于 `~/data/gvs/products/vsm`，就是版本 + 格式，数这一列就是每个版本的 tile 数：

@@ -46,9 +46,9 @@ tile_id  cog_q0  cog_q1  cog_q2  geotiff_q0  geotiff_q1  geotiff_q2  multiband  
 
 ```bash
 # cog Q1 完整的 tile 数
-awk -F'\t' 'NR>1 && $3==101' 2024/masked/snapshot.tsv | wc -l
+awk -F'\t' 'NR>1 && $3==101' 2024/bias_corrected/snapshot.tsv | wc -l
 # 有残缺或多余文件的 tile
-awk -F'\t' 'NR>1 && ($3!=101 || $10>0)' 2024/masked/snapshot.tsv
+awk -F'\t' 'NR>1 && ($3!=101 || $10>0)' 2024/bias_corrected/snapshot.tsv
 ```
 
 ## snapshot_mosaic.tsv：mosaic，按 RH

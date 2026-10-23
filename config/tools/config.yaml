@@ -646,8 +646,8 @@ tools:
     sources:
       # 发到 Source Coop 的 collection(见 scripts/hendrix/run_source_coop.sh)
       "2020": {catalog: ~/data/gvs/products/gvsm_stac_catalog/vsm_local_masked}
-      # 不在任何 collection 里;布局 <TILE>/RH*_Q*.tif(2026-10-16 由 <TILE>_cog/*.cog.tif 改名,run=rename_tile_dirs)
-      "2024": {dir: ~/data/gvs/products/vsm/2024/masked/tiles/cog}
+      # 不在任何 collection 里;布局 <TILE>/RH*_Q*.tif。2026-10-23 由 masked(另一次预测,已删)改为 bias_corrected
+      "2024": {dir: ~/data/gvs/products/vsm/2024/bias_corrected/tiles/cog}
     products_root: ~/data/gvs/products/vsm
     out_fp: ~/data/gvs/products/vsm/{year}/{release}.tsv
     workers: 32
