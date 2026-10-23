@@ -78,17 +78,97 @@ download:
     orbit_months: growing
     # 只处理这些 tile(试跑用,配合一个拷贝出来的 save_dir);null = 全部
     tiles: null
+    # 同上,文件里每行一个 tile 名
+    tiles_file: null
     # 水上的点:没有 DEM(-999999,基本是海面)和 Landsat 水体出现频率 >= 50% 的点不下载
     drop_no_dem: true
     max_water_persistence: 50
+    # 保留的 pft_class(MODIS LC_Type5):1-4 森林、5 灌木、6 草地、7-8 农田、9 城市、11 裸地;
+    # 0 水体、10 冰雪不要。2026-10-22 之前的下载只有 1-8,9 和 11 用 add_pft_gedi 补。
+    pft_classes: [1, 2, 3, 4, 5, 6, 7, 8, 9, 11]
     n_parallel: 100
     key_file: keys/private-key.json
+    # 一个 tile 的多个 orbit 在 GEE 端合并成一次请求(见 fetch_orbits)。每次请求的点数控制在
+    # max_shots_per_request 以内(GEE 一次下载超过约 3.8 万点(全部列)会 "No space left on device",
+    # 超了就对半拆)。每个 orbit 的预计点数 = prior_year 那年这个 tile 的点数 / orbit 数,
+    # 再按这个 tile 已下的请求校正;prior_year: null = 不用先验,第一次请求 5 个 orbit。
+    # 先验用 veg_sensitivity_all 的 state:点数只会偏多,更严的 sensitivity 也安全。
+    max_shots_per_request: 20000
+    max_orbits_per_request: 50
+    prior_year: 2022
+    prior_state_dir: ~/data/gvs/gedi/veg_sensitivity_all/${.prior_year}_state
+    prior_index_file: ~/data/gvs/gedi/l2a_orbit_table/l2a_orbit_table_${.prior_year}.parquet
+    # true = 只打印要下载的 tile / orbit、预计点数和请求数,不写任何东西
+    dry_run: false
     gedi_table_index_file: ~/data/gvs/gedi/l2a_orbit_table/l2a_orbit_table_${.year}.parquet
     save_dir: ~/data/gvs/gedi/veg_sensitivity_${sens_label:${.sensitivity_threshold}}/${.year}
     # 每个 tile 的结果(N shots / no valid shots / no orbit / failed),放在
     # parquet 目录旁边而不是里面,免得读整个目录的 parquet 时混进 tsv。
     state_dir: ${.save_dir}_state
     s2_grid_file: ~/data/gvs/01_derived_ancillary/growing_months/s2_tiles_with_growing_months.parquet
+
+  # 给按 pft 1-8 下载的年份补上 pft 9(城市)和 11(裸地):每个 tile 的所有 orbit(同
+  # download_all_valid 的 orbit 选择)只下这两类,追加进 parquet,旧行顺带做水体过滤。
+  # 每个 tile 的结果在 <save_dir>_state/add_pft;exclude_tiles_file 里的 tile 跳过
+  # (例如刚按 1-9,11 整 tile 重下的)。
+  #   sbatch scripts/lumi/download_gedi.sh add_pft year=2020
+  add_pft_gedi:
+    _target_: download.products.gedi.GEDI
+    target_type: class
+    target_method: add_pft_classes
+    func_args: {}
+    year: 2020
+    sensitivity_threshold: null
+    orbit_months: growing
+    add_pft: [9, 11]
+    exclude_tiles_file: null
+    tiles: null
+    tiles_file: null
+    drop_no_dem: true
+    max_water_persistence: 50
+    n_parallel: 100
+    key_file: keys/private-key.json
+    # 9 和 11 的点在大多数 tile 很少,一次请求可以合并更多 orbit
+    max_shots_per_request: 20000
+    max_orbits_per_request: 100
+    gedi_table_index_file: ~/data/gvs/gedi/l2a_orbit_table/l2a_orbit_table_${.year}.parquet
+    save_dir: ~/data/gvs/gedi/veg_sensitivity_${sens_label:${.sensitivity_threshold}}/${.year}
+    state_dir: ${.save_dir}_state
+    add_pft_state_dir: ${.save_dir}_state/add_pft
+    s2_grid_file: ~/data/gvs/01_derived_ancillary/growing_months/s2_tiles_with_growing_months.parquet
+
+  # 从 ERDA 拷来的一年(staging_dir)移进 save_dir,plan_file 里的 tile(在 save_dir 修过的)除外;
+  # 顺便列出 shot_number 是 float64(id 被舍入)的 tile。见 scripts/lumi/download_gedi.sh organize
+  organize_erda_copy_gedi:
+    _target_: download.products.gedi.organize_erda_copy
+    target_type: function
+    year: 2020
+    save_dir: ~/data/gvs/gedi/veg_sensitivity_all/${.year}
+    staging_dir: ${.save_dir}_state/erda_copy
+    plan_file: ${.save_dir}_state/fetch_plan.tsv
+    float_tiles_file: ${.save_dir}_state/float_id_tiles.txt
+    state_dir: ${.save_dir}_state
+
+  # 拷到别处(ERDA、Hendrix)之前整理一年的 state:expected.tsv 恢复为全部 S2 tile
+  # (只跑部分 tile 的运行会把它改成子集),日志并入 snapshot.tsv
+  finalize_gedi_states:
+    _target_: download.products.gedi.finalize_gedi_states
+    target_type: function
+    year: 2020
+    s2_grid_file: ~/data/gvs/01_derived_ancillary/growing_months/s2_tiles_with_growing_months.parquet
+    state_dirs:
+      - ~/data/gvs/gedi/veg_sensitivity_all/${..year}_state
+      - ~/data/gvs/gedi/veg_sensitivity_all/${..year}_state/add_pft
+
+  # 让下一次 download_all_valid 把这些 tile 整个重下:parquet 移到 backup_dir,state 置为 reset
+  reset_gedi_tiles:
+    _target_: download.products.gedi.reset_gedi_tiles
+    target_type: function
+    year: 2020
+    save_dir: ~/data/gvs/gedi/veg_sensitivity_all/${.year}
+    state_dir: ${.save_dir}_state
+    tiles_file: ???
+    backup_dir: ${.save_dir}_state/replaced
 
   # 已下载的 tile 按下载时同样的水体条件原地过滤(没有 DEM、Landsat 水体出现频率 >= 50%)
   #   sbatch scripts/hendrix/download_gedi.sh drop_water year=2020

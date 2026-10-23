@@ -575,6 +575,29 @@ def shapely_to_geojson(geom: gpd.GeoSeries):
     return geom
 
 
+def exact_shot_number(s: pd.Series) -> pd.Series:
+    '''GEDI shot_number as int64, exact where the source is.
+
+    Most GEDI L2A tables in GEE store shot_number as a string (exact), some as
+    a float (e.g. 2020 granules *_003_04_V002: 1.0601000020016296E17), already
+    rounded to a multiple of 16 there and not recoverable. Read as float64, a
+    column with both rounds every id, which is how 2024 tile files of 2020 and
+    570 of 2021 lost theirs (per-orbit CSVs joined with pd.concat). Here only
+    the float values are rounded; a float64 column (older files) is cast.'''
+    if pd.api.types.is_float_dtype(s):
+        return s.round().astype('int64')
+    if pd.api.types.is_integer_dtype(s):
+        return s.astype('int64')
+    # numpy, not pandas: str.astype('int64') and a masked Series assignment
+    # both go via float64
+    s = s.astype(str)
+    digits = s.str.fullmatch(r'\d+').to_numpy()
+    out = np.zeros(len(s), dtype='int64')
+    out[digits] = np.array([int(v) for v in s[digits]], dtype='int64')
+    out[~digits] = np.round(s[~digits].astype(float).to_numpy()).astype('int64')
+    return pd.Series(out, index=s.index, name=s.name)
+
+
 # A dropped stream (ChunkedEncodingError) or a stalled one (read timeout) is
 # retried here for this one table, instead of failing the whole dask task.
 @backoff.on_exception(backoff.expo,
@@ -586,11 +609,17 @@ def shapely_to_geojson(geom: gpd.GeoSeries):
                       on_backoff=lambda d: print(
                           f"ee_fc_to_gpd retry {d['tries']} in {d['wait']:.0f}s: {d['exception']!r}"),
 )
-def ee_fc_to_gpd(fc: ee.FeatureCollection):
+def ee_fc_to_gpd(fc: ee.FeatureCollection, selectors: list = None):
     """
     Convert an Earth Engine feature collection to a GeoPandas GeoDataFrame.
+    selectors: the columns to download (include '.geo'). Without them GEE takes
+    the columns of the first feature, so a property the first feature lacks is
+    dropped for all (see GEDI_COLUMNS in download/products/gedi.py).
     """
-    download_id = ee.data.getTableDownloadId({'table': fc, 'fileFormat': 'csv'})
+    params = {'table': fc, 'fileFormat': 'csv'}
+    if selectors is not None:
+        params['selectors'] = list(selectors)
+    download_id = ee.data.getTableDownloadId(params)
     # Without a timeout a connection GEE stops sending on hangs the worker
     # forever. The read timeout is per gap between bytes, not the whole download;
     # GEE computes the table before the first byte, hence the long one.
@@ -599,7 +628,11 @@ def ee_fc_to_gpd(fc: ee.FeatureCollection):
         data = StringIO(res.content.decode('utf-8'))
         if data.getvalue().strip() == '':
             return None
-        df = pd.read_csv(data)
+        # shot_number as text: one float value would make pandas read the
+        # whole column as float64 and round every id (see exact_shot_number)
+        df = pd.read_csv(data, dtype={'shot_number': str})
+        if 'shot_number' in df:
+            df['shot_number'] = exact_shot_number(df['shot_number'])
         df['.geo'] = df['.geo'].apply(lambda x: shape(json.loads(x)))
         df = df.rename(columns={'.geo': 'geometry'})
         df = gpd.GeoDataFrame(df, geometry='geometry')

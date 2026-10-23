@@ -1,4 +1,6 @@
 import os
+import re
+import time
 import ee
 import json
 import logging
@@ -27,7 +29,7 @@ from shapely.geometry import box
 from dask.distributed import Client, LocalCluster
 
 from download.core import DaskDownloader
-from download.core.utils import authenticate, ensure_authenticated, shapely_to_geojson, ee_fc_to_gpd, get_aux_df, row_to_stac_item, get_patch, get_epsg_from_tile, buffer_and_snap_bounds, get_total_bounds, check_unfinished_files, read_parquets_with_file_name
+from download.core.utils import authenticate, ensure_authenticated, shapely_to_geojson, ee_fc_to_gpd, exact_shot_number, get_aux_df, row_to_stac_item, get_patch, get_epsg_from_tile, buffer_and_snap_bounds, get_total_bounds, check_unfinished_files, read_parquets_with_file_name
 from download.core.constants import dtypes
 from tools.task_state import TaskState
 from tools.mgrs_tile import mgrs_100km
@@ -106,6 +108,242 @@ def water_filter_expr(max_water_persistence: float = None, drop_no_dem: bool = T
     parts = (['digital_elevation_model>-1000'] if drop_no_dem else []) + \
             ([f'landsat_water_persistence<{max_water_persistence}'] if max_water_persistence is not None else [])
     return ' && '.join(parts)
+
+
+def shot_filter_expr(sensitivity_threshold: float = None, max_water_persistence: float = None,
+                     drop_no_dem: bool = True) -> str:
+    """GEE filter for the shots download_all_valid keeps (quality, leaf-on,
+    sensitivity, not on water)."""
+    expr = 'quality_flag==1 && degrade_flag==0 && region_class>0 && leaf_off_flag!=1'
+    if sensitivity_threshold is not None:
+        expr = f'{expr} && sensitivity>={sensitivity_threshold}'
+    water = water_filter_expr(max_water_persistence, drop_no_dem)
+    return f'{expr} && {water}' if water else expr
+
+
+# GEDI pft_class = MODIS MCD12Q1 LC_Type5 of the 1 km cell: 1-4 trees, 5 shrub,
+# 6 grass, 7-8 cropland, 9 urban, 11 barren kept; 0 water, 10 snow/ice dropped.
+# Until 2026-10 downloads kept 1-8 only; 9 and 11 were added to those years
+# with add_pft_classes.
+VALID_PFT = [1, 2, 3, 4, 5, 6, 7, 8, 9, 11]
+
+
+# Every property of the GEDI L2A tables in GEE. Tables differ: e.g. the
+# *_003_04_V002 granules have no orbit_number, minor_frame_number,
+# shot_number_within_beam, local_beam_azimuth, local_beam_elevation. A CSV
+# download takes its columns from the first feature, so a merged request
+# (orbits_fc) must name them all, or a batch led by such a table drops these
+# five columns for every orbit in it (2026-10-22).
+GEDI_COLUMNS = ['system:index', '.geo', 'beam', 'degrade_flag', 'delta_time', 'digital_elevation_model',
+                'digital_elevation_model_srtm', 'elev_highestreturn', 'elev_lowestmode', 'elevation_bias_flag',
+                'energy_total', 'landsat_treecover', 'landsat_water_persistence', 'lat_highestreturn',
+                'leaf_off_doy', 'leaf_off_flag', 'leaf_on_cycle', 'leaf_on_doy', 'local_beam_azimuth',
+                'local_beam_elevation', 'lon_highestreturn', 'minor_frame_number', 'modis_nonvegetated',
+                'modis_nonvegetated_sd', 'modis_treecover', 'modis_treecover_sd', 'num_detectedmodes',
+                'orbit_number', 'pft_class', 'quality_flag', 'region_class', 'selected_algorithm',
+                'selected_mode', 'selected_mode_flag', 'sensitivity', 'shot_number', 'shot_number_within_beam',
+                'solar_azimuth', 'solar_elevation', 'surface_flag', 'urban_focal_window_size',
+                'urban_proportion'] + [f'rh{i}' for i in range(101)]
+
+
+def pft_label(classes) -> str:
+    '''[1, 2, ..., 9, 11] -> "1-9,11", for state lines.'''
+    classes, runs = sorted(int(c) for c in classes), []
+    for c in classes:
+        if runs and c == runs[-1][1] + 1:
+            runs[-1][1] = c
+        else:
+            runs.append([c, c])
+    return ','.join(f'{a}-{b}' if b > a else f'{a}' for a, b in runs)
+# GEE fails to build a table download above some size (~38k shots with all
+# 143 columns, ~76k with 58: it is bytes; 2026-10 benchmark, see
+# tools/gedi_merge_benchmark.py); such a request is split in two and retried.
+SPLITTABLE_ERRORS = ('No space left on device',)
+
+
+def orbits_fc(orbit_ids: list, geom: dict, shot_filter: str, columns: list = None,
+              pft_classes: list = VALID_PFT) -> ee.FeatureCollection:
+    '''The shots of all orbit_ids over geom as one FeatureCollection, so they
+    come in one download. filterBounds goes on each orbit table before the
+    merge, so each uses its own spatial index.'''
+    fcs = [ee.FeatureCollection(oid).filterBounds(geom) for oid in orbit_ids]
+    fc = fcs[0] if len(fcs) == 1 else ee.FeatureCollection(fcs).flatten()
+    fc = fc.filter(shot_filter).filter(ee.Filter.inList('pft_class', list(pft_classes)))
+    return fc if columns is None else fc.select(columns)
+
+
+def fetch_orbits(orbit_ids: list, geom: dict, shot_filter: str, shots_per_orbit: float = None,
+                 max_shots: int = 20000, max_orbits: int = 50, first_batch: int = 5,
+                 prior_weight: float = 3, columns: list = None, pft_classes: list = VALID_PFT):
+    '''Download the shots of orbit_ids over geom in few requests, each with as
+    many orbits as are expected to fit in max_shots.
+
+    The expected shots per orbit start at shots_per_orbit (from another year,
+    see shots_per_orbit_prior; None = first_batch orbits in the first
+    request) and follow what the requests so far returned, the prior counting
+    as prior_weight orbits. A request GEE cannot build (SPLITTABLE_ERRORS) is
+    split in two, down to single orbits.
+
+    An orbit table the GEE index lists but GEE does not have (e.g.
+    GEDI02_A_2022362115234_O22900_01_..., 2026-10) is left out of its request
+    and logged as `missing`.
+
+    Returns (shots or None, log): log has one dict per request with orbits,
+    shots (for a failed request: what its two halves returned), seconds, ok,
+    and missing (the table it failed on) if any.
+    '''
+    log, frames = [], []
+
+    def fetch_batch(batch):
+        start = time.time()
+        entry = dict(orbits=len(batch), shots=None, seconds=None, ok=True)
+        log.append(entry)
+        try:
+            df = ee_fc_to_gpd(orbits_fc(batch, geom, shot_filter, columns, pft_classes),
+                              selectors=GEDI_COLUMNS if columns is None else None)
+        except ee.EEException as e:
+            m = re.search(r"Collection asset '([^']+)' not found", str(e))
+            if not m or m.group(1) not in batch:
+                raise
+            entry.update(ok=False, seconds=round(time.time() - start, 1), missing=m.group(1))
+            rest = [o for o in batch if o != m.group(1)]
+            entry['shots'] = fetch_batch(rest) if rest else 0
+            return entry['shots']
+        except requests.HTTPError as e:
+            entry.update(ok=False, seconds=round(time.time() - start, 1))
+            if len(batch) == 1 or not any(m in str(e) for m in SPLITTABLE_ERRORS):
+                raise
+            half = len(batch) // 2
+            entry['shots'] = fetch_batch(batch[:half]) + fetch_batch(batch[half:])
+            return entry['shots']
+        entry['seconds'] = round(time.time() - start, 1)
+        entry['shots'] = 0 if df is None else len(df)
+        if df is not None:
+            frames.append(df)
+        return entry['shots']
+
+    pending = list(orbit_ids)
+    seen_orbits = seen_shots = 0
+    while pending:
+        if seen_orbits == 0:
+            expected = shots_per_orbit
+        elif shots_per_orbit is None:
+            expected = seen_shots / seen_orbits
+        else:
+            expected = (seen_shots + prior_weight * shots_per_orbit) / (seen_orbits + prior_weight)
+        n = first_batch if expected is None else int(max_shots // max(expected, 1))
+        n = min(max(n, 1), max_orbits)
+        batch, pending = pending[:n], pending[n:]
+        seen_shots += fetch_batch(batch)
+        seen_orbits += len(batch)
+    shots = pd.concat(frames, ignore_index=True) if frames else None
+    return shots, log
+
+
+def target_orbits(pairs: pd.DataFrame, orbit_months: str):
+    '''Which (tile, orbit) pairs of tile_orbit_pairs a download takes: all for
+    'all'; for 'growing' the orbits in the tile's growing months, all months
+    for a tile with none there. Returns (mask over pairs, tiles without
+    growing-month orbits).'''
+    no_growing = set(pairs['Name']) - set(pairs.loc[pairs['in_growing'], 'Name'])
+    if orbit_months == 'all':
+        return pd.Series(True, index=pairs.index), no_growing
+    return pairs['in_growing'] | pairs['Name'].isin(no_growing), no_growing
+
+
+def state_shots(state_dir: str) -> dict:
+    '''{tile: shots} of the tiles a download_all_valid state has a count for
+    ("... 5321 shots ..." or "no valid shots").'''
+    shots = {}
+    for name, (status, _, info) in TaskState(state_dir, create=False).load().items():
+        if status != 'done':
+            continue
+        m = re.search(r'(\d+) shots', info)
+        if m:
+            shots[name] = int(m.group(1))
+        elif 'no valid shots' in info:
+            shots[name] = 0
+    return shots
+
+
+def shots_per_orbit_prior(s2_table: gpd.GeoDataFrame, state_dir: str, index_file: str, year: int,
+                          orbit_months: str = 'growing') -> dict:
+    '''Expected shots per orbit for each S2 tile, from the download of `year`:
+    its shots in the tile (download state) / its orbits over the tile. The
+    number of orbits changes a lot between years (2019 starts in April, GEDI
+    was off from 2023-03 to 2024-04), the shots per orbit much less.
+    Tiles without a count in that state are left out.'''
+    shots = state_shots(state_dir)
+    index = download_gedi_table_index(year=year, out_file=Path(index_file).expanduser())
+    index = index.set_crs(epsg=4326, allow_override=True)
+    pairs = tile_orbit_pairs(s2_table[s2_table['Name'].isin(shots.keys())], index)
+    mask, _ = target_orbits(pairs, orbit_months)
+    n_orbits = pairs[mask].groupby('Name').size()
+    return {name: shots[name] / k for name, k in n_orbits.items() if k > 0}
+
+
+def organize_erda_copy(save_dir: str, staging_dir: str, plan_file: str, float_tiles_file: str,
+                       state_dir: str, **kwargs):
+    '''Move a year copied from ERDA (staging_dir) into save_dir, except the
+    tiles of plan_file: those were repaired in save_dir, their ERDA versions
+    stay in staging_dir. Lists the tiles whose shot_number is float64 (every id
+    rounded, see exact_shot_number) in float_tiles_file, from the ERDA files,
+    since a repaired file has int64 ids even where they are rounded.
+    Only tiles done in state_dir are moved: e.g. the halves of antimeridian
+    tiles on ERDA belong to tiles that were reset and fetched again.'''
+    save_dir, staging_dir = Path(save_dir).expanduser(), Path(staging_dir).expanduser()
+    files = sorted(staging_dir.glob('*.parquet'))
+    plan = set(pd.read_csv(Path(plan_file).expanduser(), sep='\t')['tile'])
+    float_tiles = [p.stem for p in files if str(pq.read_schema(p).field('shot_number').type) == 'double']
+    Path(float_tiles_file).expanduser().write_text(''.join(f'{t}\n' for t in float_tiles))
+    done = {k for k, (st, _, _) in TaskState(state_dir, create=False).load().items() if st == 'done'}
+    moved, clash, not_done = 0, [], []
+    for p in files:
+        if p.stem in plan:
+            continue
+        if p.stem not in done:
+            not_done.append(p.stem)
+            continue
+        dst = save_dir / p.name
+        if dst.exists():
+            clash.append(p.stem)
+            continue
+        os.replace(p, dst)
+        moved += 1
+    print(f'{staging_dir}: {len(files)} files, {moved} moved to {save_dir}, '
+          f'{sum(p.stem in plan for p in files)} left (repaired here), {len(clash)} already there {clash[:5]}, '
+          f'{len(not_done)} left (not done in the state) {not_done[:10]}')
+    print(f'{len(float_tiles)} tiles with float64 shot_number -> {float_tiles_file}')
+
+
+def finalize_gedi_states(s2_grid_file: str, state_dirs: list, **kwargs):
+    '''Before a year is copied elsewhere: every S2 tile in each state's
+    expected.tsv again (runs on a subset of tiles rewrite it to that subset),
+    and all log lines merged into snapshot.tsv.'''
+    names = gpd.read_parquet(Path(s2_grid_file).expanduser())['Name']
+    for d in state_dirs:
+        st = TaskState(d, create=False)
+        st.set_expected(names, source=str(s2_grid_file))
+        st.compact(idle_s=0)
+        state = st.load()
+        print(f'{d}: {len(state)} tiles, ' + ', '.join(
+            f'{s}: {n}' for s, n in pd.Series([v[0] for v in state.values()]).value_counts().items()))
+
+
+def reset_gedi_tiles(save_dir: str, state_dir: str, tiles_file: str, backup_dir: str, **kwargs):
+    '''Forget tiles so that the next download_all_valid fetches them whole
+    (e.g. to replace rounded ids): parquet moved to backup_dir, state reset.'''
+    save_dir, backup_dir = Path(save_dir).expanduser(), Path(backup_dir).expanduser()
+    tiles = Path(tiles_file).expanduser().read_text().split()
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    moved = 0
+    for t in tiles:
+        f = save_dir / f'{t}.parquet'
+        if f.exists():
+            os.replace(f, backup_dir / f.name)
+            moved += 1
+    TaskState(state_dir, create=False).mark_many(tiles, status='reset')
+    print(f'{len(tiles)} tiles reset in {state_dir}, {moved} parquets moved to {backup_dir}')
 
 
 def water_mask(df: pd.DataFrame, max_water_persistence: float = None, drop_no_dem: bool = True) -> pd.Series:
@@ -250,6 +488,23 @@ class GEDI(DaskDownloader):
                  tiles: list = None,
                  max_water_persistence: float = None,
                  drop_no_dem: bool = False,
+                 # orbits merged per GEE request, see fetch_orbits
+                 max_shots_per_request: int = 20000,
+                 max_orbits_per_request: int = 50,
+                 prior_year: int = None,
+                 prior_state_dir: str = None,
+                 prior_index_file: str = None,
+                 # download_all_valid: only print what it would fetch
+                 dry_run: bool = False,
+                 # pft_class kept by the GEE query (VALID_PFT)
+                 pft_classes: list = None,
+                 # add_pft_classes: fetch only these classes, per-tile outcome
+                 # in add_pft_state_dir; tiles in exclude_tiles_file skipped
+                 add_pft: list = None,
+                 add_pft_state_dir: str = None,
+                 exclude_tiles_file: str = None,
+                 # one tile name per line, instead of tiles
+                 tiles_file: str = None,
                  n_parallel=40, row_group_size=100, random_state: int = 42, rewrite: bool = False, **kwargs):
         """
         Initializes a GEDI object.
@@ -288,19 +543,26 @@ class GEDI(DaskDownloader):
         assert orbit_months in ('all', 'growing'), orbit_months
         self.orbit_months = orbit_months
         # only these S2 tiles (e.g. a trial run into a copy of a few tiles); None = all
+        if tiles_file is not None:
+            tiles = Path(tiles_file).expanduser().read_text().split()
         self.tiles = None if tiles is None else [str(t) for t in tiles]
-        base_filter = 'quality_flag==1 && degrade_flag==0 && region_class>0 && leaf_off_flag!=1'
-        self.filter = (
-            f'{base_filter} && sensitivity>={sensitivity_threshold}'
-            if sensitivity_threshold is not None else base_filter
-        )
-        # shots on water (see water_filter_expr); also applied to the rows of
-        # a parquet that a download appends to
+        # shots on water (see water_filter_expr) are also dropped from the rows
+        # of a parquet that a download appends to
         self.max_water_persistence = max_water_persistence
         self.drop_no_dem = drop_no_dem
-        water = water_filter_expr(max_water_persistence, drop_no_dem)
-        if water:
-            self.filter = f'{self.filter} && {water}'
+        self.filter = shot_filter_expr(sensitivity_threshold, max_water_persistence, drop_no_dem)
+        self.max_shots_per_request = max_shots_per_request
+        self.max_orbits_per_request = max_orbits_per_request
+        # shots per orbit from another year's download size the first request
+        # of a tile; None = no prior
+        self.prior_year = prior_year
+        self.prior_state_dir = prior_state_dir
+        self.prior_index_file = prior_index_file
+        self.dry_run = dry_run
+        self.pft_classes = list(VALID_PFT if pft_classes is None else pft_classes)
+        self.add_pft = None if add_pft is None else list(add_pft)
+        self.add_pft_state = TaskState(add_pft_state_dir) if add_pft_state_dir is not None else None
+        self.exclude_tiles_file = exclude_tiles_file
         self.random_state = random_state
         self.rewrite = rewrite
         self.key_file = key_file
@@ -424,6 +686,14 @@ class GEDI(DaskDownloader):
         across tile parquets — use `dedup_shots` as a post-processing pass
         if a globally-deduped dataset is needed.
 
+        Within a tile, the orbits are merged server-side into few requests
+        (fetch_orbits): one request per orbit is mostly fixed per-request
+        cost (2026-10 benchmark, tools/gedi_merge_benchmark.py: 10 orbits per
+        request was 2-5x faster with ~9x fewer requests). A request is kept
+        under max_shots_per_request with the shots per orbit of prior_year
+        (shots_per_orbit_prior) and of the tile's requests so far, since GEE
+        cannot build a download much above ~38k shots.
+
         Which orbits (orbit_months)
         ---------------------------
         'growing' (default): orbits whose month is in the tile's
@@ -456,28 +726,23 @@ class GEDI(DaskDownloader):
             * orbit_months: 'growing' or 'all'
             * tiles: only these tiles (trial runs), None = all
             * max_water_persistence, drop_no_dem: water filter, see water_filter_expr
+            * dry_run: print the tiles and orbits it would fetch, with the
+                expected shots and requests; writes only that list
+                (fetch_plan.tsv in the state dir)
         '''
-        cluster = LocalCluster()
-        client = Client(cluster)  # timeout
-        print(client)
+        if not self.dry_run:
+            cluster = LocalCluster()
+            client = Client(cluster)  # timeout
+            print(client)
 
-        gedi_table_index_file = Path(self.gedi_table_index_file).expanduser()
-        gedi_index = download_gedi_table_index(year=self.year, out_file=gedi_table_index_file)
-        gedi_index = gedi_index.drop(columns=['system:index', 'time_end'])
-        gedi_index['month'] = gedi_index['time_start'].str[5:7].astype(int)
-        gedi_index = gedi_index.set_crs(epsg=4326)
-
-        s2_grid_file = Path(self.s2_grid_file).expanduser()
-        s2_table = gpd.read_parquet(s2_grid_file)
-        if self.tiles is not None:
-            s2_table = s2_table[s2_table['Name'].isin(self.tiles)].reset_index(drop=True)
-            print(f'tiles: {s2_table["Name"].nunique()} of {len(self.tiles)} requested are in the grid')
-        if self.state is not None:
+        gedi_index, s2_table = self._load_index_and_grid()
+        if self.state is not None and not self.dry_run:
             # every S2 tile ends up done or failed; state_summary checks against this
-            self.state.set_expected(s2_table['Name'], source=str(s2_grid_file))
+            self.state.set_expected(s2_table['Name'], source=str(self.s2_grid_file))
 
         for tmp in self.save_dir.glob('.*.parquet.tmp'):   # left by a killed run
-            tmp.unlink()
+            if not self.dry_run:
+                tmp.unlink()
         files = {p.stem for p in self.save_dir.glob('*.parquet') if is_parquet_ok(p)}
         state = self.state.load() if self.state is not None else {}
         done = {k: info for k, (st, _, info) in state.items() if st == 'done'}
@@ -500,11 +765,7 @@ class GEDI(DaskDownloader):
         pairs = tile_orbit_pairs(pending, gedi_index)
         any_orbit = set(pairs['Name'])
         # a tile with no orbit in its growing months takes the orbits of all months
-        no_growing = set(pairs['Name']) - set(pairs.loc[pairs['in_growing'], 'Name'])
-        if self.orbit_months == 'all':
-            target = pd.Series(True, index=pairs.index)
-        else:
-            target = pairs['in_growing'] | pairs['Name'].isin(no_growing)
+        target, no_growing = target_orbits(pairs, self.orbit_months)
         is_legacy = pairs['Name'].isin(legacy)
         is_growing_tagged = pairs['Name'].map(tagged).eq(GROWING_MONTHS)
         fetched = ((is_legacy & pairs['in_growing'] & ~pairs['wrapped'])
@@ -523,7 +784,17 @@ class GEDI(DaskDownloader):
         nothing_to_fetch = sorted(set(pending['Name']) - parts_per_tile.keys())
         note = lambda n: ', no orbit in growing months: all months' if (
             self.orbit_months == 'growing' and n in no_growing) else ''
-        tasks = [self.get_orbit_for_one_s2_tile(name, parts, append=name in files, note=note(name))
+        prior = {}
+        if self.prior_year is not None and parts_per_tile:
+            prior = shots_per_orbit_prior(pending[pending['Name'].isin(parts_per_tile.keys())],
+                                          self.prior_state_dir, self.prior_index_file,
+                                          self.prior_year, self.orbit_months)
+            print(f'shots per orbit from {self.prior_year}: {len(prior)} of {len(parts_per_tile)} tiles')
+        if self.dry_run:
+            self._print_plan(parts_per_tile, files, prior, nothing_to_fetch, any_orbit)
+            return
+        tasks = [self.get_orbit_for_one_s2_tile(name, parts, append=name in files, note=note(name),
+                                                shots_per_orbit=prior.get(name))
                  for name, parts in parts_per_tile.items()]
         if self.state is not None and nothing_to_fetch:
             # tells GEDI coverage (e.g. beyond ~51.6 deg) apart from the rest
@@ -543,8 +814,114 @@ class GEDI(DaskDownloader):
             self.state.compact()
             print(f'state: {self.state.path}')
 
+    def _load_index_and_grid(self):
+        '''The GEDI orbit index of self.year and the S2 grid (only self.tiles if set).'''
+        gedi_index = download_gedi_table_index(year=self.year, out_file=Path(self.gedi_table_index_file).expanduser())
+        gedi_index = gedi_index.drop(columns=['system:index', 'time_end'])
+        gedi_index['month'] = gedi_index['time_start'].str[5:7].astype(int)
+        gedi_index = gedi_index.set_crs(epsg=4326, allow_override=True)
+        s2_table = gpd.read_parquet(Path(self.s2_grid_file).expanduser())
+        if self.tiles is not None:
+            s2_table = s2_table[s2_table['Name'].isin(self.tiles)].reset_index(drop=True)
+            print(f'tiles: {s2_table["Name"].nunique()} of {len(self.tiles)} requested are in the grid')
+        return gedi_index, s2_table
+
+    def add_pft_classes(self):
+        '''
+        Append the shots of the pft classes self.add_pft (e.g. [9, 11]) to the
+        tiles of a year downloaded without them: over every orbit
+        download_all_valid takes for the tile (target_orbits), only those
+        classes, so no shot comes twice. Old rows get the water filter, as in
+        a repair; a tile without a parquet gets one if it has such shots.
+
+        Per-tile outcome in add_pft_state_dir ("pft 9,11: N shots (+n from k
+        orbits)"), done tiles are skipped on a rerun. Tiles in
+        exclude_tiles_file are skipped: e.g. tiles just downloaded whole with
+        these classes. Do not run it while a download writes to the same year.
+        '''
+        assert self.add_pft and self.add_pft_state is not None, 'add_pft and add_pft_state_dir are required'
+        assert not set(self.add_pft) & set(range(1, 9)), f'{self.add_pft}: classes 1-8 are in every download'
+        label = pft_label(self.add_pft)
+        client = Client(LocalCluster())
+        print(client)
+        gedi_index, s2_table = self._load_index_and_grid()
+        self.add_pft_state.set_expected(s2_table['Name'], source=str(self.s2_grid_file))
+        exclude = set()
+        if self.exclude_tiles_file is not None:
+            exclude = set(Path(self.exclude_tiles_file).expanduser().read_text().split())
+        done = {k for k, (st, _, _) in self.add_pft_state.load().items() if st == 'done'}
+        todo = s2_table[~s2_table['Name'].isin(done | exclude)].reset_index(drop=True)
+        print(f'pft {label}: {len(done)} tiles done, {len(exclude)} excluded, {todo["Name"].nunique()} to do')
+        for tmp in self.save_dir.glob('.*.parquet.tmp'):   # left by a killed run
+            tmp.unlink()
+        pairs = tile_orbit_pairs(todo, gedi_index)
+        target, _ = target_orbits(pairs, self.orbit_months)
+        orbits_per_row = pairs[target].groupby('row')['table_id'].apply(list).to_dict()
+        parts_per_tile = defaultdict(list)
+        for i, row in todo.iterrows():
+            if orbits_per_row.get(i):
+                parts_per_tile[row['Name']].append((row['geometry'], orbits_per_row[i]))
+        no_orbit = sorted(set(todo['Name']) - parts_per_tile.keys())
+        if no_orbit:
+            self.add_pft_state.mark_many(no_orbit, info=f'pft {label}: no GEDI orbit over tile')
+        tasks = [self.add_pft_one_tile(name, parts) for name, parts in parts_per_tile.items()]
+        print(f'Scheduling {len(tasks)} tile fetches')
+        if tasks:
+            nfailed, _ = self.schedule_tasks(delayed_tasks=tasks)
+            print(f'{nfailed} tiles failed after retries')
+        self.add_pft_state.compact()
+        print(f'state: {self.add_pft_state.path}')
+
     @dask.delayed
-    def get_orbit_for_one_s2_tile(self, name: str, parts: list, append: bool = False, note: str = ''):
+    def add_pft_one_tile(self, name: str, parts: list):
+        '''add_pft_classes for one tile (parts as in get_orbit_for_one_s2_tile).'''
+        try:
+            res = self._fetch_one_s2_tile(name, parts, append=True, pft_classes=self.add_pft)
+        except Exception as e:
+            self.add_pft_state.mark_failed(name, repr(e))
+            raise
+        self.add_pft_state.mark_done(name, f'pft {pft_label(self.add_pft)}: {self._result_info(res, parts)}')
+
+    def _result_info(self, res: tuple, parts: list, note: str = '') -> str:
+        '''State info of a _fetch_one_s2_tile result.'''
+        n, n_new, n_dup, n_water, missing = res
+        n_orbits = sum(len(ids) for _, ids in parts)
+        extra = (f', {n_dup} already there' if n_dup else '') + \
+                (f', {n_water} old shots on water dropped' if n_water else '') + \
+                (f', {len(missing)} orbits not in GEE: {" ".join(m.split("/")[-1] for m in missing)}'
+                 if missing else '') + note
+        return f'{n} shots (+{n_new} from {n_orbits} orbits{extra})' if n else f'no valid shots{extra}'
+
+    def _print_plan(self, parts_per_tile: dict, files: set, prior: dict, nothing_to_fetch: list, any_orbit: set):
+        '''dry_run of download_all_valid: what it would fetch, with the shots
+        and requests expected from the prior (fetch_orbits).'''
+        plan = pd.DataFrame([dict(tile=name, orbits=sum(len(ids) for _, ids in parts),
+                                  repair=name in files, shots_per_orbit=prior.get(name))
+                             for name, parts in parts_per_tile.items()],
+                            columns=['tile', 'orbits', 'repair', 'shots_per_orbit'])
+        plan['shots'] = plan['orbits'] * plan['shots_per_orbit']
+        plan['requests'] = np.maximum(np.ceil(plan['shots'] / self.max_shots_per_request),
+                                      np.ceil(plan['orbits'] / self.max_orbits_per_request))
+        known = plan['shots_per_orbit'].notna()
+        print(f'\n===== dry run {self.year}, orbit_months={self.orbit_months}')
+        print(f'tiles to fetch: {len(plan)} ({int(plan["repair"].sum())} appended to an existing parquet, '
+              f'{int((~plan["repair"]).sum())} new), {int(plan["orbits"].sum())} orbits')
+        print(f'nothing to fetch: {len(nothing_to_fetch)} tiles '
+              f'({sum(n not in any_orbit for n in nothing_to_fetch)} without any GEDI orbit)')
+        print(f'with a {self.prior_year} prior: {int(known.sum())} tiles, {int(plan.loc[known, "orbits"].sum())} orbits, '
+              f'~{plan.loc[known, "shots"].sum() / 1e6:.1f}M shots in ~{int(plan.loc[known, "requests"].sum())} requests')
+        print(f'without a prior: {int((~known).sum())} tiles, {int(plan.loc[~known, "orbits"].sum())} orbits')
+        by = plan.groupby('repair')[['orbits', 'shots', 'requests']].sum()
+        print(by.rename(index={True: 'append', False: 'new'}).to_string())
+        # the one file a dry run writes: the tiles to fetch (e.g. to copy just
+        # their parquets for a repair run elsewhere with tiles=...)
+        plan_file = (self.state.path if self.state is not None else self.save_dir.parent) / 'fetch_plan.tsv'
+        plan.to_csv(plan_file, sep='\t', index=False)
+        print(f'saved {plan_file}')
+
+    @dask.delayed
+    def get_orbit_for_one_s2_tile(self, name: str, parts: list, append: bool = False, note: str = '',
+                                  shots_per_orbit: float = None):
         '''
         Download all valid GEDI shots for one S2 tile across its pre-computed
         list of overlapping orbits.
@@ -559,9 +936,10 @@ class GEDI(DaskDownloader):
             * append: add the shots to the tile's existing parquet (orbits an
                 earlier download missed or left out)
             * note: appended to the state info
+            * shots_per_orbit: expected, sizes the first request (fetch_orbits)
         '''
         try:
-            res = self._fetch_one_s2_tile(name, parts, append)
+            res = self._fetch_one_s2_tile(name, parts, append, shots_per_orbit)
         except Exception as e:
             # re-raised so schedule_tasks still retries; a later success
             # overrides this line in the state
@@ -570,18 +948,17 @@ class GEDI(DaskDownloader):
             raise
         if self.state is None or res is None:
             return
-        n, n_new, n_dup, n_water = res
         tag = ALL_MONTHS if self.orbit_months == 'all' else GROWING_MONTHS
-        n_orbits = sum(len(ids) for _, ids in parts)
-        extra = (f', {n_dup} already there' if n_dup else '') + \
-                (f', {n_water} old shots on water dropped' if n_water else '') + note
-        info = f'{n} shots (+{n_new} from {n_orbits} orbits{extra})' if n else f'no valid shots{extra}'
+        # the pft classes of this fetch (downloads before 2026-10-22: 1-8)
+        info = self._result_info(res, parts, f', pft {pft_label(self.pft_classes)}{note}')
         self.state.mark_done(name, f'{tag}: {info}')
 
-    def _fetch_one_s2_tile(self, name: str, parts: list, append: bool = False):
+    def _fetch_one_s2_tile(self, name: str, parts: list, append: bool = False, shots_per_orbit: float = None,
+                           pft_classes: list = None):
         '''Returns (shots in the parquet, shots added, fetched shots that were
-        already there, old shots dropped as water), or None when the parquet
-        already existed (not append).'''
+        already there, old shots dropped as water, orbit tables GEE does not
+        have), or None when the parquet already existed (not append).
+        pft_classes: fetched classes, default self.pft_classes.'''
         self._ensure_authenticated()  # runs on a worker process; ensure this run's key
         file = self.save_dir / f'{name}.parquet'
         if not append and file.exists() and not self.rewrite and is_parquet_ok(file):
@@ -594,30 +971,35 @@ class GEDI(DaskDownloader):
             n_water = int((~keep).sum())
             old = old[keep]
         n_old = 0 if old is None else len(old)
+        if old is not None:     # float64 in files where one orbit had float ids
+            old['shot_number'] = exact_shot_number(old['shot_number'])
         if old is not None and 'mgrs_tile' not in old:     # written before add_mgrs
             old['mgrs_tile'] = mgrs_100km(old.geometry.x.values, old.geometry.y.values)
-        data = []
+        data, log = [], []
         for geometry, orbit_ids in parts:
-            geom = shapely_to_geojson(geometry)
-            for orbit_id in orbit_ids:
-                fc = (ee.FeatureCollection(orbit_id)
-                      .filterBounds(geom)
-                      .filter(self.filter)
-                      .filter(ee.Filter.inList('pft_class', list(range(1, 9)))))
-                fc = ee_fc_to_gpd(fc)
-                if fc is None:
-                    continue
-                data.append(fc)
+            shots, part_log = fetch_orbits(orbit_ids, shapely_to_geojson(geometry), self.filter,
+                                           shots_per_orbit, self.max_shots_per_request,
+                                           self.max_orbits_per_request,
+                                           pft_classes=pft_classes or self.pft_classes)
+            log += part_log
+            if shots is not None:
+                data.append(shots)
+        missing = [r['missing'] for r in log if 'missing' in r]
+        n_split = sum(not r['ok'] for r in log) - len(missing)
+        print(f'{name}: {sum(len(ids) for _, ids in parts)} orbits in {len(log)} requests'
+              + (f' ({n_split} too large, split)' if n_split else '')
+              + (f' ({len(missing)} not in GEE: {missing})' if missing else ''))
         if len(data) == 0:
             print(f'No new GEDI points found for {name}')
             if n_water:
                 tmp = file.with_name(f'.{file.name}.tmp')
                 old.to_parquet(tmp)
                 os.replace(tmp, file)
-            return n_old, 0, 0, n_water
+            return n_old, 0, 0, n_water, missing
         data = pd.concat(data)
         if len(parts) > 1:      # a shot on the seam between two parts comes twice
-            data = data.drop_duplicates(subset='shot_number')
+            # with delta_time: float ids (exact_shot_number) repeat within an orbit
+            data = data.drop_duplicates(subset=['shot_number', 'delta_time'])
         data = data.reset_index(drop=True)
         data['system:index'] = data['system:index'].astype(str)
         # S2 tiles overlap, so one shot lands in several tile files; this is
@@ -630,17 +1012,19 @@ class GEDI(DaskDownloader):
             for c in old.columns.intersection(data.columns).drop('geometry', errors='ignore'):
                 if (old[c].dtype == object) != (data[c].dtype == object):
                     old[c], data[c] = old[c].astype(str), data[c].astype(str)
-            # fetched shots already in the file mean an orbit was fetched twice
-            n_dup = int(data['shot_number'].isin(old['shot_number']).sum())
-            data = pd.concat([old, data[~data['shot_number'].isin(old['shot_number'])]],
-                             ignore_index=True)
+            # fetched shots already in the file mean an orbit (or pft class)
+            # was fetched twice; with delta_time, as float ids repeat
+            key = ['shot_number', 'delta_time']
+            dup = pd.MultiIndex.from_frame(data[key]).isin(pd.MultiIndex.from_frame(old[key]))
+            n_dup = int(dup.sum())
+            data = pd.concat([old, data[~dup]], ignore_index=True)
         # temp file + rename: a killed worker or a concurrent reader (add_mgrs,
         # upload_erda) never sees a half-written <tile>.parquet
         tmp = file.with_name(f'.{file.name}.tmp')
         data.to_parquet(tmp)
         os.replace(tmp, file)
         print(f'Saved {len(data)} GEDI points for {name} after filtering')
-        return len(data), len(data) - n_old, n_dup, n_water
+        return len(data), len(data) - n_old, n_dup, n_water, missing
 
     # --- Orphaned helpers from the per-orbit refactor (see download_all_valid
     # docstring for why that approach was abandoned). Kept in case a future

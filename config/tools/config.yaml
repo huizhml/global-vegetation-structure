@@ -99,6 +99,61 @@ tools:
     few_ratio: 0.4
 
   # =========================================================================
+  # tools/gedi_merge_benchmark.py
+  # =========================================================================
+  # 同一批 tile 的 GEDI 点用不同方式从 GEE 下载,比较耗时、请求数,并找 GEE 单次下载的上限:
+  # per_orbit(以前的逐 orbit)/ adaptive(按先验合并,download_all_valid 现在的做法)/
+  # adaptive_no_prior / probe_full、probe_reduced(故意超上限,全部列 vs 约 40% 的列)。
+  # 只写结果表,不写 parquet。每个 array task 一个 tile(tile_rank),最后汇总:
+  #   sbatch --array=0-3 scripts/lumi/gedi_merge_benchmark.sh
+  #   python -m tools.run run=gedi_merge_benchmark_summary
+  gedi_merge_benchmark:
+    _target_: tools.gedi_merge_benchmark.benchmark_orbit_merge
+    target_type: function
+    year: 2020
+    methods: [per_orbit, adaptive, adaptive_no_prior, probe_full, probe_reduced]
+    tiles: null               # null = state_dir 里点数最多的 n_tiles 个
+    n_tiles: 4
+    tile_rank: null           # 只跑 tiles 里第几个(array task id)
+    max_shots: 20000
+    max_orbits: 50
+    probe_max_shots: 80000
+    # 先验:另一年这个 tile 的点数 / orbit 数
+    prior_year: 2022
+    prior_state_dir: ~/data/gvs/gedi/veg_sensitivity_all/{prior_year}_state
+    prior_index_file: ~/data/gvs/gedi/l2a_orbit_table/l2a_orbit_table_{prior_year}.parquet
+    # 和 download_all_valid_gedi 相同的筛选条件
+    sensitivity_threshold: null
+    max_water_persistence: 50
+    drop_no_dem: true
+    key_file: keys/private-key.json
+    s2_grid_file: ~/data/gvs/01_derived_ancillary/growing_months/s2_tiles_with_growing_months.parquet
+    gedi_table_index_file: ~/data/gvs/gedi/l2a_orbit_table/l2a_orbit_table_{year}.parquet
+    state_dir: ~/data/gvs/gedi/veg_sensitivity_all/{year}_state
+    results_dir: ~/data/gvs/gedi/benchmarks/gedi_merge_{year}
+
+  gedi_merge_benchmark_summary:
+    _target_: tools.gedi_merge_benchmark.summarize_orbit_merge
+    target_type: function
+    results_dir: ~/data/gvs/gedi/benchmarks/gedi_merge_2020
+
+  # =========================================================================
+  # tools/gedi_fill_shot_fields.py
+  # =========================================================================
+  # 合并下载(2026-10-21/22,还没传 selectors 时)弄丢的 orbit_number、minor_frame_number、
+  # shot_number_within_beam 从 shot_number 算回来:前两列所有空行都填(舍入过的 id 也精确),
+  # shot_number_within_beam 只填 id 精确的行;local_beam_azimuth/elevation 留空。
+  #   python -m tools.run run=gedi_fill_shot_fields run.year=2020
+  gedi_fill_shot_fields:
+    _target_: tools.gedi_fill_shot_fields.fill_shot_fields
+    target_type: function
+    year: 2020
+    save_dir: ~/data/gvs/gedi/veg_sensitivity_all/{year}
+    gedi_table_index_file: ~/data/gvs/gedi/l2a_orbit_table/l2a_orbit_table_{year}.parquet
+    key_file: keys/private-key.json
+    workers: 16
+
+  # =========================================================================
   # tools/growing_season_audit.py
   # =========================================================================
   # 每个 S2 tile 的 growing_months 是哪条规则来的(>50% 像元 / 不足 5 个月取前 5 /

@@ -32,12 +32,15 @@ download)
 #   only the orbits outside each tile's growing months are fetched.
 # ---------------------------------------
 # Args: year (default: 2020), save_dir (optional, overrides the config path),
-#       orbit_months (all|growing, default: all)
+#       orbit_months (all|growing, default: growing), prior_year (shots per orbit
+#       that sizes the requests, default 2022), dry_run (any value: only print
+#       the tiles, orbits, expected shots and requests; writes nothing)
 parse_kv_args "${@:2}" || exit $?
 # year=${year:-2020}
 
 python -m download.run run=download_all_valid_gedi run.year=$year run.key_file=$key_file \
-    ${save_dir:+run.save_dir=$save_dir} ${orbit_months:+run.orbit_months=$orbit_months}
+    ${save_dir:+run.save_dir=$save_dir} ${orbit_months:+run.orbit_months=$orbit_months} \
+    ${prior_year:+run.prior_year=$prior_year} ${dry_run:+run.dry_run=true}
 
 ;;
 drop_water)
@@ -136,9 +139,55 @@ for y in ${years//,/ }; do
         python -m tools.run run=state_compact run.path="$state"
         python -m tools.run run=state_summary run.path="$state"
     fi
-    rclone copy "$state" "$dst/${y}_state" --include snapshot.tsv --include expected.tsv --include 'mgrs_summary_*.tsv' \
-        --include uploads.tsv --include 'erda_*.log' "${opts[@]}"
+    # snapshot.tsv / expected.tsv also match add_pft/ (the pft 9, 11 state);
+    # local backups (old_*, not_on_erda_*) stay here; excludes first, the
+    # first matching rule wins
+    rclone copy "$state" "$dst/${y}_state" --exclude 'old_*/**' --exclude 'not_on_erda_*/**' \
+        --include snapshot.tsv --include expected.tsv --include 'mgrs_summary_*.tsv' \
+        --include uploads.tsv --include 'erda_*.log' --include 'erda_stale_*.txt' --include 'shot_fields_fill_*.tsv' \
+        --include table_fields.tsv --include fetch_plan.tsv --include float_id_tiles.txt "${opts[@]}"
 done
+
+;;
+pull_erda)
+# ---------------------------------------
+#   Bring years reworked elsewhere (2026-10 on LUMI: scripts/lumi/download_gedi.sh
+#   push_erda) from ERDA back here:
+#     <src>/<year>/*.parquet  ->  <dst>/<year>/   changed files overwritten,
+#                                     new ones added; parquets here but not
+#                                     on ERDA moved to <year>_state/not_on_erda_<time>/
+#     <year>_state (with add_pft/, fetch_plan.tsv, float_id_tiles.txt), README.md
+#   The ERDA state has every line of the local one (it was copied from here),
+#   so the local snapshot, logs and offsets go to <year>_state/old_<time>/.
+#   No sbatch needed: `bash scripts/hendrix/download_gedi.sh pull_erda years=...`
+#   from ~/gvs also works (it only moves data). Not while anything writes to
+#   these years.
+# ---------------------------------------
+# Args: years (comma-separated, required), src, dst
+parse_kv_args "${@:2}" || exit $?
+: "${years:?years=<comma-separated years> is required}"
+src=${src:-ucph-erda:GEDI/veg_sensitivity_all}
+dst=${dst:-$HOME/data/gvs/gedi/veg_sensitivity_all}
+opts=(--transfers 6 --checkers 4 --stats 10m --stats-one-line)
+for y in ${years//,/ }; do
+    t=$(date -u +%Y%m%dT%H%M%SZ)
+    echo "===== $y: $src/$y -> $dst/$y"
+    rclone copy "$src/$y" "$dst/$y" --include '*.parquet' "${opts[@]}"
+    if ! rclone check "$src/$y" "$dst/$y" --one-way --size-only --include '*.parquet' --checkers 8; then
+        echo "$y: CHECK FAILED, state not replaced; rerun to copy what is missing"
+        continue
+    fi
+    aside="$dst/${y}_state/not_on_erda_$t"
+    comm -23 <(ls "$dst/$y" | grep '\.parquet$' | sort) <(rclone lsf "$src/$y" --include '*.parquet' | sort) \
+        | while read -r f; do mkdir -p "$aside"; mv "$dst/$y/$f" "$aside/"; echo "$y: $f moved to $aside"; done
+    mkdir -p "$dst/${y}_state/old_$t"
+    for f in log offsets.tsv snapshot.tsv expected.tsv; do
+        [ -e "$dst/${y}_state/$f" ] && mv "$dst/${y}_state/$f" "$dst/${y}_state/old_$t/"
+    done
+    rclone copy "$src/${y}_state" "$dst/${y}_state" "${opts[@]}"
+    echo "$y: done, $(ls "$dst/$y" | grep -c '\.parquet$') parquets"
+done
+rclone copyto "$src/README.md" "$dst/README.md"
 
 ;;
 *)
