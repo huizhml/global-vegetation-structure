@@ -24,7 +24,6 @@ LUMI 工作副本（2026-10-21/22 的重做在这里完成，见下文）：`/sc
   uploads.tsv、erda_*.log、erda_stale_*.txt   每次传到 ERDA 的记录
   mgrs_summary_*.tsv         add_mgrs 的汇总
   old_<time>/、not_on_erda_<time>/   仅 Hendrix：从 ERDA 同步前的旧 state、ERDA 上已没有的文件
-antimeridian_half_backup/    跨 180° 的 tile 在 2026-10-15 前只下了一半的旧文件
 orbit_overview/              每个 tile 每年的 orbit 总览（见下文）
 ```
 
@@ -70,7 +69,7 @@ state 中补漏完成的 tile，说明以 `growing months:` 开头，例如 `gro
 2019–2022、2024 五年在 LUMI 上（project_465003168，`scripts/lumi/download_gedi.sh`）依次做了：
 
 1. **补漏**：跨 180° 漏掉的 orbit、生长月份内没有 orbit 的 tile 的全年 orbit、之前失败或 reset 的 tile。共 1043 个 tile，约 2570 万点。
-2. **id 被舍入的 tile 整个重下**：2020 年 2026 个、2021 年 570 个 tile 的 `shot_number` 原来是 float64（见“已知问题”），用 pft 1–9、11 整 tile 重下，原文件留在 LUMI 的 `<year>_state/replaced/`。
+2. **id 被舍入的 tile 整个重下**：2020 年 2026 个、2021 年 570 个 tile 的 `shot_number` 原来是 float64（见“已知问题”），用 pft 1–9、11 整 tile 重下。重下前的原文件和修复前的 ERDA 版本在 LUMI 上留到 2026-10-23，核对无误后已删除。
 3. **补 pft 9 和 11**（`add_pft_classes`）：其余所有 tile，在同样的 orbit 上只下这两类，追加进原文件。新增约 12.7 亿个 pft 11、6400 万个 pft 9 的点，以荒漠为主（例如撒哈拉 29QNV：原来 0 个点，现在 14.3 万）。
 4. **水体过滤**：追加时旧行一并过滤。5 年共去掉约 5400 万个点（约 0.7%）。
 5. **补 3 列**（`tools/gedi_fill_shot_fields.py`）：见“已知问题”中丢列的那条。
@@ -130,7 +129,7 @@ state 中补漏完成的 tile，说明以 `growing months:` 开头，例如 `gro
 | 加拿大西部 / 美国西北，北纬 48–52°（经度 -131 到 -97） | 09U*–14U* | 10–24%（北纬 51.6° 附近轨道近乎东西走向，一个 granule 能横跨 100 多度经度） |
 | 跨 180° 的 25 个 tile 的西侧那一半 | 01KAB 等 | 几乎 100%（各年有文件的 9–11 个，西侧全是 0 个点） |
 
-现在 `tile_orbit_pairs` 会把 tile 平移 ±360° 再求交一次。补漏时，平移后才匹配上、且月份在生长月份内的 orbit（`wrapped`）会被补下，上面这些 tile 会被自动补齐。跨 180° 那几个 tile 的旧文件已挪到 `antimeridian_half_backup/<year>/`，state 也已 reset（2019–2021 已做，2022、2024 待做），补漏时会两半分别重下。
+现在 `tile_orbit_pairs` 会把 tile 平移 ±360° 再求交一次。补漏时，平移后才匹配上、且月份在生长月份内的 orbit（`wrapped`）会被补下，上面这些 tile 会被自动补齐。跨 180° 的 25 个 tile 在 2026-10 重做时 state 被 reset，两半分别整 tile 重下；之前只有一半的旧文件（`antimeridian_half_backup/`）已于 2026-10-23 删除。
 
 ## Orbit 总览
 
