@@ -43,6 +43,14 @@
 #     bash scripts/hendrix/download_tile_rclone.sh download_manifest 2020 32UPG 32UPF 33VUC 32UNG
 #     bash scripts/hendrix/download_tile_rclone.sh download_q1 dk fi
 #
+#  From LUMI instead of hendrix: LUMI scratch has the same products/vsm layout
+#  (e.g. the savannah test tiles 2019/2025). Needs an rclone sftp remote `lumi:`
+#  that uses the ssh agent (the key has a passphrase, rclone 1.61 cannot read it):
+#     rclone config create lumi sftp host lumi.csc.fi user zhanghui
+#     export REMOTE=lumi:/scratch/project_465003168/hui/gvs
+#     for y in 2019 2025; do for t in 35NKE 35NLE 35NNC 35NND 35NPC 35NPD 35NQC 35NQD; do
+#         bash scripts/hendrix/download_tile_rclone.sh download_dir $t $y; done; done
+#
 #  Re-running is safe: rclone copy skips files that are already complete and
 #  verifies the md5 of every file it transfers (md5sum run on hendrix). The
 #  closing rclone check compares sizes only, to catch missing files without
