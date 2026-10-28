@@ -38,16 +38,33 @@ root_data_dir=/projects/dereeco/data/gvs
 #   sbatch scripts/hendrix/run_deploy.sh predict_timeseries <tile_id> [year]
 # Inputs go to their own folder, so they never mix with the yearly 20-image
 # h5 files of the same tile.
-# Result: ~/data/gvs/deploy/timeseries/<year>/<tile_id>/RH25_Q1.tif,
+# Result: <out_root>/<year>/<tile_id>/RH25_Q1.tif,
 #         RH98_Q1.tif (one band per image) + images.csv
+# Input h5 files: <out_root>/_inputs/<year>/<tile_id>.h5 (uncompressed, ~3 GB
+# per image; delete them once the tile is predicted).
+# Anything after out_root goes to run.py, e.g. --data.init_args.months '[1,2,3]'
 predict_timeseries() {
-    local tile_id=${1:?usage: run_deploy.sh predict_timeseries <tile_id> [year]}
+    local tile_id=${1:?usage: run_deploy.sh predict_timeseries <tile_id> [year] [out_root] [run.py args]}
     local year=${2:-2020}
-    local save_dir=${HOME}/data/gvs/deploy/timeseries/${year}
+    local out_root=${3:-${HOME}/data/gvs/deploy/vsm_timeseries}
+    shift $(( $# < 3 ? $# : 3 ))
+    local save_dir=${out_root}/${year}
     mkdir -p $save_dir
     run_inference $tile_id True $save_dir none $year \
         -c config/predict_timeseries.yaml \
-        --data.init_args.pred_fp ${HOME}/data/gvs/deploy/inputs/timeseries_${year}
+        --data.init_args.pred_fp ${out_root}/_inputs/${year} "$@"
+}
+
+# Cambodia selective logging validation: time series of every month (the
+# growing months of 48PWV skip Jan-Mar, the dry season with most reports and
+# clear images), saved next to the ground reference.
+#   sbatch scripts/hendrix/run_deploy.sh predict_timeseries_selective_logging <tile_id> <year>
+predict_timeseries_selective_logging() {
+    local tile_id=${1:?usage: run_deploy.sh predict_timeseries_selective_logging <tile_id> <year>}
+    local year=${2:?usage: run_deploy.sh predict_timeseries_selective_logging <tile_id> <year>}
+    predict_timeseries $tile_id $year \
+        ${HOME}/data/gvs/evaluation/downstream_tasks/selective_logging/vsm_timeseries \
+        --data.init_args.months '[1,2,3,4,5,6,7,8,9,10,11,12]'
 }
 
 # Reproducibility check: predict one tile with a reference version of the code
@@ -230,7 +247,7 @@ echo "meta_file: $meta_file"
 run_inference $tile_id $stream_input $save_dir $meta_file $year
 
 ;;
-predict_timeseries|check_reproducibility|predict_worklist)
+predict_timeseries|predict_timeseries_selective_logging|check_reproducibility|predict_worklist)
 "$@"
 ;;
 *)

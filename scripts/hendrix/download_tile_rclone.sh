@@ -28,12 +28,14 @@
 #            2024    2024/bias_corrected/tiles/cog       -> 2024/bias_corrected/{TILE}
 #            other   {YEAR}/original/tiles/cog           -> {YEAR}/original/{TILE}
 #         A tile-year missing on hendrix is reported as [miss] and skipped.
+#         TILES="35WMR 35VNH" moves these tiles (of the country) to the front.
 #
 #  Env knobs:
 #     DEST_ROOT   (default "/Volumes/One Touch/VSM_hui/")
 #     RELEASE     (default released_v0, download_manifest only)
 #     INCLUDE     rclone filter for a subset, e.g. INCLUDE='RH98_Q*.tif' (download_dir only)
 #     YEARS       (default "2018 2019 2020 2021 2022 2023 2024 2025", download_q1 only)
+#     TILES       tiles to download first, then the rest (download_q1 only)
 #     DRY_RUN=1   only list what would be copied
 #
 #  Examples:
@@ -134,7 +136,7 @@ download_q1() {
     [ $# -gt 0 ] || { echo "usage: download_q1 <dk|fi>..." >&2; return 1; }
     _check_dest
     local years=${YEARS:-2018 2019 2020 2021 2022 2023 2024 2025}
-    local release=released_v0 year c tile tiles src version dst n rc=0
+    local release=released_v0 year c tile tiles order src version dst n rc=0
     # Q1 only: in 2020 the q1_root also holds Q0/Q2 of some tiles
     local filter=(--include 'RH*_Q1.tif' --include 'RH*_Q1.cog.tif')
     _copy_args
@@ -145,7 +147,11 @@ download_q1() {
         tiles="$DEST_ROOT/${c}_tiles.txt"
         rclone cat "$REMOTE/01_derived_ancillary/${c}_tile_years_2018_2025.csv" \
             | awk -F, 'NR > 1 {print $1}' | sort -u > "$tiles"
-        echo "#### $c: $(wc -l < "$tiles" | tr -d ' ') tiles, years $years"
+        # TILES of this country first, then the others in list order
+        order=$(mktemp)
+        { for tile in ${TILES:-}; do grep -x "$tile" "$tiles" || true; done
+          cat "$tiles"; } | awk '!seen[$0]++' > "$order"
+        echo "#### $c: $(wc -l < "$tiles" | tr -d ' ') tiles, years $years, first: $(head -3 "$order" | tr '\n' ' ')"
         while read -r tile <&3; do
             for year in $years; do
                 case $year in
@@ -171,7 +177,8 @@ download_q1() {
                 n=$(ls "$dst" 2>/dev/null | grep -cE '^RH[0-9]+_Q1(\.cog)?\.tif$' || true)
                 [ "$n" -lt 101 ] && { echo "[incomplete] $year $version $tile: $n of 101 Q1 files" >&2; rc=1; }
             done
-        done 3< "$tiles"
+        done 3< "$order"
+        rm -f "$order"
     done
     return $rc
 }

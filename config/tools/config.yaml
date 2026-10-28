@@ -782,42 +782,417 @@ tools:
   # =========================================================================
   # tools/cp_points.py
   # =========================================================================
-  # Conformal 校准用的点:GEDI 点配上当年 VSM 的 Q0/Q1/Q2,按 tile 名的 md5 分
-  # cal/test(不是按点分)。每个 tile 只在几个 1024px 块里抽点,因为 Q0/Q2 只在
-  # LUMI-O 上,逐点读 S3 太贵。需要 AWS_* 环境变量(scripts/hendrix/cp_points.sh 设)。
-  #   sbatch --array=1-4 scripts/hendrix/cp_points.sh sample year=2024
-  sample_cp_points:
-    _target_: tools.cp_points.sample_cp_points
+  # Conformal 校准用的点,照 2020 的 subset_cal/subset_test 做(paper Methods 4.4):
+  # 模型训练划分的 cal/test tiles,每个 tile 取当年 sensitivity>=0.95 的 GEDI 点,
+  # 点数 = 2020 该 tile 的点数(当年不够就全取),再逐点读 VSM。三步:
+  #   1. select_cp_points    hendrix,只选点 + biome          -> model_split_points/gedi
+  #   2. add_cp_predictions  hendrix,读 Q1(本地)            -> model_split_points/with_q1
+  #   3. add_cp_predictions  LUMI,读 Q0/Q2(LUMI-O,就近)    -> model_split_points/with_q012
+  #   sbatch scripts/hendrix/cp_points.sh select year=2024
+  #   sbatch scripts/hendrix/cp_points.sh add_q1 year=2024
+  select_cp_points:
+    _target_: tools.cp_points.select_cp_points
     target_type: function
     year: 2024
-    gedi_dir: /projects/dereeco/data/gvs/modeling/gedi/veg_sensitivity_all/all_valid/${.year}
-    save_dir: ~/data/gvs/conformal/${.year}/points
+    gedi_dir: /projects/dereeco/data/gvs/gedi/veg_sensitivity_all/${.year}
+    save_dir: ~/data/gvs/conformal/${.year}/model_split_points/gedi
     state_dir: ${.save_dir}_state
     biome_file: ~/data/GEDI/ecoregions/wwf_terr_ecos.shp
-    # Q1 已搬到 hendrix 的就从这里读(LUMI-O 上的会被删),按顺序找,找不到读 LUMI-O
-    local_cog_dirs:
-      - ~/data/gvs/products/vsm/${..year}/blended/tiles/cog
-      - ~/data/gvs/products/vsm/${..year}/bias_corrected/tiles/cog
-    cal_pct: 50
-    test_pct: 50
+    # 模型训练的 tile 划分(tiles_cal.csv / tiles_test.csv)
+    split_dir: /projects/dereeco/data/gvs/modeling/datasets/splits/split_test0.1_cal0.1_val0.1_seed42_v1
+    # 2020 的 cal/test 点(每 tile 一个 parquet),决定每个 tile 取多少点
+    ref_dirs:
+      cal: /projects/dereeco/data/gvs/modeling/gedi/veg_sensitivity_gt0p95/subset_cal/version=masked/2020
+      test: /projects/dereeco/data/gvs/modeling/gedi/veg_sensitivity_gt0p95/subset_test/version=masked/2020
     sensitivity_min: 0.95
-    blocks_per_tile: 4
-    shots_per_block: 50
-    min_shots_per_block: 10
     seed: 42
     workers: 8
-    threads: 16
-    # 一行一个 tile;null -> gedi_dir 里全部 tile
+    # 每批 workers x tiles_per_worker 个 tile 用一个新进程池,防内存累积
+    tiles_per_worker: 20
+    # 一行一个 tile;null -> 全部 cal/test tiles
     tiles_file: null
     chunk: 1
     n_chunks: 1
 
-  # 合成一张表 <save_dir>/<split>.parquet,每个 BIOME 最多 max_per_biome 个点
+  # 在上一步的点上逐点读 RH*_Q{q_idxs};本地 COG 优先,找不到读 LUMI-O(需要 AWS_*)
+  add_cp_predictions:
+    _target_: tools.cp_points.add_cp_predictions
+    target_type: function
+    year: 2024
+    points_dir: ~/data/gvs/conformal/${.year}/model_split_points/gedi
+    save_dir: ~/data/gvs/conformal/${.year}/model_split_points/with_q1
+    state_dir: ${.save_dir}_state
+    q_idxs: [1]
+    local_cog_dirs:
+      - ~/data/gvs/products/vsm/${..year}/bias_corrected/tiles/cog
+    workers: 8
+    threads: 16
+    tiles_per_worker: 20
+    tiles_file: null
+    chunk: 1
+    n_chunks: 1
+
+  # 合成一张表 <save_dir>/<split>.parquet;max_per_biome=null 不限(2020 也没限)
   #   python -m tools.run run=combine_cp_points run.split=cal
   combine_cp_points:
     _target_: tools.cp_points.combine_cp_points
     target_type: function
-    save_dir: ~/data/gvs/conformal/2024/points
+    save_dir: ~/data/gvs/conformal/2024/model_split_points/with_q012
     split: cal
-    max_per_biome: 200000
+    # null -> <save_dir>/<split>.parquet
+    out_file: null
+    max_per_biome: null
     seed: 42
+
+  # =========================================================================
+  # tools/cp_apply.py
+  # =========================================================================
+  # 把 run_cp.py 拟合的每 biome offset 加到发布版 Q0/Q2 上(paper Methods 4.4:SE-CQR,
+  # 先排序三个分位,Q2'=min-c_lo,Q0'=max+c_hi,再夹住 Q1)。Q1 不动不写。
+  # Tundra、WWF 98/99、不在任何 WWF 多边形里、有 nodata 的像元保留原值。
+  #   sbatch --array=1-10 scripts/hendrix/cp_points.sh apply year=2020
+  apply_cp_offsets:
+    _target_: tools.cp_apply.apply_cp_offsets
+    target_type: function
+    year: 2020
+    manifest: ~/data/gvs/products/vsm/${.year}/released_v0.tsv
+    products_root: ~/data/gvs/products/vsm
+    cp_results: ~/data/gvs/conformal/${.year}/cp_results.parquet
+    biome_file: ~/data/GEDI/ecoregions/wwf_terr_ecos.shp
+    save_dir: ~/data/gvs/products/vsm/${.year}/calibrated/tiles/cog
+    state_dir: ${.save_dir}_state
+    method: SE-CQR
+    exclude_biomes: [11]     # Tundra: 24 cal points, not calibrated in the paper
+    workers: 8
+    # 一行一个 tile;null -> manifest 里全部 tile
+    tiles_file: null
+    chunk: 1
+    n_chunks: 1
+
+  # 写好的 tile 和落在里面的 test 点对一遍:biome、Q0/Q2 是否等于对点上原值加 offset、覆盖率
+  #   python -m tools.run run=check_cp_tiles 'run.tiles=[01GEL,32UNG]'
+  check_cp_tiles:
+    _target_: tools.cp_apply.check_cp_tiles
+    target_type: function
+    year: 2020
+    tiles: ???
+    manifest: ~/data/gvs/products/vsm/${.year}/released_v0.tsv
+    products_root: ~/data/gvs/products/vsm
+    cp_results: ~/data/gvs/conformal/${.year}/cp_results.parquet
+    biome_file: ~/data/GEDI/ecoregions/wwf_terr_ecos.shp
+    save_dir: ~/data/gvs/products/vsm/${.year}/calibrated/tiles/cog
+    test_data: /projects/dereeco/data/gvs/modeling/gedi/veg_sensitivity_gt0p95/subset_test/version=masked/original_with_ours_sota_biome_${.year}.parquet
+    method: SE-CQR
+    exclude_biomes: [11]
+    rh_idxs: [10, 25, 50, 75, 95, 98]
+    save_file: null
+
+  # 已校准完、还没全部传上 Source Coop 的 tile 列表,给 sc_upload 当 tile 白名单
+  # (run.src.kind=local),每次只列还要传的 tile。上传进度在一个 tsv 里(upload_state)。
+  #   sbatch --time=11:00:00 scripts/hendrix/cp_points.sh upload year=2020   (先 source-coop login)
+  cp_upload_tiles:
+    _target_: tools.cp_apply.cp_upload_tiles
+    target_type: function
+    year: 2020
+    save_dir: ~/data/gvs/products/vsm/${.year}/calibrated/tiles/cog
+    state_dir: ${.save_dir}_state
+    upload_state: ~/data/gvs/products/vsm/${.year}/calibrated/source_coop_upload.tsv
+    out_file: ~/data/gvs/products/vsm/${.year}/calibrated/upload_tiles.txt
+    n_files: 202
+
+  # 删掉 202 个文件在上传 tsv 里都是 done 的本地 tile。默认 dry run。
+  #   python -m tools.run run=prune_uploaded_tiles run.dry_run=false
+  prune_uploaded_tiles:
+    _target_: tools.cp_apply.prune_uploaded_tiles
+    target_type: function
+    year: 2020
+    save_dir: ~/data/gvs/products/vsm/${.year}/calibrated/tiles/cog
+    upload_state: ~/data/gvs/products/vsm/${.year}/calibrated/source_coop_upload.tsv
+    n_files: 202
+    dry_run: true
+
+  # =========================================================================
+  # tools/vsm_stability.py
+  # =========================================================================
+  # 预测稳定性测试:每个 WWF biome 抽几个 tile 重新预测,和发布版比。第一步只做 2024,
+  # 比较 A 新预测(不平移)、B bias_corrected、C 新预测 + 每 tile median δ。
+  # tile 从 CP 的 cal/test 点里选(biome = tile 内点的多数 biome)。
+  #   python -m tools.run run=select_stability_tiles
+  select_stability_tiles:
+    _target_: tools.vsm_stability.select_stability_tiles
+    target_type: function
+    points_dir: ~/data/gvs/conformal/2024/model_split_points/with_q012
+    out_file: ~/data/gvs/vsm_stability_state/tiles_2024.tsv
+    per_biome: 3
+    min_shots: 500
+    seed: 42
+
+  # LUMI(project_465003168 scratch):A = 新预测(run_lumi_inference.sh predict_tiles),
+  # B = CP 点上的发布版值,C = A + 每 tile 每 RH median(GEDI - A Q1)(用评估点以外的 GEDI 点)
+  #   python -m tools.run run=eval_stability
+  eval_stability:
+    _target_: tools.vsm_stability.eval_stability
+    target_type: function
+    root: /scratch/project_465003168/hui/gvs
+    tiles_file: ${.root}/vsm_stability_state/tiles_2024.tsv
+    points_dir: ${.root}/vsm_stability/2024/cp_points
+    gedi_dir: ${.root}/gedi/veg_sensitivity_all/2024
+    cog_root: ${.root}/vsm_stability/2024/new_prediction/cog
+    out_dir: ${.root}/vsm_stability/2024/eval
+    report_dir: ${.root}/vsm_stability_state/2024
+    n_delta_shots: 5000
+    sensitivity_min: 0.95
+    seed: 42
+    workers: 8
+    threads: 8
+
+  # 多年稳定性 2017-2026(每 biome 5 个 tile + Tundra):每个 tile 固定的随机像元,每年读一次
+  # 预测(新代码重新预测;2020 读发布版 released_v0),有 GEDI 的年份另外读 GEDI 点。
+  # GeoTIFF 采样后删掉,只留采样值。
+  # 1. Hendrix(要 CP 点和 WWF):选 tile,保留 2024 的 39 个
+  #   python -m tools.run run=select_stability_tiles_years
+  select_stability_tiles_years:
+    _target_: tools.vsm_stability.select_stability_tiles
+    target_type: function
+    points_dir: ~/data/gvs/conformal/2024/model_split_points/with_q012
+    keep_file: ~/data/gvs/vsm_stability_state/tiles_2024.tsv
+    out_file: ~/data/gvs/vsm_stability_state/tiles_2017_2026.tsv
+    per_biome: 5
+    min_shots: 500
+    seed: 42
+    # CP 点里没有 Tundra 的 tile -> 按 WWF 面积比例从 S2 网格里选
+    wwf_biomes: [11]
+    grid_file: ~/data/gvs/01_derived_ancillary/growing_months/s2_tiles_with_growing_months.parquet
+    biome_file: ~/data/GEDI/ecoregions/wwf_terr_ecos.shp
+    wwf_points: 200
+    wwf_min_share: 0.8
+
+  # 2. Hendrix:每个 tile 固定的随机像元(写一次,之后不再变)
+  #   python -m tools.run run=make_stability_pixels
+  make_stability_pixels:
+    _target_: tools.vsm_stability.make_stability_pixels
+    target_type: function
+    tiles_file: ~/data/gvs/vsm_stability_state/tiles_2017_2026.tsv
+    grid_file: ~/data/gvs/01_derived_ancillary/growing_months/s2_tiles_with_growing_months.parquet
+    biome_file: ~/data/GEDI/ecoregions/wwf_terr_ecos.shp
+    out_dir: ~/data/gvs/vsm_stability/2017_2026/sample_pixels
+    n_pixels: 20000
+    seed: 42
+
+  # 3. LUMI:tile x 年的 worklist(2020 不预测)
+  #   python -m tools.run run=write_stability_worklist
+  write_stability_worklist:
+    _target_: tools.vsm_stability.write_stability_worklist
+    target_type: function
+    root: /scratch/project_465003168/hui/gvs
+    tiles_file: ${.root}/vsm_stability_state/tiles_2017_2026.tsv
+    years: [2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026]
+    skip_years: [2020]
+    out_file: ${.root}/vsm_stability_state/2017_2026/worklist.tsv
+
+  # 4. 一个 tile-年(run_lumi_inference.sh predict_sample_worklist 调用):预测前写点文件
+  #    (固定像元 + 当年 GEDI 点),预测只保留这些点、不写 GeoTIFF;再拆成 pixel_values /
+  #    gedi_values。2020 在 Hendrix 上读发布版,见 sample_stability_2020。
+  write_stability_points:
+    _target_: tools.vsm_stability.write_stability_points
+    target_type: function
+    root: /scratch/project_465003168/hui/gvs
+    tile: ???
+    year: ???
+    out_file: ???
+    pixels_dir: ${.root}/vsm_stability/2017_2026/sample_pixels
+    gedi_dir: ${.root}/gedi/veg_sensitivity_all/{year}
+    rhs: [10, 25, 50, 75, 90, 98]
+    n_gedi: 5000
+    sensitivity_min: 0.95
+    seed: 42
+
+  sample_stability_tile:
+    _target_: tools.vsm_stability.sample_stability_tile
+    target_type: function
+    root: /scratch/project_465003168/hui/gvs
+    tile: ???
+    year: ???
+    pred_dir: null       # 读栅格(<pred_dir>/RH*_Q*.tif)时用
+    samples_file: null   # 预测直接保留的点值(point_samples/<year>/<tile>.parquet)
+    pixels_dir: ${.root}/vsm_stability/2017_2026/sample_pixels
+    out_dir: ${.root}/vsm_stability/2017_2026
+    manifest: null
+    products_root: null
+    gedi_dir: ${.root}/gedi/veg_sensitivity_all/{year}
+    rhs: [10, 25, 50, 75, 90, 98]
+    quantiles: [0, 1, 2]
+    n_gedi: 5000
+    sensitivity_min: 0.95
+    seed: 42
+    threads: 8
+
+  # 2020 = 发布版(released_v0.tsv 指向 masked / original),Hendrix 上逐 tile 跑:
+  #   python -m tools.run run=sample_stability_2020 run.tile=18NZF
+  sample_stability_2020:
+    _target_: tools.vsm_stability.sample_stability_tile
+    target_type: function
+    tile: ???
+    year: 2020
+    pred_dir: null
+    pixels_dir: ~/data/gvs/vsm_stability/2017_2026/sample_pixels
+    out_dir: ~/data/gvs/vsm_stability/2017_2026
+    manifest: ~/data/gvs/products/vsm/2020/released_v0.tsv
+    products_root: ~/data/gvs/products/vsm
+    gedi_dir: ~/data/gvs/gedi/veg_sensitivity_all/{year}
+    rhs: [10, 25, 50, 75, 90, 98]
+    quantiles: [0, 1, 2]
+    n_gedi: 5000
+    sensitivity_min: 0.95
+    seed: 42
+    threads: 8
+
+  # 5. LUMI:汇总
+  #   python -m tools.run run=summarize_stability_years
+  summarize_stability_years:
+    _target_: tools.vsm_stability.summarize_stability_years
+    target_type: function
+    root: /scratch/project_465003168/hui/gvs
+    tiles_file: ${.root}/vsm_stability_state/tiles_2017_2026.tsv
+    values_dir: ${.root}/vsm_stability/2017_2026
+    report_dir: ${.root}/vsm_stability_state/2017_2026
+    pixels_dir: ${.root}/vsm_stability/2017_2026/sample_pixels   # 只用 biome == tile biome 的像元
+    rhs: [10, 25, 50, 75, 90, 98]
+    min_valid_share: 0.5
+    vegetated_rh98: 5.0
+
+  # 稳定性测试每个 tile-年：生长季可选影像数、预测实际选中的 ≤20 景及其云量（同 download_tile_by_api）
+  count_stability_images:
+    _target_: tools.vsm_stability.count_stability_images
+    target_type: function
+    root: /scratch/project_465003168/hui/gvs
+    tiles_file: ${.root}/vsm_stability_state/tiles_2017_2026.tsv
+    s2_grid_file: ${.root}/01_derived_ancillary/growing_months/s2_tiles_with_growing_months.parquet
+    out_file: ${.root}/vsm_stability_state/2017_2026/stability_images.tsv
+    selected_file: ${.root}/vsm_stability_state/2017_2026/stability_selected_images.parquet
+    max_cloud_cover: 90
+    n_images: 20
+    n_workers: 16
+
+  # 选中影像在固定采样点上的 SCL(PC，即预测时用的掩膜) 和 Cloud Score+ (GEE)，再对照年际偏差
+  sample_stability_scl:
+    _target_: tools.vsm_stability.sample_stability_scl
+    target_type: function
+    root: /scratch/project_465003168/hui/gvs
+    selected_file: ${.root}/vsm_stability_state/2017_2026/stability_selected_images.parquet
+    pixels_dir: ${.root}/vsm_stability/2017_2026/sample_pixels
+    out_dir: ${.root}/vsm_stability/2017_2026/scl_values
+    n_workers: 16
+
+  sample_stability_cloudscore:
+    _target_: tools.vsm_stability.sample_stability_cloudscore
+    target_type: function
+    root: /scratch/project_465003168/hui/gvs
+    selected_file: ${.root}/vsm_stability_state/2017_2026/stability_selected_images.parquet
+    pixels_dir: ${.root}/vsm_stability/2017_2026/sample_pixels
+    out_dir: ${.root}/vsm_stability/2017_2026/cloudscore_values
+    key_file: keys/ee-default.json
+    n_workers: 2      # tile-years at a time
+    n_threads: 16     # computePixels block requests per tile-year
+    part: 0           # this run's share of the tile-years (one GEE project per part)
+    n_parts: 1
+
+  summarize_stability_clouds:
+    _target_: tools.vsm_stability.summarize_stability_clouds
+    target_type: function
+    root: /scratch/project_465003168/hui/gvs
+    tiles_file: ${.root}/vsm_stability_state/tiles_2017_2026.tsv
+    values_dir: ${.root}/vsm_stability/2017_2026
+    scl_dir: ${.root}/vsm_stability/2017_2026/scl_values
+    cloudscore_dir: ${.root}/vsm_stability/2017_2026/cloudscore_values
+    report_dir: ${.root}/vsm_stability_state/2017_2026
+    pixels_dir: ${.root}/vsm_stability/2017_2026/sample_pixels
+    cs_clear: 0.6
+    vegetated_rh98: 5.0
+
+  sample_stability_reflectance:
+    _target_: tools.vsm_stability.sample_stability_reflectance
+    target_type: function
+    root: /scratch/project_465003168/hui/gvs
+    selected_file: ${.root}/vsm_stability_state/2017_2026/stability_selected_images.parquet
+    pixels_dir: ${.root}/vsm_stability/2017_2026/sample_pixels
+    out_dir: ${.root}/vsm_stability/2017_2026/reflectance_values
+    res: 80           # m, read from the COG overviews
+    n_workers: 16
+
+  summarize_stability_reflectance:
+    _target_: tools.vsm_stability.summarize_stability_reflectance
+    target_type: function
+    root: /scratch/project_465003168/hui/gvs
+    tiles_file: ${.root}/vsm_stability_state/tiles_2017_2026.tsv
+    values_dir: ${.root}/vsm_stability/2017_2026
+    scl_dir: ${.root}/vsm_stability/2017_2026/scl_values
+    cloudscore_dir: ${.root}/vsm_stability/2017_2026/cloudscore_values
+    reflectance_dir: ${.root}/vsm_stability/2017_2026/reflectance_values
+    report_dir: ${.root}/vsm_stability_state/2017_2026
+    pixels_dir: ${.root}/vsm_stability/2017_2026/sample_pixels
+    cs_clear: 0.6
+    vegetated_rh98: 5.0
+
+  summarize_stability_per_image:
+    _target_: tools.vsm_stability.summarize_stability_per_image
+    target_type: function
+    root: /scratch/project_465003168/hui/gvs
+    tiles_file: ${.root}/vsm_stability_state/tiles_2017_2026.tsv
+    values_dir: ${.root}/vsm_stability/2017_2026
+    per_image_dir: ${.root}/vsm_stability/2017_2026_per_image
+    selected_file: ${.root}/vsm_stability_state/2017_2026/stability_selected_images.parquet
+    report_dir: ${.root}/vsm_stability_state/2017_2026
+    pixels_dir: ${.root}/vsm_stability/2017_2026/sample_pixels
+    var: RH98_Q1
+    vegetated_rh98: 5.0
+
+  # =========================================================================
+  # tools/vsm_stability_plots.py
+  # =========================================================================
+  # 报告 docs/reports/vsm_stability_2017_2026.md 的图,只读上面的汇总表(几十 MB,本地可跑)。
+  # 在仓库根目录跑,图直接写进 docs/reports/figures/vsm_stability_2017_2026/。
+  # 表在本地时改 root,例如 run.root=<含 vsm_stability_state/ 的目录>。
+  # fig1-fig4(year offset、per-tile offset、per-pixel SD、GEDI):
+  #   python -m tools.run run=plot_stability_report
+  plot_stability_report:
+    _target_: tools.vsm_stability_plots.plot_stability_report
+    target_type: function
+    root: /scratch/project_465003168/hui/gvs
+    tables_dir: ${.root}/vsm_stability_state/2017_2026
+    out_dir: docs/reports/figures/vsm_stability_2017_2026
+
+  # fig5-fig6(每年输入影像质量、反射率 vs year offset):
+  #   python -m tools.run run=plot_stability_inputs
+  plot_stability_inputs:
+    _target_: tools.vsm_stability_plots.plot_stability_inputs
+    target_type: function
+    root: /scratch/project_465003168/hui/gvs
+    tables_dir: ${.root}/vsm_stability_state/2017_2026
+    out_dir: docs/reports/figures/vsm_stability_2017_2026
+
+  # fig0(指标示意图,用一个 tile 的真实采样值):
+  #   python -m tools.run run=plot_stability_schematic
+  plot_stability_schematic:
+    _target_: tools.vsm_stability_plots.plot_stability_schematic
+    target_type: function
+    root: /scratch/project_465003168/hui/gvs
+    values_dir: ${.root}/vsm_stability/2017_2026
+    tile: 49UDT
+    biome: 6
+    out_file: docs/reports/figures/vsm_stability_2017_2026/fig0_metrics_schematic.png
+
+  # =========================================================================
+  # tools/vsm_monthly_median.py
+  # =========================================================================
+  # 单景时间序列(run_deploy.sh predict_timeseries 的输出)-> 每月逐像元中值,
+  # 同一过境的重复处理版本只留最新的。写在 tile 目录里:
+  #   <var>_monthly_median.cog.tif(12 band,band m = m 月)+ monthly_valid_images.cog.tif
+  #   python -m tools.run run=vsm_monthly_median run.year=2023 run.tile=48PWV
+  vsm_monthly_median:
+    _target_: tools.vsm_monthly_median.vsm_monthly_median
+    target_type: function
+    year: 2023
+    tile: 48PWV
+    tile_dir: ~/data/gvs/evaluation/downstream_tasks/selective_logging/vsm_timeseries/{year}/{tile}
+    variables: [RH25_Q1, RH98_Q1]
