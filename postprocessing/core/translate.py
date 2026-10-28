@@ -10,8 +10,13 @@ import os
 import time
 import dask
 
-def _translate_one(src_path, dst_path, profile="ZSTD", profile_options={}, **options):
-    """Convert image to COG."""
+def _translate_one(src_path, dst_path, profile="ZSTD", profile_options={},
+                   in_memory=False, **options):
+    """Convert image to COG.
+
+    in_memory: keep rio-cogeo's intermediate GTiff in RAM. With False it is a
+    temp file next to dst_path, i.e. written and read back on the shared disk.
+    """
     # Format creation option (see gdalwarp `-co` option)
     output_profile = cog_profiles.get(profile)
     output_profile.update(dict(
@@ -36,7 +41,7 @@ def _translate_one(src_path, dst_path, profile="ZSTD", profile_options={}, **opt
         dst_path,
         output_profile,
         config=config,
-        in_memory=False,
+        in_memory=in_memory,
         quiet=True,
         **options,
     )
@@ -159,11 +164,12 @@ def translate_tiles(worklist, src_root, dst_root, profile="LERC_ZSTD",
             "files_failed": len(failed), "elapsed_sec": time.time() - t0}
 
 
-def translate_tile(src_dir, dst_dir, profile="ZSTD", **kwargs):
+def translate_tile(src_dir, dst_dir, profile="ZSTD", pattern="RH*_Q*.tif", **kwargs):
+    """pattern: which GeoTIFFs to convert, e.g. RH*_Q1.tif for the median only."""
     src_dir = Path(src_dir).expanduser()
     dst_dir = Path(dst_dir).expanduser()
     dst_dir.mkdir(parents=True, exist_ok=True)
-    tiff_files = src_dir.glob('RH*_Q*.tif')
+    tiff_files = src_dir.glob(pattern)
     futures = []
     for tiff_file in tiff_files:
         dst_path = dst_dir / tiff_file.name #.replace('_uncompressed.tif', '.cog.tif')

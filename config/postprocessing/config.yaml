@@ -147,6 +147,7 @@ postprocessing:
     # signature defaults to plain ZSTD, which is ~40% larger — pin it here so
     # the masked/ conversion cannot silently diverge from the original/ one.
     profile: LERC_ZSTD
+    pattern: RH*_Q*.tif   # RH*_Q1.tif = median only
 
   # Many tiles in ONE process — the form to use under the 10-job account cap:
   # a job takes N cpus and keeps N conversions in flight across tile

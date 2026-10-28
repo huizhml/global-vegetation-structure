@@ -266,9 +266,9 @@ class BaseDeployDataset(Dataset):
         esa_wc = torch.argmax(prediction[:, -12:, inner, inner], dim=1, keepdim=True).to(torch.int8)
         return prediction_no_border, esa_wc
 
-    def _apply_masks(self, prediction_no_border, esa_wc, scl):
+    def _apply_masks(self, prediction_no_border, esa_wc, scl, keep_images=False):
         """Mask and take the per-pixel median over all images of one patch location
-        (or keep every image when timeseries=True)."""
+        (or keep every image when timeseries=True or keep_images=True)."""
         scl = scl[:, :, self.border:self.patch_size - self.border, self.border:self.patch_size - self.border]
 
         if self.mask_with_scl:
@@ -293,7 +293,7 @@ class BaseDeployDataset(Dataset):
         water_mask_esa = torch.mode(esa_wc, dim=0).values == ESA_WATER # predicted esa wc
         esa_wc_mask = esa_wc == ESA_SNOW
         prediction_no_border = torch.where(scl_mask | esa_wc_mask, torch.nan, prediction_no_border)
-        if self.timeseries:
+        if self.timeseries or keep_images:
             pass  # keep every image: (n_images, n_vars, h, w); water/built-up masks below are still per tile
         elif self.save_intermediate_tif:
             prediction_no_border = prediction_no_border[:, 295, :, :]
@@ -615,6 +615,18 @@ def write_prediction_as_tif(pred, src_profile, dst_profile, prediction_fp):
 def collate_batch(batch):
     return batch[0]
 
+
+def newest_processing(df):
+    """Keep the newest processing of each acquisition.
+
+    The STAC search returns some acquisitions twice, the original processing and
+    the 2024 reprocessing of the archive. Their ids (product URI without the
+    N05xx baseline) differ only in the trailing processing time, e.g.
+    S2B_MSIL2A_20230115T032059_R118_T48PWV_20230115T141952 and ..._20240810T232727.
+    """
+    parts = df['id'].str.rsplit('_', n=1, expand=True)  # 0: acquisition, 1: processing time
+    return df[parts[1] == parts.groupby(0)[1].transform('max')]
+
         
 class S2DatasetStream(BaseDeployDataset):
     def __init__(self, 
@@ -642,12 +654,38 @@ class S2DatasetStream(BaseDeployDataset):
                  timeseries: bool = False,
                  timeseries_vars: List[str] = None,
                  max_cloud_cover: float = 90,
+                 months: List[int] = None,
+                 crop_bounds: List[float] = None,
+                 crop_epsg: int = None,
+                 crop_name: str = None,
+                 sample_points_file: str = None,
+                 sample_output_file: str = None,
+                 sample_per_image_vars: List[str] = None,
                  **kwargs):
+        # sample_points_file (parquet with lon, lat): keep the yearly prediction only at
+        # these pixels and write it to sample_output_file (the points' columns plus
+        # RH<r>_Q<q>, int16 dm, nodata as in the GeoTIFF) instead of writing GeoTIFFs.
+        # Same masks / median / order of patches as the GeoTIFF, so the values are equal.
+        self.sample_points_file = sample_points_file
+        self.sample_output_file = sample_output_file
+        # sample_per_image_vars (e.g. [RH98_Q1]): also keep these variables of every image at the
+        # points, masked as for the median -> <sample_output_file stem>_per_image.parquet
+        self.sample_per_image_vars = list(sample_per_image_vars or [])
+        if sample_points_file and not sample_output_file:
+            raise ValueError('sample_points_file needs sample_output_file')
+        # Optional window instead of the whole tile: [xmin, ymin, xmax, ymax] in the
+        # tile's UTM CRS (crop_epsg), saved as <h5_dir>/<crop_name>.h5. Images are
+        # still picked for the whole tile, so they match the full-tile product.
+        self.crop_bounds = list(crop_bounds) if crop_bounds is not None else None
+        self.crop_epsg = crop_epsg
+        if self.crop_bounds is not None and not crop_name:
+            raise ValueError('crop_bounds needs crop_name, so the cropped h5 does not replace the tile h5')
         self.max_images = max_images
         self.images_per_forward = images_per_forward
         self.timeseries = timeseries # True: one band per image instead of the per-pixel median
         self.timeseries_vars = list(timeseries_vars or ['RH25_Q1', 'RH98_Q1'])
         self.max_cloud_cover = max_cloud_cover # STAC eo:cloud_cover filter when downloading
+        self.months = months # image months when downloading; None = the tile's growing months
         if metadata_file != 'none':
             self.metadata_file = Path(metadata_file).expanduser()
         else:
@@ -656,7 +694,7 @@ class S2DatasetStream(BaseDeployDataset):
             self.s2_grid_file = Path(s2_grid_file).expanduser()
         else:
             self.s2_grid_file = None
-        self.h5_file = Path(h5_dir).expanduser() / f'{tile_id}.h5'
+        self.h5_file = Path(h5_dir).expanduser() / f'{crop_name or tile_id}.h5'
         self.output_format = output_format
         self.output_dtype = output_dtype
         self.tile_id = tile_id
@@ -758,8 +796,63 @@ class S2DatasetStream(BaseDeployDataset):
             self.prediction_dir = Path(prediction_dir).expanduser()
         self.prediction_dir.mkdir(exist_ok=True)
         self.prediction_fp = self.prediction_dir / f'{self.tile_id}'
-    
-    
+        if self.sample_points_file:
+            self._init_sample_points()
+
+    def _init_sample_points(self):
+        """Pixel row / col of each sample point in the tile grid (floor, as rasterio.rowcol)."""
+        if self.timeseries or not self.predict_full_profile:
+            raise ValueError('sample_points_file needs the yearly full-profile prediction')
+        self.sample_points = pd.read_parquet(Path(self.sample_points_file).expanduser())
+        x, y = Transformer.from_crs('EPSG:4326', self.crs, always_xy=True).transform(
+            self.sample_points.lon.values, self.sample_points.lat.values)
+        gt = self.transform     # gdal order: x0, dx, 0, y0, 0, dy
+        self.sample_cols = np.floor((np.asarray(x) - gt[0]) / gt[1]).astype(np.int64)
+        self.sample_rows = np.floor((np.asarray(y) - gt[3]) / gt[5]).astype(np.int64)
+        self.sample_values = np.full((len(self.sample_points), self.rh_dim), self.nodata_value, dtype=self.output_dtype)
+        inside = ((self.sample_rows >= 0) & (self.sample_rows < self.img_height)
+                  & (self.sample_cols >= 0) & (self.sample_cols < self.img_width))
+        if self.sample_per_image_vars:
+            self.sample_images = self._image_dates_ids()
+            self.sample_per_image = np.full((len(self.sample_points), len(self.sample_images[0]),
+                                             len(self.sample_per_image_vars)), self.nodata_value, dtype=self.output_dtype)
+        print(f'{len(self.sample_points)} sample points, {int(inside.sum())} inside the tile, no GeoTIFF written')
+
+    def _write_sample_patch(self, prediction, esa_wc, scl, idx):
+        y0, x0 = self.patch_coords_dict[idx]
+        y0, x0 = y0 + self.border, x0 + self.border
+        n = self.patch_size_no_border
+        m = ((self.sample_rows >= y0) & (self.sample_rows < y0 + n)
+             & (self.sample_cols >= x0) & (self.sample_cols < x0 + n))
+        if not m.any():
+            return
+        if self.sample_per_image_vars:
+            ch = [rh_channel(v) for v in self.sample_per_image_vars]
+            per = self._apply_masks(prediction[:, ch].clone(), esa_wc.clone(), scl.clone(), keep_images=True)  # (img, var, n, n)
+            self.sample_per_image[m] = per[:, :, self.sample_rows[m] - y0, self.sample_cols[m] - x0].transpose(2, 0, 1)
+        pred = self._apply_masks(prediction, esa_wc, scl)          # (rh_dim, n, n)
+        # later patches overwrite overlapping ones, as WriteArray does for the GeoTIFF
+        self.sample_values[m] = pred[:, self.sample_rows[m] - y0, self.sample_cols[m] - x0].T
+
+    def _finalize_samples(self):
+        cols = {f'RH{i // 3}_Q{i % 3}': self.sample_values[:, i] for i in range(self.rh_dim)}
+        out = pd.concat([self.sample_points.reset_index(drop=True), pd.DataFrame(cols)], axis=1)
+        out_file = Path(self.sample_output_file).expanduser()
+        out_file.parent.mkdir(parents=True, exist_ok=True)
+        out.attrs = {}
+        out.to_parquet(out_file.with_suffix('.tmp'), index=False)
+        out_file.with_suffix('.tmp').rename(out_file)
+        print(f'{len(out)} sample points -> {out_file}')
+        if self.sample_per_image_vars:
+            dates, ids = self.sample_images
+            cols = {f'{v}:{d}_{i}': self.sample_per_image[:, k, j]
+                    for j, v in enumerate(self.sample_per_image_vars) for k, (d, i) in enumerate(zip(dates, ids))}
+            per = pd.concat([self.sample_points.reset_index(drop=True), pd.DataFrame(cols)], axis=1)
+            per.attrs = {}
+            per_file = out_file.with_name(f'{out_file.stem}_per_image.parquet')
+            per.to_parquet(per_file, index=False)
+            print(f'{len(dates)} images x {self.sample_per_image_vars} -> {per_file}')
+
     def download_tile(self):
         '''
         This function is mainly used for streaming Sentinel-2 data (2024) on LUMI.
@@ -830,22 +923,32 @@ class S2DatasetStream(BaseDeployDataset):
         df = gpd.GeoDataFrame.from_features(items.to_dict(), crs='epsg:4326')
         df['id'] = df['s2:product_uri'].str.replace(r'_[A-Z]\d{4}', '', regex=True).str.replace('.SAFE', '')
         month = pd.to_datetime(df['datetime']).dt.month
-        df = df[month.isin(row.growing_months)]
+        months = self.months or list(row.growing_months)
+        df = df[month.isin(months)]
         if len(df) == 0:
             print(f'{tile} has no images, bbox={bbox}, skipping...')
-            raise RuntimeError(f'{tile} has no images in growing months, bbox={bbox}, skipping...')
+            raise RuntimeError(f'{tile} has no images in months {months}, bbox={bbox}, skipping...')
         if self.timeseries:
-            # every growing-season image under the cloud threshold (applied in the search)
-            df = df.drop_duplicates(subset='id')
+            # every image of the selected months under the cloud threshold (applied in the search),
+            # one processing per acquisition
+            df = newest_processing(df.drop_duplicates(subset='id'))
         else:
             df = self._pick_best_images(df)
         df = gpd.GeoDataFrame(df, geometry='geometry', crs='EPSG:4326')
         # df.to_parquet(self.save_dir/ f'{self.year}_{tile}_images.parquet')
         epsg = int(items[0].properties['proj:code'][5:])
         items = [item for item in items.items if item.id in df['id'].values]
-        images = stack(items, bands, dtype='uint16', fill_value=np.uint16(0), epsg=epsg, resolution=10, rescale=False)
+        if self.crop_bounds is not None:
+            if self.crop_epsg is not None and int(self.crop_epsg) != epsg:
+                raise RuntimeError(f'{tile}: crop_epsg {self.crop_epsg} differs from the tile CRS EPSG:{epsg}')
+            images = stack(items, bands, dtype='uint16', fill_value=np.uint16(0), epsg=epsg, resolution=10,
+                           bounds=self.crop_bounds, rescale=False)
+            print(f'{tile}: cropped to {self.crop_bounds} (EPSG:{epsg}), shape {images.shape}')
+        else:
+            images = stack(items, bands, dtype='uint16', fill_value=np.uint16(0), epsg=epsg, resolution=10, rescale=False)
         images = harmonize_to_old(images)
-        assert images.shape[2] == images.shape[3] == 10980, f'{tile} has incorrect shape {images.shape}'
+        if self.crop_bounds is None:
+            assert images.shape[2] == images.shape[3] == 10980, f'{tile} has incorrect shape {images.shape}'
         images.name = 's2'
         del images.attrs['spec']
         del images.attrs['crs']
@@ -893,6 +996,8 @@ class S2DatasetStream(BaseDeployDataset):
         return df
 
     def initialize_output(self):
+        if self.sample_points_file:
+            return
         self.options = [
             'TILED=YES',
             'BLOCKXSIZE={}'.format(self.chunk_size), # a different block size than the actual patch size is slow
@@ -919,6 +1024,8 @@ class S2DatasetStream(BaseDeployDataset):
     def write_patch_predictions(self, prediction, esa_wc, scl, idx):
         if self.timeseries:
             return self._write_timeseries_patch(prediction, esa_wc, scl, idx)
+        if self.sample_points_file:
+            return self._write_sample_patch(prediction, esa_wc, scl, idx)
         y_topleft, x_topleft = self.patch_coords_dict[idx]
         y_topleft = y_topleft + self.border
         x_topleft = x_topleft + self.border
@@ -958,6 +1065,8 @@ class S2DatasetStream(BaseDeployDataset):
         return dates, ids
 
     def finalize_output(self):
+        if self.sample_points_file:
+            return self._finalize_samples()
         for writer in self.tiff_writers:
             writer.FlushCache()
         self.tiff_writers = None
