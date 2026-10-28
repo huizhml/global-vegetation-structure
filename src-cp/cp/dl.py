@@ -95,7 +95,10 @@ def load_data(
             "Reading single parquet file from %s",
             data_path,
         )
-        data = gpd.read_parquet(data_path).to_crs("epsg:4326")
+        # Only the configured columns: the full tables have 400+ columns
+        data = gpd.read_parquet(
+            data_path, columns=config.get_all_cols()
+        ).to_crs("epsg:4326")
     else:
         raise ValueError("Must provide only one of --data_root or --data_path")
     if preprocess:

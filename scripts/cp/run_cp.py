@@ -27,8 +27,12 @@ def run_cp(config: GVSCPConfig, save_root):
     cp_res_rows = []
     for cp_method in config.cp.cqr_methods:
         for biome in BIOME_MAPPING.keys():
+            biome_data = data[data[config.data.biome_col] == biome]
+            if biome_data.empty:
+                # e.g. Tundra in 2024: no cal points -> no offsets, pixels stay uncalibrated
+                logging.warning("No cal points for biome %s, skipped", biome)
+                continue
             for rh_cols in config.data:
-                biome_data = data[data[config.data.biome_col] == biome]
                 # q_lo, q_med, q_hi, y
                 biome_rh_data = biome_data[rh_cols.all_cols()].values
                 logging.info(
@@ -138,6 +142,8 @@ def get_cp_method_eval_stat(eval_stats_df: pd.DataFrame, method: str, stat):
     method_stat_df = method_stat_df.pivot(
         index="rh", columns="biome", values=stat
     )
+    # a biome without cal points has no offsets (e.g. Tundra in 2024): NaN column
+    method_stat_df = method_stat_df.reindex(columns=list(BIOME_MAPPING))
     method_stat_df.rename(columns=BIOME_MAPPING, inplace=True)
     method_stat_df.rename(columns=BIOME_SHORT_MAPPING, inplace=True)
     method_stat_df.index = ["RH" + str(rh) for rh in method_stat_df.index]

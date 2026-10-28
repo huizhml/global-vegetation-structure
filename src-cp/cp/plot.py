@@ -19,6 +19,14 @@ def get_tint(color, factor=0.5):
     return tint
 
 
+def set_rh_yticks(ax, y_axis_order, max_labels=12):
+    """RH labels on the y axis; with many RHs (e.g. all 101) only every 10th."""
+    step = 1 if len(y_axis_order) <= max_labels else 10
+    ticks = range(0, len(y_axis_order), step)
+    ax.set_yticks(ticks)
+    ax.set_yticklabels([y_axis_order[i] for i in ticks])
+
+
 def nature_subplot_formatting(ax, title):
     ax.set_title(title, pad=4)  # fontsize=6
     ax.spines["top"].set_visible(False)
@@ -160,8 +168,7 @@ def plot_rh_coverage_per_biome(
     # ---------------------------------------------------------
     # 4. Shared Labels & Legend
     # ---------------------------------------------------------
-    axes[0].set_yticks(range(len(y_axis_order)))
-    axes[0].set_yticklabels(y_axis_order)
+    set_rh_yticks(axes[0], y_axis_order)
 
     set_supxlabel(fig, "Coverage")
     for ax in axes.flatten():
@@ -336,8 +343,7 @@ def plot_rh_width_changes_per_biome(
     # ---------------------------------------------------------
     # 4. Shared Labels & Legend
     # ---------------------------------------------------------
-    axes[0].set_yticks(range(len(y_axis_order)))
-    axes[0].set_yticklabels(y_axis_order)
+    set_rh_yticks(axes[0], y_axis_order)
 
     set_supxlabel(fig, "Average width (m)")
 
@@ -409,8 +415,7 @@ def plot_global_coverage(
         zorder=2,
     )
 
-    ax.set_yticks(range(len(y_axis_order)))
-    ax.set_yticklabels(y_axis_order)
+    set_rh_yticks(ax, y_axis_order)
     nature_subplot_formatting(ax, "Global")
     set_supxlabel(fig, "Coverage")
     # ax.xaxis.set_major_formatter(

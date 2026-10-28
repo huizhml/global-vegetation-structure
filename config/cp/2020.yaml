@@ -1,0 +1,144 @@
+# Conformal calibration of the 2020 VSM Q0 (upper) / Q2 (lower), paper method
+# (Methods 4.4): signed-error CQR (SE-CQR here, alpha_lo = alpha_hi = alpha / 2),
+# per RH and WWF biome. Tundra (11) is fitted but not applied (24 cal points).
+# Points: GEDI sensitivity >= 0.95 cal/test subsets sampled from the 2020 release
+# (STAC vsm_local_masked), all 101 RHs x Q0/Q1/Q2.
+#   sbatch --mem=128G scripts/hendrix/cp_points.sh run_cp config=config/cp/2020.yaml
+output_dir: ~/data/gvs/conformal/2020
+plot:
+  # Skip Tundra due to insufficient data
+  skip_biomes: [11]
+  coverage:
+    fig_width_pt: 350
+    fig_height_pt: 130
+    flatten: false
+    legend_loc: "outside right"
+    plot_style:
+      axes.titlesize: 6
+      legend.fontsize: 7
+  avg_width:
+    fig_width_pt: 372
+    fig_height_pt: 230
+eval:
+  data_path: /projects/dereeco/data/gvs/modeling/gedi/veg_sensitivity_gt0p95/subset_test/version=masked/original_with_ours_sota_biome_2020.parquet
+  # values are in metres
+  preprocess_data: true
+cp:
+  alpha: 0.1
+  cqr_methods:
+  - SE-CQR
+  cal_data_path: /projects/dereeco/data/gvs/modeling/gedi/veg_sensitivity_gt0p95/subset_cal/version=masked/original_with_ours_sota_biome_2020.parquet
+  preprocess_data: true
+data:
+  biome_col: BIOME
+  rh_cols:
+    0: {ground_truth: rh0, q_hi: RH0_Q0, q_lo: RH0_Q2, q_med: RH0_Q1}
+    1: {ground_truth: rh1, q_hi: RH1_Q0, q_lo: RH1_Q2, q_med: RH1_Q1}
+    2: {ground_truth: rh2, q_hi: RH2_Q0, q_lo: RH2_Q2, q_med: RH2_Q1}
+    3: {ground_truth: rh3, q_hi: RH3_Q0, q_lo: RH3_Q2, q_med: RH3_Q1}
+    4: {ground_truth: rh4, q_hi: RH4_Q0, q_lo: RH4_Q2, q_med: RH4_Q1}
+    5: {ground_truth: rh5, q_hi: RH5_Q0, q_lo: RH5_Q2, q_med: RH5_Q1}
+    6: {ground_truth: rh6, q_hi: RH6_Q0, q_lo: RH6_Q2, q_med: RH6_Q1}
+    7: {ground_truth: rh7, q_hi: RH7_Q0, q_lo: RH7_Q2, q_med: RH7_Q1}
+    8: {ground_truth: rh8, q_hi: RH8_Q0, q_lo: RH8_Q2, q_med: RH8_Q1}
+    9: {ground_truth: rh9, q_hi: RH9_Q0, q_lo: RH9_Q2, q_med: RH9_Q1}
+    10: {ground_truth: rh10, q_hi: RH10_Q0, q_lo: RH10_Q2, q_med: RH10_Q1}
+    11: {ground_truth: rh11, q_hi: RH11_Q0, q_lo: RH11_Q2, q_med: RH11_Q1}
+    12: {ground_truth: rh12, q_hi: RH12_Q0, q_lo: RH12_Q2, q_med: RH12_Q1}
+    13: {ground_truth: rh13, q_hi: RH13_Q0, q_lo: RH13_Q2, q_med: RH13_Q1}
+    14: {ground_truth: rh14, q_hi: RH14_Q0, q_lo: RH14_Q2, q_med: RH14_Q1}
+    15: {ground_truth: rh15, q_hi: RH15_Q0, q_lo: RH15_Q2, q_med: RH15_Q1}
+    16: {ground_truth: rh16, q_hi: RH16_Q0, q_lo: RH16_Q2, q_med: RH16_Q1}
+    17: {ground_truth: rh17, q_hi: RH17_Q0, q_lo: RH17_Q2, q_med: RH17_Q1}
+    18: {ground_truth: rh18, q_hi: RH18_Q0, q_lo: RH18_Q2, q_med: RH18_Q1}
+    19: {ground_truth: rh19, q_hi: RH19_Q0, q_lo: RH19_Q2, q_med: RH19_Q1}
+    20: {ground_truth: rh20, q_hi: RH20_Q0, q_lo: RH20_Q2, q_med: RH20_Q1}
+    21: {ground_truth: rh21, q_hi: RH21_Q0, q_lo: RH21_Q2, q_med: RH21_Q1}
+    22: {ground_truth: rh22, q_hi: RH22_Q0, q_lo: RH22_Q2, q_med: RH22_Q1}
+    23: {ground_truth: rh23, q_hi: RH23_Q0, q_lo: RH23_Q2, q_med: RH23_Q1}
+    24: {ground_truth: rh24, q_hi: RH24_Q0, q_lo: RH24_Q2, q_med: RH24_Q1}
+    25: {ground_truth: rh25, q_hi: RH25_Q0, q_lo: RH25_Q2, q_med: RH25_Q1}
+    26: {ground_truth: rh26, q_hi: RH26_Q0, q_lo: RH26_Q2, q_med: RH26_Q1}
+    27: {ground_truth: rh27, q_hi: RH27_Q0, q_lo: RH27_Q2, q_med: RH27_Q1}
+    28: {ground_truth: rh28, q_hi: RH28_Q0, q_lo: RH28_Q2, q_med: RH28_Q1}
+    29: {ground_truth: rh29, q_hi: RH29_Q0, q_lo: RH29_Q2, q_med: RH29_Q1}
+    30: {ground_truth: rh30, q_hi: RH30_Q0, q_lo: RH30_Q2, q_med: RH30_Q1}
+    31: {ground_truth: rh31, q_hi: RH31_Q0, q_lo: RH31_Q2, q_med: RH31_Q1}
+    32: {ground_truth: rh32, q_hi: RH32_Q0, q_lo: RH32_Q2, q_med: RH32_Q1}
+    33: {ground_truth: rh33, q_hi: RH33_Q0, q_lo: RH33_Q2, q_med: RH33_Q1}
+    34: {ground_truth: rh34, q_hi: RH34_Q0, q_lo: RH34_Q2, q_med: RH34_Q1}
+    35: {ground_truth: rh35, q_hi: RH35_Q0, q_lo: RH35_Q2, q_med: RH35_Q1}
+    36: {ground_truth: rh36, q_hi: RH36_Q0, q_lo: RH36_Q2, q_med: RH36_Q1}
+    37: {ground_truth: rh37, q_hi: RH37_Q0, q_lo: RH37_Q2, q_med: RH37_Q1}
+    38: {ground_truth: rh38, q_hi: RH38_Q0, q_lo: RH38_Q2, q_med: RH38_Q1}
+    39: {ground_truth: rh39, q_hi: RH39_Q0, q_lo: RH39_Q2, q_med: RH39_Q1}
+    40: {ground_truth: rh40, q_hi: RH40_Q0, q_lo: RH40_Q2, q_med: RH40_Q1}
+    41: {ground_truth: rh41, q_hi: RH41_Q0, q_lo: RH41_Q2, q_med: RH41_Q1}
+    42: {ground_truth: rh42, q_hi: RH42_Q0, q_lo: RH42_Q2, q_med: RH42_Q1}
+    43: {ground_truth: rh43, q_hi: RH43_Q0, q_lo: RH43_Q2, q_med: RH43_Q1}
+    44: {ground_truth: rh44, q_hi: RH44_Q0, q_lo: RH44_Q2, q_med: RH44_Q1}
+    45: {ground_truth: rh45, q_hi: RH45_Q0, q_lo: RH45_Q2, q_med: RH45_Q1}
+    46: {ground_truth: rh46, q_hi: RH46_Q0, q_lo: RH46_Q2, q_med: RH46_Q1}
+    47: {ground_truth: rh47, q_hi: RH47_Q0, q_lo: RH47_Q2, q_med: RH47_Q1}
+    48: {ground_truth: rh48, q_hi: RH48_Q0, q_lo: RH48_Q2, q_med: RH48_Q1}
+    49: {ground_truth: rh49, q_hi: RH49_Q0, q_lo: RH49_Q2, q_med: RH49_Q1}
+    50: {ground_truth: rh50, q_hi: RH50_Q0, q_lo: RH50_Q2, q_med: RH50_Q1}
+    51: {ground_truth: rh51, q_hi: RH51_Q0, q_lo: RH51_Q2, q_med: RH51_Q1}
+    52: {ground_truth: rh52, q_hi: RH52_Q0, q_lo: RH52_Q2, q_med: RH52_Q1}
+    53: {ground_truth: rh53, q_hi: RH53_Q0, q_lo: RH53_Q2, q_med: RH53_Q1}
+    54: {ground_truth: rh54, q_hi: RH54_Q0, q_lo: RH54_Q2, q_med: RH54_Q1}
+    55: {ground_truth: rh55, q_hi: RH55_Q0, q_lo: RH55_Q2, q_med: RH55_Q1}
+    56: {ground_truth: rh56, q_hi: RH56_Q0, q_lo: RH56_Q2, q_med: RH56_Q1}
+    57: {ground_truth: rh57, q_hi: RH57_Q0, q_lo: RH57_Q2, q_med: RH57_Q1}
+    58: {ground_truth: rh58, q_hi: RH58_Q0, q_lo: RH58_Q2, q_med: RH58_Q1}
+    59: {ground_truth: rh59, q_hi: RH59_Q0, q_lo: RH59_Q2, q_med: RH59_Q1}
+    60: {ground_truth: rh60, q_hi: RH60_Q0, q_lo: RH60_Q2, q_med: RH60_Q1}
+    61: {ground_truth: rh61, q_hi: RH61_Q0, q_lo: RH61_Q2, q_med: RH61_Q1}
+    62: {ground_truth: rh62, q_hi: RH62_Q0, q_lo: RH62_Q2, q_med: RH62_Q1}
+    63: {ground_truth: rh63, q_hi: RH63_Q0, q_lo: RH63_Q2, q_med: RH63_Q1}
+    64: {ground_truth: rh64, q_hi: RH64_Q0, q_lo: RH64_Q2, q_med: RH64_Q1}
+    65: {ground_truth: rh65, q_hi: RH65_Q0, q_lo: RH65_Q2, q_med: RH65_Q1}
+    66: {ground_truth: rh66, q_hi: RH66_Q0, q_lo: RH66_Q2, q_med: RH66_Q1}
+    67: {ground_truth: rh67, q_hi: RH67_Q0, q_lo: RH67_Q2, q_med: RH67_Q1}
+    68: {ground_truth: rh68, q_hi: RH68_Q0, q_lo: RH68_Q2, q_med: RH68_Q1}
+    69: {ground_truth: rh69, q_hi: RH69_Q0, q_lo: RH69_Q2, q_med: RH69_Q1}
+    70: {ground_truth: rh70, q_hi: RH70_Q0, q_lo: RH70_Q2, q_med: RH70_Q1}
+    71: {ground_truth: rh71, q_hi: RH71_Q0, q_lo: RH71_Q2, q_med: RH71_Q1}
+    72: {ground_truth: rh72, q_hi: RH72_Q0, q_lo: RH72_Q2, q_med: RH72_Q1}
+    73: {ground_truth: rh73, q_hi: RH73_Q0, q_lo: RH73_Q2, q_med: RH73_Q1}
+    74: {ground_truth: rh74, q_hi: RH74_Q0, q_lo: RH74_Q2, q_med: RH74_Q1}
+    75: {ground_truth: rh75, q_hi: RH75_Q0, q_lo: RH75_Q2, q_med: RH75_Q1}
+    76: {ground_truth: rh76, q_hi: RH76_Q0, q_lo: RH76_Q2, q_med: RH76_Q1}
+    77: {ground_truth: rh77, q_hi: RH77_Q0, q_lo: RH77_Q2, q_med: RH77_Q1}
+    78: {ground_truth: rh78, q_hi: RH78_Q0, q_lo: RH78_Q2, q_med: RH78_Q1}
+    79: {ground_truth: rh79, q_hi: RH79_Q0, q_lo: RH79_Q2, q_med: RH79_Q1}
+    80: {ground_truth: rh80, q_hi: RH80_Q0, q_lo: RH80_Q2, q_med: RH80_Q1}
+    81: {ground_truth: rh81, q_hi: RH81_Q0, q_lo: RH81_Q2, q_med: RH81_Q1}
+    82: {ground_truth: rh82, q_hi: RH82_Q0, q_lo: RH82_Q2, q_med: RH82_Q1}
+    83: {ground_truth: rh83, q_hi: RH83_Q0, q_lo: RH83_Q2, q_med: RH83_Q1}
+    84: {ground_truth: rh84, q_hi: RH84_Q0, q_lo: RH84_Q2, q_med: RH84_Q1}
+    85: {ground_truth: rh85, q_hi: RH85_Q0, q_lo: RH85_Q2, q_med: RH85_Q1}
+    86: {ground_truth: rh86, q_hi: RH86_Q0, q_lo: RH86_Q2, q_med: RH86_Q1}
+    87: {ground_truth: rh87, q_hi: RH87_Q0, q_lo: RH87_Q2, q_med: RH87_Q1}
+    88: {ground_truth: rh88, q_hi: RH88_Q0, q_lo: RH88_Q2, q_med: RH88_Q1}
+    89: {ground_truth: rh89, q_hi: RH89_Q0, q_lo: RH89_Q2, q_med: RH89_Q1}
+    90: {ground_truth: rh90, q_hi: RH90_Q0, q_lo: RH90_Q2, q_med: RH90_Q1}
+    91: {ground_truth: rh91, q_hi: RH91_Q0, q_lo: RH91_Q2, q_med: RH91_Q1}
+    92: {ground_truth: rh92, q_hi: RH92_Q0, q_lo: RH92_Q2, q_med: RH92_Q1}
+    93: {ground_truth: rh93, q_hi: RH93_Q0, q_lo: RH93_Q2, q_med: RH93_Q1}
+    94: {ground_truth: rh94, q_hi: RH94_Q0, q_lo: RH94_Q2, q_med: RH94_Q1}
+    95: {ground_truth: rh95, q_hi: RH95_Q0, q_lo: RH95_Q2, q_med: RH95_Q1}
+    96: {ground_truth: rh96, q_hi: RH96_Q0, q_lo: RH96_Q2, q_med: RH96_Q1}
+    97: {ground_truth: rh97, q_hi: RH97_Q0, q_lo: RH97_Q2, q_med: RH97_Q1}
+    98: {ground_truth: rh98, q_hi: RH98_Q0, q_lo: RH98_Q2, q_med: RH98_Q1}
+    99: {ground_truth: rh99, q_hi: RH99_Q0, q_lo: RH99_Q2, q_med: RH99_Q1}
+    100: {ground_truth: rh100, q_hi: RH100_Q0, q_lo: RH100_Q2, q_med: RH100_Q1}
+  other_cols:
+  - shot_number
+  - beam
+  - sensitivity
+  - BIOME
+  - ECO_ID
+  - lon
+  - lat
+  - geometry
