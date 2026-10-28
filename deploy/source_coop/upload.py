@@ -57,7 +57,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 from omegaconf import DictConfig, OmegaConf
 
 from deploy.source_coop.common import (
-    CountingStream, NONRETRYABLE, StateWriter, build_cfg, build_dst,
+    CountingStream, NONRETRYABLE, StateWriter, TsvState, build_cfg, build_dst,
     build_src, list_source_items, load_lines, map_key, normalize_prefix,
     open_source, print_source_roots, source_label, src_kind, src_required,
     transfer_config,
@@ -96,7 +96,7 @@ def move(src, dst, cfg: DictConfig, state: StateWriter, key: str,
     for attempt in range(1, cfg.max_attempts + 1):
         try:
             nbytes = transfer_one(src, dst, cfg, key, size, xfer)
-            state.ok(key)
+            state.ok(key, nbytes)
             return nbytes
         except ClientError as exc:
             code = exc.response.get("Error", {}).get("Code", "")
@@ -358,14 +358,23 @@ def run_transfer(cfg: DictConfig) -> Dict[str, Any]:
     total_objects = len(keys)
     total_bytes = sum(s for _, s in keys)
 
-    done_path = cfg.state_prefix + ".done"
-    failed_path = cfg.state_prefix + ".failed"
-    done = load_lines(done_path)
+    if cfg.state_format == "tsv":
+        # 单个 <prefix>.tsv,同一 key 以最后一行为准,重试不用清空
+        tsv = TsvState(cfg.state_prefix + ".tsv")
+        done_path = failed_path = tsv.path
+        done = tsv.done()
+        failed_keys = tsv.failed()
+    else:
+        done_path = cfg.state_prefix + ".done"
+        failed_path = cfg.state_prefix + ".failed"
+        done = load_lines(done_path)
+        failed_keys = load_lines(failed_path)
 
     if cfg.only_failed:
-        wanted = load_lines(failed_path) - done
+        wanted = failed_keys - done
         keys = [(k, s) for k, s in keys if k in wanted]
-        open(failed_path, "w").close()      # 清空,避免旧记录累积
+        if cfg.state_format != "tsv":
+            open(failed_path, "w").close()      # 清空,避免旧记录累积
     else:
         keys = [(k, s) for k, s in keys if k not in done]
 
@@ -391,7 +400,7 @@ def run_transfer(cfg: DictConfig) -> Dict[str, Any]:
         print("[info] 没有待传对象,已全部完成")
         return {"sent": 0, "failed": 0, "bytes": 0}
 
-    state = StateWriter(done_path, failed_path)
+    state = tsv.open() if cfg.state_format == "tsv" else StateWriter(done_path, failed_path)
     xfer = transfer_config(cfg)
     sent = failed = 0
     sent_bytes = 0
@@ -476,6 +485,7 @@ def upload_to_source_coop(
     src: Any = None,
     dst: Any = None,
     state_prefix: str = None,
+    state_format: str = "files",    # files: <prefix>.done/.failed | tsv: <prefix>.tsv
     mode: str = "run",              # run | dry | selftest
     workers: int = 32,
     submit_chunk: int = 2000,       # 分批提交,避免一次建几百万个 future
@@ -504,6 +514,9 @@ def upload_to_source_coop(
             profile / region。凭证走 aws profile 的 credential_process。
         state_prefix: 断点续传状态文件前缀,会写 <prefix>.done 和
             <prefix>.failed;重跑时已在 .done 里的 key 直接跳过。
+        state_format: files(默认,上面两个文件)| tsv —— 只写一个
+            <prefix>.tsv(key / status / 时间 / 字节数或原因),同一 key 以最后
+            一行为准。
         mode: run 实传 | dry 只打印路径映射 | selftest 纯逻辑+实网自检。
         workers: 上传线程数(连接池按此自动放大)。
         submit_chunk: 每批提交给线程池的对象数。
@@ -529,7 +542,8 @@ def upload_to_source_coop(
     # 状态文件位置。
     cfg = build_cfg(
         required=src_required(src) + ("dst.prefix", "state_prefix"),
-        src=src, dst=dst, state_prefix=state_prefix, mode=mode,
+        src=src, dst=dst, state_prefix=state_prefix, state_format=state_format,
+        mode=mode,
         workers=workers, submit_chunk=submit_chunk, max_attempts=max_attempts,
         only_failed=only_failed, allow_empty=allow_empty,
         progress_every=progress_every, min_cred_minutes=min_cred_minutes,
@@ -551,6 +565,8 @@ def upload_to_source_coop(
             raise RuntimeError(f"自检有 {failed} 项失败")
         return {"selftest_failed": 0}
 
+    if cfg.state_format not in ("files", "tsv"):
+        raise ValueError(f"state_format 只能是 files / tsv,收到 {cfg.state_format!r}")
     if cfg.mode not in ("run", "dry"):
         raise ValueError(
             f"mode 只能是 run / dry / selftest,收到 {cfg.mode!r}")

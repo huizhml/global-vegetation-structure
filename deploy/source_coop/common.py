@@ -118,7 +118,7 @@ class StateWriter:
         self._done = open(done_path, "a")
         self._failed = open(failed_path, "a")
 
-    def ok(self, key: str) -> None:
+    def ok(self, key: str, nbytes: Optional[int] = None) -> None:
         with self._lock:
             self._done.write(key + "\n")
             self._done.flush()
@@ -133,6 +133,61 @@ class StateWriter:
     def close(self) -> None:
         self._done.close()
         self._failed.close()
+
+
+class TsvState:
+    """单个 <prefix>.tsv 记全部状态,线程安全追加写,不生成一堆小文件。
+
+    一行 `key \\t status \\t UTC 时间 \\t 字节数或失败原因`,status 是 done / failed。
+    同一个 key 以最后一行为准:重试成功的那行盖掉之前的 failed。
+    """
+
+    HEADER = "key\tstatus\ttime\tinfo\n"
+
+    def __init__(self, path: str):
+        self.path = path
+        self._lock = threading.Lock()
+        self._fh = None
+
+    def load(self) -> Dict[str, str]:
+        """key -> 最新 status。"""
+        status: Dict[str, str] = {}
+        if os.path.exists(self.path):
+            with open(self.path) as fh:
+                for line in fh:
+                    parts = line.rstrip("\n").split("\t")
+                    if len(parts) >= 2 and parts[0] != "key":
+                        status[parts[0]] = parts[1]
+        return status
+
+    def done(self) -> set:
+        return {k for k, s in self.load().items() if s == "done"}
+
+    def failed(self) -> set:
+        return {k for k, s in self.load().items() if s == "failed"}
+
+    def open(self) -> "TsvState":
+        new = not os.path.exists(self.path) or os.path.getsize(self.path) == 0
+        self._fh = open(self.path, "a")
+        if new:
+            self._fh.write(self.HEADER)
+        return self
+
+    def _write(self, key: str, status: str, info: str) -> None:
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        with self._lock:
+            self._fh.write(f"{key}\t{status}\t{now}\t{info}\n")
+            self._fh.flush()
+
+    def ok(self, key: str, nbytes: Optional[int] = None) -> None:
+        self._write(key, "done", "" if nbytes is None else str(nbytes))
+
+    def fail(self, key: str, reason: str) -> None:
+        self._write(key, "failed", " ".join(str(reason).split())[:500])
+
+    def close(self) -> None:
+        if self._fh:
+            self._fh.close()
 
 
 # ================================================================ 客户端
@@ -672,6 +727,22 @@ def list_source_items(cfg: DictConfig, src,
     if elapsed > 1:
         print(f"[info] 列举 {len(items)} 个对象耗时 {elapsed:.1f}s "
               f"({kind})", flush=True)
+
+    # key 清单:只传这些 key(源端 key,如 <tile>/RH78_Q1.tif)。补传 sc_audit
+    # 查出来的零散缺失文件用,不用把整个 tile 重传一遍。
+    keys_path = cfg.src.get("keys") if "src" in cfg else None
+    if keys_path:
+        wanted = load_lines(str(Path(keys_path).expanduser()))
+        if not wanted:
+            raise RuntimeError(f"key 清单是空的或不存在: {keys_path}")
+        items = [(k, s) for k, s in items if k in wanted]
+        absent = sorted(wanted - {k for k, _ in items})
+        print(f"[info] key 清单: {len(wanted)} 个,源端找到 {len(items)} 个 "
+              f"({keys_path})", flush=True)
+        if absent:
+            raise RuntimeError(
+                f"key 清单里有 {len(absent)} 个在源端列举结果里找不到"
+                f"(glob / tiles 没覆盖到,或源文件缺失),前 5 个: {absent[:5]}")
     return items
 
 
@@ -813,7 +884,7 @@ def delete_prefix(cfg: DictConfig, prefix: str) -> int:
 
 
 __all__ = [
-    "NONRETRYABLE", "CountingStream", "CredInfo", "StateWriter", "build_cfg",
+    "NONRETRYABLE", "CountingStream", "CredInfo", "StateWriter", "TsvState", "build_cfg",
     "build_dst", "build_src", "boto_config", "delete_prefix", "drain",
     "norm_patterns", "list_local", "list_source", "list_source_items", "list_stac", "load_lines",
     "load_tile_filter",

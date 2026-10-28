@@ -51,3 +51,19 @@ bash scripts/hendrix/download_tile_rclone.sh download_manifest 2020 32UPG 32UPF 
 
 落到 `<DEST_ROOT>/<year>/released_v0/<TILE>/`（一个 tile 一层），manifest 也拷一份到
 `<DEST_ROOT>/<year>/released_v0.tsv`，作为本地文件来源的索引。
+
+## 核对 Source Coop
+
+```bash
+sbatch --job-name=sc_audit scripts/hendrix/run_cpu.sh sc_audit 2020      # 匿名列举,不用 login,~5 分钟
+sbatch --job-name=sc_fill_q1 scripts/hendrix/run_cpu.sh sc_fill_q1 2020  # 先 source-coop login --duration 12h
+```
+
+`sc_audit` 按 manifest 的 tile 逐个列 `gvsm/<year>/<TILE>/`，写到 `<year>/source_coop_state/`：
+`audit.tsv`（一个 tile 一行：`q0 q1 q2` 各有几个 RH，齐全是 101；`zero_size`、`extra`）和
+`audit_missing.txt`（只缺一部分 RH 的 tile × Q 的缺失 key）。`sc_fill_q1` 只补传其中的 Q1 key
+（来源是 STAC `vsm_local_masked`，进度在 `q1_fill.tsv`），补完再跑一次 `sc_audit` 确认。
+校准后的 Q0/Q2 走 `scripts/hendrix/cp_points.sh upload`。
+
+2026-10-28 核对 2020：18109 个 tile 都在，Q0/Q2 全部还没上传；Q1 有 4211 个 tile 缺 1-3 个 RH，
+共 6331 个文件 / 441 GB（主要是 RH78 4109 个、RH88 2109 个），本地源文件都在。

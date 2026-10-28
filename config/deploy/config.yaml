@@ -57,6 +57,9 @@ deploy:
       # 必须用它:没转的 tile 其 href 还指向 geotiff,不过滤就会把转换前的
       # 原件也发出去,而且全程不报错。
       tiles: null
+      # key 清单文件(每行一个源端 key,如 32UNG/RH78_Q1.tif),null = 不过滤。
+      # 补传 sc_audit 查出的零散缺失文件用;清单里有源端找不到的 key 直接报错。
+      keys: null
       # 上传顺序。tile = 逐个 tile 展开它的全部 asset(默认);
       # asset = 按 glob 列表的顺序,一个模式扫完所有 tile 再下一个 ——
       # 配 ${priority_rh_stac} 就是"先发 RH0 的所有 tile,再发 RH10 的",
@@ -72,6 +75,9 @@ deploy:
       profile: source-coop     # ~/.aws/config 里配 credential_process
       region: us-east-1
     state_prefix: null         # 断点续传状态,例: $PWD/state/32MNC
+    # files: <prefix>.done + <prefix>.failed;tsv: 只写一个 <prefix>.tsv
+    # (key / status / 时间 / 字节数或原因,同一 key 以最后一行为准)
+    state_format: files
     mode: run                  # run | dry | selftest
     workers: 32
     submit_chunk: 2000         # 分批提交,避免一次建几百万个 future
@@ -145,6 +151,26 @@ deploy:
     multipart_threshold_mb: 32
     multipart_chunk_mb: 32
     check_source_roots: true   # 见 sc_upload;基准里嫌慢可以关
+
+  # =========================================================================
+  # deploy/source_coop/audit.py
+  # =========================================================================
+  # 核对 Source Coop 上每个 tile 的 RH{0..100}_Q{0,1,2}.tif 是否齐全(匿名只读,
+  # 不用 login)。tile 清单取自 release manifest。
+  #   python -m deploy.run run=sc_audit run.year=2020
+  sc_audit:
+    _target_: deploy.source_coop.audit.audit_source_coop
+    target_type: function
+    year: null
+    manifest: ${root_data_dir}/products/vsm/{year}/released_v0.tsv
+    out_file: ${root_data_dir}/products/vsm/{year}/source_coop_state/audit.tsv
+    bucket: geoai-ucph
+    prefix: gvsm/{year}/
+    endpoint: https://data.source.coop
+    quantiles: [0, 1, 2]
+    n_rh: 101
+    tiles: null              # 只查这些 tile(调试用)
+    workers: 32
 
   # =========================================================================
   # deploy/source_coop/move.py

@@ -45,9 +45,13 @@
 #       that shell-out FAILS. xdg-open exists on the cluster and exits 0 without
 #       doing anything, so plain `login` just hangs with no link. `-v` prints the
 #       authorization URL unconditionally, before the browser attempt:
-#           ssh -L 8765:127.0.0.1:8765 hendrix2      # NOT the round-robin alias
-#           source-coop login -v --port 8765 --duration 12h
-#       then open the printed URL in the local browser. The tunnel must reach the
+#           ssh -L 8799:127.0.0.1:8799 hendrix2      # NOT the round-robin alias
+#           source-coop login -v --port 8799 --duration 12h
+#       The local port must be free: if a local app already listens on it,
+#       ssh only warns "bind: Address already in use" and the callback lands in
+#       that app (8765 is taken by the Claude Science app). Check with
+#       `lsof -nP -iTCP:<port> -sTCP:LISTEN`.
+#       Then open the printed URL in the local browser. The tunnel must reach the
 #       SAME node the login runs on — a second ssh through a round-robin gate
 #       alias can land elsewhere and the callback is delivered to the wrong host.
 #    2. ~/.aws/config profile (once):

@@ -78,6 +78,37 @@ vsm_snapshot() {
     python -m tools.run run=vsm_snapshot run.year=$year
 }
 
+# Which RH*_Q{0,1,2}.tif of each release tile are on Source Coop gvsm/<year>/
+# -> <year>/source_coop_state/audit.tsv (+ audit_missing.txt: keys of partly
+# present tile x Q). Anonymous listing, no login needed; ~5 min for 18k tiles.
+#   sbatch --job-name=sc_audit scripts/hendrix/run_cpu.sh sc_audit 2020
+sc_audit() {
+    local year=${1:?usage: run_cpu.sh sc_audit <year>}
+    python -m deploy.run run=sc_audit run.year=$year
+}
+
+# Upload the Q1 files sc_audit found missing (exact key list, nothing else)
+# from the STAC collection the Q1 release came from. Needs
+# `source-coop login --duration 12h` first; resubmit continues from
+# source_coop_state/q1_fill.tsv. Rerun sc_audit afterwards to confirm.
+#   sbatch --job-name=sc_fill_q1 scripts/hendrix/run_cpu.sh sc_fill_q1 2020
+sc_fill_q1() {
+    local year=${1:?usage: run_cpu.sh sc_fill_q1 <year> [workers]}
+    local state=$HOME/data/gvs/products/vsm/$year/source_coop_state
+    grep '_Q1\.tif$' $state/audit_missing.txt | sed "s#^gvsm/$year/##" > $state/q1_missing_keys.txt
+    [ -s $state/q1_missing_keys.txt ] || { echo "no missing Q1 in $state/audit_missing.txt"; return 0; }
+    cut -d/ -f1 $state/q1_missing_keys.txt | sort -u > $state/q1_missing_tiles.txt
+    local glob
+    glob=$(cut -d/ -f2 $state/q1_missing_keys.txt | sort -u | paste -sd, -)
+    echo "$(wc -l < $state/q1_missing_keys.txt) keys in $(wc -l < $state/q1_missing_tiles.txt) tiles"
+    python -m deploy.run run=sc_upload \
+        run.src.kind=stac run.src.catalog=$HOME/data/gvs/products/gvsm_stac_catalog/vsm_local_masked \
+        run.src.tiles=$state/q1_missing_tiles.txt run.src.keys=$state/q1_missing_keys.txt \
+        "run.src.glob=[$glob]" \
+        run.dst.prefix=gvsm/$year/ run.state_prefix=$state/q1_fill run.state_format=tsv \
+        run.workers=${2:-64}
+}
+
 # <TILE>_cog/RH*_Q*.cog.tif -> <TILE>/RH*_Q*.tif in one tiles dir (default
 # 2024/masked/tiles/cog; tools/rename_tile_dirs.py). Dry run unless "false".
 #   sbatch --job-name=rename_tile_dirs scripts/hendrix/run_cpu.sh rename_tile_dirs false
@@ -174,7 +205,7 @@ srun --ntasks=${SLURM_NTASKS:-1} --cpus-per-task=${SLURM_CPUS_PER_TASK:-1} \
         run.src_root=${base}/geotiff run.dst_root=${base}/cog \
         run.pattern="$pattern" || exit $?
 ;;
-translate_worklist|release_manifest|vsm_snapshot|rename_tile_dirs)
+translate_worklist|release_manifest|vsm_snapshot|rename_tile_dirs|sc_audit|sc_fill_q1)
 "$@"
 ;;
 *)
