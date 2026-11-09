@@ -679,7 +679,7 @@ EOF_README
 
 # Default worklist for a year, if the caller did not name one.
 _bulk_worklist() {
-    echo "${ROOT_DATA_DIR}/assets/worklists/total_tiles_${1}.txt"
+    echo "${ROOT_DATA_DIR}/01_derived_ancillary/total_tiles_${1}.txt"
 }
 
 # Write this task's slice of the worklist to a file and echo its path. Same

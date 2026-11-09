@@ -28,7 +28,7 @@ diversity)
 # ---------------------------------------
 # Args: tile_list (default: dk.txt; .csv with "Tile name" column or .txt one per line)
 #       year      (default: 2020)
-tile_list=${HOME}/data/gvs/assets/worklists/dk.txt
+tile_list=${HOME}/data/gvs/01_derived_ancillary/dk.txt
 year=2020
 product_version=original
 product_format=geotiff

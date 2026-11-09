@@ -214,7 +214,7 @@ repredict_tiles=${4:-True}
 save_dir=${root_data_dir}/products/vsm/${year}/original/tiles/geotiff
 mkdir -p $save_dir
 
-tile_id_file=${3:-${root_data_dir}/assets/worklists/tiles_duplicated.txt}
+tile_id_file=${3:-${root_data_dir}/01_derived_ancillary/tiles_duplicated.txt}
 tile_id_name=$(read_line_from_txt $tile_id_file $line_num)
 meta_file=none
 echo "Processing tile ID: $tile_id, line $line_num from $tile_id_file"

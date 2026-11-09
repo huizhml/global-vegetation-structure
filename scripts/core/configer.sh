@@ -1,7 +1,7 @@
 # ================================================================
 #    Functions to split tiles for further slurm job configuration
 # ================================================================
-CONFIG_DIR=${HOME}/data/gvs/assets/worklists
+CONFIG_DIR=${HOME}/data/gvs/01_derived_ancillary
 
 split_tiles_by_zone() {
     # Split tiles by zone (first 3 letters).

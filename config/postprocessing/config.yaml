@@ -119,18 +119,18 @@ postprocessing:
     target_type: function
     s2_grid_file: ~/data/gvs/state/deploy_status.fgb
     cog_dir: ~/data/gvs/products/vsm/2020/blended/tiles/cog
-    save_dir: ~/data/gvs/assets/worklists/
+    save_dir: ~/data/gvs/01_derived_ancillary/
 
   get_tiles_reblend:
     _target_: postprocessing.core.s2_tiling.get_tiles_reblend
     target_type: function
-    tiles_list_file: ~/data/gvs/assets/worklists/tiles_reblend_2020.txt
+    tiles_list_file: ~/data/gvs/01_derived_ancillary/tiles_reblend_2020.txt
     s2_grid_file: ~/data/gvs/01_derived_ancillary/growing_months/s2_tiles_with_growing_months.parquet
 
   get_tiles_wo_enough_gedi_gt:
     _target_: postprocessing.core.s2_tiling.get_tiles_wo_enough_gedi_gt
     target_type: function
-    tiles_list_file: ~/data/gvs/assets/worklists/total_tiles_2020.txt
+    tiles_list_file: ~/data/gvs/01_derived_ancillary/total_tiles_2020.txt
     bias_stats_dir: ~/data/gvs/postprocess/bias_correction/per_tile_bias/slope_all_minpoints200/2020/stats_by_tile
     s2_grid_file: ~/data/gvs/01_derived_ancillary/growing_months/s2_tiles_with_growing_months.parquet
 
@@ -153,11 +153,11 @@ postprocessing:
   # a job takes N cpus and keeps N conversions in flight across tile
   # boundaries, instead of paying a python+GDAL start per tile.
   #   sbatch --array=1-10 --cpus-per-task=16 scripts/hendrix/run_cpu.sh 2 \
-  #       ~/data/gvs/assets/worklists/masked_2020_need_cog.txt 2020 masked 10
+  #       ~/data/gvs/01_derived_ancillary/masked_2020_need_cog.txt 2020 masked 10
   translate_tiles:
     _target_: postprocessing.core.translate.translate_tiles
     target_type: function
-    worklist: ~/data/gvs/assets/worklists/masked_2020_need_cog.txt
+    worklist: ~/data/gvs/01_derived_ancillary/masked_2020_need_cog.txt
     src_root: ~/data/gvs/products/vsm/2020/masked/tiles/geotiff
     dst_root: ~/data/gvs/products/vsm/2020/masked/tiles/cog
     profile: LERC_ZSTD
@@ -264,7 +264,7 @@ postprocessing:
     stac_collection_dir: ~/data/gvs/products/gvsm_stac_catalog/vsm_local
     distance_map_dir: ~/data/gvs/postprocess/blending/0_distance_maps
     s2_grid_file: ~/data/gvs/01_derived_ancillary/growing_months/s2_tiles_with_growing_months.parquet
-    costal_tiles_file: ~/data/gvs/assets/worklists/tiles_coastal_snow_regions.txt
+    costal_tiles_file: ~/data/gvs/01_derived_ancillary/tiles_coastal_snow_regions.txt
     chunksize: 1024
     use_flash: false
     rhs_idx: key_rhs
@@ -299,7 +299,7 @@ postprocessing:
   create_vrt:
     _target_: postprocessing.core.create_vrt.create_vrt
     target_type: function
-    tile_list_file: ~/data/gvs/assets/worklists/total_tiles_2020.txt
+    tile_list_file: ~/data/gvs/01_derived_ancillary/total_tiles_2020.txt
     year: 2020
     q_idx: '1'
     vrt_dir: ~/data/gvs/products/vsm/2020/original/vrt_q1

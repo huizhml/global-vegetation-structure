@@ -317,7 +317,7 @@ class AggGediToS2:
     stac_collection_dir: str = '~/data/gvs/products/gvsm_stac_catalog/vsm_local'
     distance_map_dir: str = '~/data/gvs/postprocess/blending/0_distance_maps'
     flag_dir: str = f'~/data/gvs/state/{year}/blended'
-    costal_tiles_file: str = '~/data/gvs/assets/worklists/tiles_coastal_regions.txt'
+    costal_tiles_file: str = '~/data/gvs/01_derived_ancillary/tiles_coastal_regions.txt'
     tile_id: str = '20MRS'
     n_parallel: int = 2
     chunksize: int = 2048

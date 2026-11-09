@@ -384,7 +384,7 @@ download:
     _target_: download.core.items_store.check_items_store
     target_type: function
     year: 2024
-    src: /projects/dereeco/data/gvs/assets/worklists/slurm_job_files_2024/*part*.parquet
+    src: /projects/dereeco/data/gvs/01_derived_ancillary/slurm_job_files_2024/*part*.parquet
     out_file: ~/data/gvs/deploy/_s2_meta/s2_meta_zone_grouped_{year}.parquet
     n_sample_tiles: 200
     seed: 0

@@ -76,7 +76,7 @@ python -m postprocessing.run run=create_distance_maps
 #   Split tiles by zone (first 3 letters)
 # ---------------------------------------
 echo "Splitting tiles by zone (first 3 letters)...";
-output_dir="${HOME}/data/gvs/assets/worklists/tiles_by_mgrs_zone"
+output_dir="${HOME}/data/gvs/01_derived_ancillary/tiles_by_mgrs_zone"
 split_tiles_by_zone $output_dir
 
 ;;
@@ -127,7 +127,7 @@ year=${2:-2020}
 q_idx=${3:-1}
 translate=${4:-False}
 filename_pattern="*Q${q_idx}.tif"
-tile_id_file="${HOME}/data/gvs/assets/worklists/tiles_coastal_snow_regions.txt" 
+tile_id_file="${HOME}/data/gvs/01_derived_ancillary/tiles_coastal_snow_regions.txt" 
 n_per_task=$(get_n_tiles_per_task $tile_id_file $SLURM_ARRAY_TASK_COUNT)
 echo "Number of tiles per task: $n_per_task"
 run_mask_snow_water_array_task "$tile_id_file" "$n_per_task" "$filename_pattern" "$translate"
@@ -139,13 +139,13 @@ year=${2:-2020}
 q_idx=${3:-1}
 translate=${4:-False}
 filename_pattern="*Q${q_idx}.tif"
-tile_id_file="${HOME}/data/gvs/assets/worklists/tiles_coastal_snow_regions.txt"
+tile_id_file="${HOME}/data/gvs/01_derived_ancillary/tiles_coastal_snow_regions.txt"
 if [ "$translate" == "True" ]; then
     save_dir="${HOME}/data/gvs/predictions/${year}/masked/tiles/cog/"
 else
     save_dir="${HOME}/data/gvs/predictions/${year}/masked/tiles/geotiff/"
 fi
-tmp_file="${HOME}/data/gvs/assets/worklists/tiles_coastal_snow_regions_unfinished_${q_idx}.txt"
+tmp_file="${HOME}/data/gvs/01_derived_ancillary/tiles_coastal_snow_regions_unfinished_${q_idx}.txt"
 array_task_id="${SLURM_ARRAY_TASK_ID:-0}"
 # First task generates the file
 if [ "$array_task_id" -eq 0 ]; then
@@ -191,8 +191,8 @@ python -m postprocessing.run run=evaluate_bias_correction \
 year=2020
 tiles_per_task=1547
 offset=${SLURM_ARRAY_TASK_ID}
-# tile_ids=($(grep '^43S' ${HOME}/data/gvs/assets/worklists/tiles_2020.txt))
-all_tiles=($(cat ${HOME}/data/gvs/assets/worklists/tiles_valid_for_bc_2020.txt))
+# tile_ids=($(grep '^43S' ${HOME}/data/gvs/01_derived_ancillary/tiles_2020.txt))
+all_tiles=($(cat ${HOME}/data/gvs/01_derived_ancillary/tiles_valid_for_bc_2020.txt))
 start_idx=$((offset * tiles_per_task))
 tile_ids=(${all_tiles[@]:start_idx:tiles_per_task})
 for tile_id in ${tile_ids[@]}; do

@@ -122,7 +122,7 @@ case $1 in
 # **************************************************************
 #              Translate one tile in one job
 # **************************************************************
-tile_id_file=${2:-${HOME}/data/gvs/assets/worklists/tiles_duplicated.txt}
+tile_id_file=${2:-${HOME}/data/gvs/01_derived_ancillary/tiles_duplicated.txt}
 line_num=${SLURM_ARRAY_TASK_ID:-2}
 tile_id=$(sed -n "${line_num}p" $tile_id_file)
 echo "Processing tile ID: $tile_id, line $SLURM_ARRAY_TASK_ID from $tile_id_file"
@@ -140,7 +140,7 @@ run_translate $tile_id $year $variant || exit $?
 # tiles fit in 10 concurrent tasks instead of 5674 one-tile tasks. Also dodges
 # MaxArraySize=4001.
 #   sbatch --array=1-10 --cpus-per-task=16 scripts/hendrix/run_cpu.sh 2 \
-#       ~/data/gvs/assets/worklists/masked_2020_need_cog.txt 2020 masked 10
+#       ~/data/gvs/01_derived_ancillary/masked_2020_need_cog.txt 2020 masked 10
 tile_id_file=${2:?usage: run_cpu.sh 2 <worklist> [year] [variant] [n_chunks]}
 year=${3:-2020}
 variant=${4:-masked}
@@ -174,7 +174,7 @@ python -m postprocessing.run run=translate_tiles \
 #
 #   sbatch --ntasks=8 --cpus-per-task=4 --mem-per-cpu=2G \
 #       scripts/hendrix/run_cpu.sh 3 \
-#       ~/data/gvs/assets/worklists/masked_2020_need_cog.txt 2020 masked
+#       ~/data/gvs/01_derived_ancillary/masked_2020_need_cog.txt 2020 masked
 #
 # ml4good has 416 cpus total, so ntasks x cpus-per-task x (array size) is what
 # decides how much of the partition this takes.

@@ -56,7 +56,7 @@ STATE_DIR=${SC_STATE_DIR:-${HOME}/data/gvs/state/source_coop}
 # Written by `python -m tools.run run=stac_cog_audit`. Only tiles whose COGs are
 # complete may be published: an unconverted tile still has its item href on
 # geotiff/, and uploading that ships the uncompressed original without erroring.
-TILES=${SC_TILES:-${HOME}/data/gvs/assets/worklists/masked_2020_key_rhs_q1_have_cog.txt}
+TILES=${SC_TILES:-${HOME}/data/gvs/01_derived_ancillary/masked_2020_key_rhs_q1_have_cog.txt}
 # Stop starting new RHs when the token has less than this left (minutes). One RH
 # is ~35 min at 128 workers, so starting one with less than an hour left just
 # means it gets interrupted partway.

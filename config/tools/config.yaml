@@ -588,7 +588,7 @@ tools:
     target_type: function
     catalog: ~/data/gvs/products/gvsm_stac_catalog/vsm_local_masked
     product_root: ~/data/gvs/products/vsm/2020
-    out_dir: ~/data/gvs/assets/worklists
+    out_dir: ~/data/gvs/01_derived_ancillary
     # 按 asset 判定,两个产品分支(original/ 和 masked/)一起处理 —— href 指向
     # 哪个分支就从哪个分支发。部分 retarget 之后一个 item 会横跨两个 root,按
     # item 归类会把这些全判成"不匹配",worklist 直接变空。

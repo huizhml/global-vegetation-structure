@@ -134,7 +134,7 @@ echo "Total size of EU tiles: $(echo "scale=2; $total_size / 1024^3" | bc) GB"
 echo "Calculating VSM size for the whole globe (2024) - data on LUMI-O..."
 module load rclone
 year=2024
-tiles=($(cat /projects/dereeco/data/gvs/assets/worklists/total_tiles_2024.txt))
+tiles=($(cat /projects/dereeco/data/gvs/01_derived_ancillary/total_tiles_2024.txt))
 total_size=0
 for tile in ${tiles[@]}; do
     zone=$(echo ${tile:0:3} | tr '[:upper:]' '[:lower:]')

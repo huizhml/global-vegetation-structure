@@ -30,7 +30,7 @@ use_flash=${3:-False}
 meta_file=${5:-null}
 
 data_root_dir=$(get_data_root_dir $use_flash)
-tile_list_file=${data_root_dir}/assets/worklists/tiles_repredict_${year}.txt
+tile_list_file=${data_root_dir}/01_derived_ancillary/tiles_repredict_${year}.txt
 tile_id=$(get_tile_id_from_txt_file $line_num $tile_list_file)
 save_dir=${data_root_dir}/predictions/${year}/original/tiles/
 mkdir -p $save_dir

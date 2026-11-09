@@ -11,7 +11,7 @@
 #
 # Submit (single command — sbatchs itself with the right --array range):
 #     bash scripts/hendrix/tiles/compute_diversity.sh \
-#         ~/data/gvs/assets/worklists/dk.txt 2020 masked
+#         ~/data/gvs/01_derived_ancillary/dk.txt 2020 masked
 #
 # Args:
 #     $1  worklist          one tile_id per line
