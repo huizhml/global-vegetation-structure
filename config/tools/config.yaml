@@ -1310,7 +1310,6 @@ tools:
     values_dir: ${.root}/vsm_stability/2017_2026
     screen_file: ${.root}/vsm_stability_state/2024_anomaly/tile_ndvi_anomaly.tsv
     disturbance_dir: ${.root}/vsm_stability/2017_2026/disturbance_values
-    images_file: ${.root}/vsm_stability_state/2017_2026/stability_images.tsv
     out_file: ${.root}/vsm_stability_state/2017_2026/year_to_year_change_tiles.tsv
     years: [2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025]
     forest_tree_share: 0.4

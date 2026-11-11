@@ -110,8 +110,8 @@ We read the 12 bands of every selected image at the sample pixels (80 m COG over
 
 | Biomes 1–7, 9 (median over tiles) | 2017–2021 | 2022–2023 | 2024 | 2025 |
 |---|---|---|---|---|
-| Red (B04) | +1 to +9 | 0 to +1 | −12 | −13 |
-| SWIR2 (B12) | 0 to +4 | +1 to +3 | −12 | −21 |
+| Red (B04) | 0 to +9 | 0 to +1 | −12 | −13 |
+| SWIR2 (B12) | 0 to +4 | +1 to +5 | −12 | −21 |
 | NDVI | −0.004 to +0.000 | −0.001 to 0.000 | +0.006 | +0.007 |
 | RH98 offset (m) | −0.3 to +0.1 | −0.1 to 0.0 | +0.4 | +0.1 |
 
@@ -121,7 +121,7 @@ We read the 12 bands of every selected image at the sample pixels (80 m COG over
 
 - **Height offsets follow greenness, in every year.** Across tile-years, darker visible and SWIR bands and higher NDVI go with a higher RH98 (Spearman −0.4 to −0.55 for B02–B05, B11 and B12; +0.45 for NDVI; NIR ≈ 0). A regression fitted on the other years predicts the tile offsets of a left-out year with r = 0.4–0.66 (2024: 0.63).
 - **2024 is greener in the forest and savanna biomes.** The strongest tile, 49UFS (Boreal, +2.7 m), has NDVI +0.18 and red −0.014.
-- **Greenness explains only about a third of 2024.** Fitted on the other years, the regression predicts +0.09 m for 2024 against +0.25 m observed. The residual of +0.16 to +0.27 m (depending on bands and mask) is the largest of all years. 2025 is as green as 2024 but its offset is only +0.1 m.
+- **Greenness explains only about a third of 2024.** Fitted on the other years, the regression predicts +0.10 m for 2024 against +0.25 m observed. The residual of +0.15 to +0.27 m (depending on bands and mask) is the largest of all years. 2025 is as green as 2024 but its offset is only +0.1 m.
 - **No sign of a sensor effect.** The S2A − S2B difference in 2024 is within the range of the other years, and the sun zenith angle hardly relates to the offset (Spearman 0.11).
 - **Limits of this check:** these are yearly medians of 80 m reflectance, while the prediction is the median of per-image predictions at 10 m. Differences between single images, or in fine spatial texture, are not captured.
 
@@ -164,7 +164,7 @@ We checked whether the 2024 images of the strong tiles carry a radiometric shift
 
 *Figure 8. Top: S2 same-season offsets against MODIS Terra (MOD13Q1, 250 m, 16-day) anomalies per tile-year, and the RH98 year offset against the MODIS NDVI anomaly (2024 in orange). Bottom: MODIS NDVI and ERA5-Land growing-season 2 m temperature and 0–7 cm soil moisture for the strong tiles. MODIS: median over up to 300 vegetated sample pixels, minus the same composite in 2018–2025, median over the growing months. 58 tiles; 11 tiles have fewer than 20 vegetated pixels.*
 
-- **MODIS confirms the anomaly.** 2024 is the greenest year of 2018–2025 in MODIS NDVI on 49UFS (+0.033), 49UDT (+0.034) and 33PZL (+0.017); 19TFN is not (rank 4 of 8). S2 and MODIS agree per tile-year in SWIR2 (Spearman 0.51) and less in NIR (0.26).
+- **MODIS confirms the anomaly.** 2024 is the greenest year of 2018–2025 in MODIS NDVI on 49UFS (+0.033), 49UDT (+0.034) and 33PZL (+0.017); 19TFN is not (rank 4 of 8). S2 and MODIS agree per tile-year in SWIR2 (Spearman 0.50) and less in NIR (0.26).
 - **Greener tile-years are higher.** Across all tile-years the RH98 offset rises with the MODIS NDVI anomaly (Spearman 0.28). In 2024 the 20 tiles above +0.5 m have MODIS NDVI +0.005 and S2 NDVI +0.017; the 21 tiles within ±0.2 m have +0.001 and −0.001.
 - **2024 was warm, not wet.** The growing season of the Boreal tiles was the warmest of 2018–2025 (+0.9 to +1.1 K; median over all tiles +0.6 K). 49UFS had 26 % less precipitation and the lowest soil moisture. The darker SWIR2 therefore points to more green leaf cover rather than wetter ground.
 
@@ -214,7 +214,7 @@ The 13 tiles of the single-image and input checks were partly chosen for their l
 - **19TFN 2025 in the main run is wrong.** The re-run with the same 20 images gives a median RH98 of 14.8 m instead of 10.6 m (2023–2024: 16 m), so its offset of −3.65 m (Figure 3) is an artefact of that run; the cause is unknown, as its log was not kept. The other tile-years of the main run were not re-run.
 - **The single-image and spectral checks rest on 13 tiles**, 5 of them chosen for the largest 2024 offsets. The [wider test on 60 tiles](#wider-test-on-60-tiles) covers only yearly predictions of 2023–2025, without single images or reflectance, so the cause of its general rise is not known.
 - **MODIS Terra drifts in 2024–2025:** its NIR and SWIR2 fall over all tiles (2025: −0.008, −0.009). The strong-tile anomalies of 2024 are larger, and NDVI is less affected, but MODIS NIR/SWIR2 values of 2024–2025 should be read with care. ERA5-Land is a ~9 km mean over the sample area.
-- **Harmonization missed reprocessed pre-2022 products.** `harmonize_to_old` (Planetary Computer example) subtracted the 1000 offset by acquisition date only. 33 selected images of 2019 (March) and 2021 (mostly December) are reprocessed products with baseline 04.00/05.00 and kept the offset, i.e. reflectance 0.1 too high; 2020 and 2022 onwards are not affected. Fixed on 2026-11-09 (decided per product by baseline or processing time); the 2019 and 2021 runs here used the old rule.
+- **Harmonization missed reprocessed pre-2022 products.** `harmonize_to_old` (Planetary Computer example) subtracted the 1000 offset by acquisition date only. 33 selected images of 2019 (March) and 2021 (mostly December) are reprocessed products with baseline 04.00/05.00 and kept the offset, i.e. reflectance 0.1 too high; 2020 and 2022 onwards are not affected. Fixed on 2026-11-09 (decided per product by baseline or processing time). The 24 affected tile-years (2019: 6, 2021: 18) were re-predicted and their reflectance re-read with the fix on 2026-11-11; all numbers and figures here use the fixed values. The fix changed the tile-year median RH98 by at most 0.4 m and the biome year offsets by at most 0.1 m.
 - Year offsets cannot separate real change (growth, disturbance) from input-driven shifts. The median over pixels limits the effect of local disturbance but not of biome-wide trends.
 
 ## Reproduction

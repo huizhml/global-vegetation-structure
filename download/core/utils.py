@@ -749,6 +749,18 @@ def has_boa_offset(data) -> np.ndarray:
     return by_date
 
 
+def item_has_boa_offset(item) -> bool:
+    """has_boa_offset for one pystac Item (same rule and order): its 's2:processing_baseline',
+    else the processing time at the end of its id, else its acquisition date."""
+    pb = pd.to_numeric(item.properties.get('s2:processing_baseline'), errors='coerce')
+    if np.isfinite(pb):
+        return bool(pb >= BOA_OFFSET_BASELINE)
+    proc = item.id.split('_')[-1][:8]
+    if proc.isdigit() and len(proc) == 8:
+        return proc >= BOA_OFFSET_PROCESSED_FROM
+    return item.id.split('_')[2][:8] >= BOA_OFFSET_ACQUIRED_FROM.strftime('%Y%m%d')
+
+
 def harmonize_to_old(data):
     """
     Harmonize Sentinel-2 L2A data with BOA_ADD_OFFSET (processing baseline >= 04.00) to the old scale:

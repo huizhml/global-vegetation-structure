@@ -1145,33 +1145,22 @@ def summarize_neighbour_change(pixels_dir: str, values_dir: str, screen_file: st
     print(f'-> {out_file}')
 
 
-def _harmonize_affected(images_file) -> set:
-    """(tile, year) whose selected images include reprocessed pre-2022 products (baseline >= 04.00),
-    i.e. inputs hit by the old harmonize_to_old (stability_images.tsv of count_stability_images)."""
-    if images_file is None:
-        return set()
-    im = pd.read_csv(Path(images_file).expanduser(), sep='\t', dtype={'baselines': str})
-    im = im[(im.year < 2022) & im.baselines.fillna('').str.contains(r'0[45]\.')]
-    return set(zip(im.tile, im.year))
-
-
 def summarize_year_to_year_change(pixels_dir: str, values_dir: str, screen_file: str, out_file: str,
-                                  disturbance_dir: str = None, images_file: str = None, years=range(2017, 2026),
+                                  disturbance_dir: str = None, years=range(2017, 2026),
                                   vegetated_rh98: float = 5., min_pixels: int = 100, forest_tree_share: float = 0.4,
                                   exclude_tile_years=(), **kwargs):
     """Year-to-year change of the yearly RH98 Q1 at fixed pixels: per tile and year t, median over
     vegetated (median over all years >= vegetated_rh98), undisturbed pixels of (t - (t-1)), whatever
     their WWF biome (the tile's majority biome is only a label).
     Is 2023 -> 2024 larger than the other one-year changes? Forest = WorldCover tree share of the
-    tile >= forest_tree_share (screen_ndvi_anomaly_tiles). `affected` marks changes that involve a
-    tile-year hit by the old harmonize rule (images_file); `release` those that involve 2020 (taken
-    from the released product, not from the current code). exclude_tile_years ('<tile>_<year>')
+    tile >= forest_tree_share (screen_ndvi_anomaly_tiles). `release` marks changes that involve 2020
+    (taken from the released product, not from the current code). exclude_tile_years ('<tile>_<year>')
     drops the changes into and out of that tile-year.
       <out_file> (tsv): tile, year (end of the change), biome, tree_share, forest, n_pixels, change,
-                        affected, release"""
+                        release"""
     vd = Path(values_dir).expanduser()
     scr = pd.read_csv(Path(screen_file).expanduser(), sep='\t').set_index('tile')
-    bad, skip, years = _harmonize_affected(images_file), set(exclude_tile_years), list(years)
+    skip, years = set(exclude_tile_years), list(years)
     rows = []
     for f in sorted((vd / 'pixel_values' / str(years[-1])).glob('*.parquet')):
         tile = f.stem
@@ -1195,13 +1184,12 @@ def summarize_year_to_year_change(pixels_dir: str, values_dir: str, screen_file:
                 continue
             rows.append(dict(tile=tile, year=y1, biome=biome, tree_share=ts, forest=bool(ts >= forest_tree_share),
                              n_pixels=int(veg.sum()), change=float(np.median(q[i, veg] - q[i - 1, veg])),
-                             affected=(tile, y0) in bad or (tile, y1) in bad, release=2020 in (y0, y1)))
+                             release=2020 in (y0, y1)))
     out = pd.DataFrame(rows)
     out_file = Path(out_file).expanduser()
     out_file.parent.mkdir(parents=True, exist_ok=True)
     out.to_csv(out_file, sep='\t', index=False)
-    for name, d in (('forest tiles', out[out.forest]), ('forest tiles, not harmonize-affected', out[out.forest & ~out.affected]),
-                    ('all tiles', out)):
+    for name, d in (('forest tiles', out[out.forest]), ('all tiles', out)):
         g = d.groupby('year').change
         print(f'{name} (change from the year before; 2020 = released product):')
         print(pd.DataFrame(dict(median=g.median(), q25=g.quantile(.25), q75=g.quantile(.75),
@@ -1439,7 +1427,8 @@ def _read_overview(href, res, tries=4):
 def _reflectance_tile_year(tile, year, ids, pts, out_file, res=80):
     """Reflectance of the selected images at the points, read from the COG overviews at `res` m
     (bands without such an overview at their native resolution). Harmonized as in the deploy
-    (acquisitions from 2022-01-25: clip at 1000, minus 1000)."""
+    (products with BOA_ADD_OFFSET, see item_has_boa_offset: clip at 1000, minus 1000)."""
+    from download.core.utils import item_has_boa_offset
     import planetary_computer
     import pystac_client
     api = pystac_client.Client.open('https://planetarycomputer.microsoft.com/api/stac/v1',
@@ -1450,7 +1439,7 @@ def _reflectance_tile_year(tile, year, ids, pts, out_file, res=80):
         it = items.get(iid)
         if it is None:
             continue
-        new = iid.split('_')[2][:8] >= '20220125'
+        new = item_has_boa_offset(it)
         try:
             vals = {}
             for b in S2_BANDS:
