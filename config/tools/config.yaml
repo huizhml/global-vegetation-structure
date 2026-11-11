@@ -1134,6 +1134,244 @@ tools:
     cs_clear: 0.6
     vegetated_rh98: 5.0
 
+  # 每一景选中影像的 reflectance offset(植被像元、水体像元、暗像元 2% 分位),查 2024 有没有影像/tile 级的整体 shift
+  #   python -m tools.run run=summarize_stability_reflectance_per_image
+  summarize_stability_reflectance_per_image:
+    _target_: tools.vsm_stability.summarize_stability_reflectance_per_image
+    target_type: function
+    root: /scratch/project_465003168/hui/gvs
+    tiles_file: ${.root}/vsm_stability_state/tiles_2017_2026.tsv
+    values_dir: ${.root}/vsm_stability/2017_2026
+    scl_dir: ${.root}/vsm_stability/2017_2026/scl_values
+    cloudscore_dir: ${.root}/vsm_stability/2017_2026/cloudscore_values
+    reflectance_dir: ${.root}/vsm_stability/2017_2026/reflectance_values
+    report_dir: ${.root}/vsm_stability_state/2017_2026
+    pixels_dir: ${.root}/vsm_stability/2017_2026/sample_pixels
+    cs_clear: 0.6
+    vegetated_rh98: 5.0
+    water_scl: 6
+    n_workers: 8
+
+  # 独立数据对照 2024:MODIS MOD13Q1(NDVI/EVI/red/NIR/SWIR2,植被采样点中位数)和 ERA5-Land 月降水/气温/土壤湿度
+  #   python -m tools.run run=sample_stability_external
+  sample_stability_external:
+    _target_: tools.vsm_stability.sample_stability_external
+    target_type: function
+    root: /scratch/project_465003168/hui/gvs
+    tiles_file: ${.root}/vsm_stability_state/tiles_2017_2026.tsv
+    values_dir: ${.root}/vsm_stability/2017_2026
+    pixels_dir: ${.root}/vsm_stability/2017_2026/sample_pixels
+    out_dir: ${.root}/vsm_stability/2017_2026/external_values
+    key_file: keys/ee-default.json
+    start: '2018-01-01'
+    end: '2026-01-01'
+    n_points: 300
+    vegetated_rh98: 5.0
+    n_workers: 8
+
+  # 2024 变绿/变褐测试:全球每个 S2 tile 的 MODIS NDVI 距平(2024 减 2023/2025 同月均值,树木像元,生长季平均)
+  #   python -m tools.run run=screen_ndvi_anomaly_tiles
+  screen_ndvi_anomaly_tiles:
+    _target_: tools.vsm_stability.screen_ndvi_anomaly_tiles
+    target_type: function
+    root: /scratch/project_465003168/hui/gvs
+    grid_file: ${.root}/01_derived_ancillary/growing_months/s2_tiles_with_growing_months.parquet
+    out_file: ${.root}/vsm_stability_state/2024_anomaly/tile_ndvi_anomaly.tsv
+    key_file: keys/ee-default.json
+    year: 2024
+    ref_years: [2023, 2025]
+    scale: 1000
+    batch: 300
+    n_workers: 6
+
+  # 按距平选 tile:变绿 / 变褐 / 接近 0 各 per_group 个,biome 轮流抽
+  #   python -m tools.run run=select_anomaly_tiles
+  select_anomaly_tiles:
+    _target_: tools.vsm_stability.select_anomaly_tiles
+    target_type: function
+    root: /scratch/project_465003168/hui/gvs
+    screen_file: ${.root}/vsm_stability_state/2024_anomaly/tile_ndvi_anomaly.tsv
+    out_file: ${.root}/vsm_stability_state/tiles_2024_anomaly.tsv
+    exclude_file: ${.root}/vsm_stability_state/tiles_2017_2026.tsv
+    per_group: 20
+    min_tree_share: 0.4
+    min_months: 3
+    quantile: 0.1
+    seed: 42
+
+  # 新 tile 的固定采样像元(和 69 个 tile 放在同一个 sample_pixels 目录,已有的不动)
+  #   python -m tools.run run=make_stability_pixels_anomaly
+  make_stability_pixels_anomaly:
+    _target_: tools.vsm_stability.make_stability_pixels
+    target_type: function
+    root: /scratch/project_465003168/hui/gvs
+    tiles_file: ${.root}/vsm_stability_state/tiles_2024_anomaly.tsv
+    grid_file: ${.root}/01_derived_ancillary/growing_months/s2_tiles_with_growing_months.parquet
+    biome_file: ${.root}/01_derived_ancillary/wwf_ecoregions/wwf_terr_ecos.shp
+    out_dir: ${.root}/vsm_stability/2017_2026/sample_pixels
+    n_pixels: 20000
+    seed: 42
+
+  # worklist:新 tile x 2023-2025
+  #   python -m tools.run run=write_stability_worklist_anomaly
+  write_stability_worklist_anomaly:
+    _target_: tools.vsm_stability.write_stability_worklist
+    target_type: function
+    root: /scratch/project_465003168/hui/gvs
+    tiles_file: ${.root}/vsm_stability_state/tiles_2024_anomaly.tsv
+    years: [2023, 2024, 2025]
+    skip_years: []
+    out_file: ${.root}/vsm_stability_state/2024_anomaly/worklist.tsv
+
+  # RH98 的 2024 变化(2024 减 2023/2025 均值)对照 MODIS 距平,新 tile + 69 个 tile
+  #   python -m tools.run run=summarize_anomaly_test
+  summarize_anomaly_test:
+    _target_: tools.vsm_stability.summarize_anomaly_test
+    target_type: function
+    root: /scratch/project_465003168/hui/gvs
+    screen_file: ${.root}/vsm_stability_state/2024_anomaly/tile_ndvi_anomaly.tsv
+    anomaly_tiles_file: ${.root}/vsm_stability_state/tiles_2024_anomaly.tsv
+    pixels_dir: ${.root}/vsm_stability/2017_2026/sample_pixels
+    values_dirs: ['${..root}/vsm_stability/2017_2026', '${..root}/vsm_stability/2024_anomaly']
+    report_file: ${.root}/vsm_stability_state/2024_anomaly/anomaly_test_tiles.tsv
+    year: 2024
+    ref_years: [2023, 2025]
+    vegetated_rh98: 5.0
+
+  # 参照分布:69 个 tile 上每年 RH98 减前后两年均值(和 summarize_anomaly_test 的 2024 量相同)
+  #   python -m tools.run run=summarize_neighbour_change
+  summarize_neighbour_change:
+    _target_: tools.vsm_stability.summarize_neighbour_change
+    target_type: function
+    root: /scratch/project_465003168/hui/gvs
+    pixels_dir: ${.root}/vsm_stability/2017_2026/sample_pixels
+    values_dir: ${.root}/vsm_stability/2017_2026
+    screen_file: ${.root}/vsm_stability_state/2024_anomaly/tile_ndvi_anomaly.tsv
+    anomaly_report_file: ${.root}/vsm_stability_state/2024_anomaly/anomaly_test_tiles.tsv
+    out_file: ${.root}/vsm_stability_state/2024_anomaly/neighbour_change_tiles.tsv
+    years: [2018, 2019, 2020, 2021, 2022, 2023, 2024]
+    forest_tree_share: 0.4
+    exclude_tile_years: [19TFN_2024]   # 19TFN 2025 of the main run is an artefact (see report Limitations)
+
+  # 每个样本点的 disturbance:Hansen loss 2001-2025(+30 m 缓冲)和 gain、MCD64A1 过火月数 2016-2025、
+  # JRC TMF 退化/毁林(热带湿润林);129 个 tile(69 + 60)
+  #   python -m tools.run run=sample_stability_disturbance
+  sample_stability_disturbance:
+    _target_: tools.vsm_stability.sample_stability_disturbance
+    target_type: function
+    root: /scratch/project_465003168/hui/gvs
+    pixels_dir: ${.root}/vsm_stability/2017_2026/sample_pixels
+    out_dir: ${.root}/vsm_stability/2017_2026/disturbance_values
+    key_file: keys/ee-default.json
+    burn_start: 2016
+    burn_end: 2025
+    tmf_start: 2001
+    batch: 5000
+    n_workers: 8
+
+  # 同 summarize_anomaly_test / summarize_neighbour_change,只用没有 disturbance 的像元
+  #   python -m tools.run run=summarize_anomaly_test_undisturbed
+  #   python -m tools.run run=summarize_neighbour_change_undisturbed
+  summarize_anomaly_test_undisturbed:
+    _target_: tools.vsm_stability.summarize_anomaly_test
+    target_type: function
+    root: /scratch/project_465003168/hui/gvs
+    screen_file: ${.root}/vsm_stability_state/2024_anomaly/tile_ndvi_anomaly.tsv
+    anomaly_tiles_file: ${.root}/vsm_stability_state/tiles_2024_anomaly.tsv
+    pixels_dir: ${.root}/vsm_stability/2017_2026/sample_pixels
+    values_dirs: ['${..root}/vsm_stability/2017_2026', '${..root}/vsm_stability/2024_anomaly']
+    disturbance_dir: ${.root}/vsm_stability/2017_2026/disturbance_values
+    report_file: ${.root}/vsm_stability_state/2024_anomaly/anomaly_test_tiles_undisturbed.tsv
+    year: 2024
+    ref_years: [2023, 2025]
+    vegetated_rh98: 5.0
+
+  summarize_neighbour_change_undisturbed:
+    _target_: tools.vsm_stability.summarize_neighbour_change
+    target_type: function
+    root: /scratch/project_465003168/hui/gvs
+    pixels_dir: ${.root}/vsm_stability/2017_2026/sample_pixels
+    values_dir: ${.root}/vsm_stability/2017_2026
+    screen_file: ${.root}/vsm_stability_state/2024_anomaly/tile_ndvi_anomaly.tsv
+    anomaly_report_file: ${.root}/vsm_stability_state/2024_anomaly/anomaly_test_tiles_undisturbed.tsv
+    disturbance_dir: ${.root}/vsm_stability/2017_2026/disturbance_values
+    out_file: ${.root}/vsm_stability_state/2024_anomaly/neighbour_change_tiles_undisturbed.tsv
+    years: [2018, 2019, 2020, 2021, 2022, 2023, 2024]
+    forest_tree_share: 0.4
+    exclude_tile_years: [19TFN_2024]
+
+  # 相邻年差值:69 个 tile 的稳定植被像元,每年 RH98 减前一年(2023->2024 是否超出往年)
+  #   python -m tools.run run=summarize_year_to_year_change
+  summarize_year_to_year_change:
+    _target_: tools.vsm_stability.summarize_year_to_year_change
+    target_type: function
+    root: /scratch/project_465003168/hui/gvs
+    pixels_dir: ${.root}/vsm_stability/2017_2026/sample_pixels
+    values_dir: ${.root}/vsm_stability/2017_2026
+    screen_file: ${.root}/vsm_stability_state/2024_anomaly/tile_ndvi_anomaly.tsv
+    disturbance_dir: ${.root}/vsm_stability/2017_2026/disturbance_values
+    images_file: ${.root}/vsm_stability_state/2017_2026/stability_images.tsv
+    out_file: ${.root}/vsm_stability_state/2017_2026/year_to_year_change_tiles.tsv
+    years: [2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025]
+    forest_tree_share: 0.4
+    exclude_tile_years: [19TFN_2025]   # 19TFN 2025 of the main run is an artefact (see report Limitations)
+
+  # 选景 bootstrap:逐景预测的 13 个 tile,20 景有放回重抽,看相邻年差值随选景的变化
+  #   python -m tools.run run=summarize_image_bootstrap
+  summarize_image_bootstrap:
+    _target_: tools.vsm_stability.summarize_image_bootstrap
+    target_type: function
+    root: /scratch/project_465003168/hui/gvs
+    tiles_file: ${.root}/vsm_stability_state/tiles_2017_2026.tsv
+    values_dir: ${.root}/vsm_stability/2017_2026
+    per_image_dir: ${.root}/vsm_stability/2017_2026_per_image
+    pixels_dir: ${.root}/vsm_stability/2017_2026/sample_pixels
+    disturbance_dir: ${.root}/vsm_stability/2017_2026/disturbance_values
+    out_file: ${.root}/vsm_stability_state/2017_2026/image_bootstrap_change.tsv
+    var: RH98_Q1
+    n_boot: 500
+
+  # 各测试方法的示意图(合成数据,不读任何结果),m01-m10,用于 Trilium 的 VSM annual stability 演示稿
+  #   python -m tools.run run=plot_stability_methods
+  plot_stability_methods:
+    _target_: tools.vsm_stability_plots.plot_stability_methods
+    target_type: function
+    out_dir: docs/reports/figures/vsm_stability_2017_2026/methods
+    seed: 0
+
+  # 一个 tile 的 2 万个采样点,以及统计用到哪些(同 biome -> 植被 -> 无扰动),各 tile 中位数
+  #   python -m tools.run run=plot_stability_sample_points
+  plot_stability_sample_points:
+    _target_: tools.vsm_stability_plots.plot_stability_sample_points
+    target_type: function
+    root: /scratch/project_465003168/hui/gvs
+    tile: 49UFS
+    tiles_file: ${.root}/vsm_stability_state/tiles_2017_2026.tsv
+    pixels_dir: ${.root}/vsm_stability/2017_2026/sample_pixels
+    values_dir: ${.root}/vsm_stability/2017_2026
+    disturbance_dir: ${.root}/vsm_stability/2017_2026/disturbance_values
+    out_file: docs/reports/figures/vsm_stability_2017_2026/methods/m00_sample_points.png
+
+  # fig11:按 MODIS 距平选的 tile,RH98 的 2024 变化
+  #   python -m tools.run run=plot_stability_anomaly_test
+  plot_stability_anomaly_test:
+    _target_: tools.vsm_stability_plots.plot_stability_anomaly_test
+    target_type: function
+    root: /scratch/project_465003168/hui/gvs
+    report_file: ${.root}/vsm_stability_state/2024_anomaly/anomaly_test_tiles.tsv
+    out_file: docs/reports/figures/vsm_stability_2017_2026/fig11_anomaly_test_2024.png
+
+  # MODIS / ERA5 / S2 同季节距平和 RH98 年 offset 合到一张 tile-year 表
+  #   python -m tools.run run=summarize_stability_external
+  summarize_stability_external:
+    _target_: tools.vsm_stability.summarize_stability_external
+    target_type: function
+    root: /scratch/project_465003168/hui/gvs
+    tiles_file: ${.root}/vsm_stability_state/tiles_2017_2026.tsv
+    external_dir: ${.root}/vsm_stability/2017_2026/external_values
+    report_dir: ${.root}/vsm_stability_state/2017_2026
+    s2_grid_file: ${.root}/01_derived_ancillary/growing_months/s2_tiles_with_growing_months.parquet
+
   summarize_stability_per_image:
     _target_: tools.vsm_stability.summarize_stability_per_image
     target_type: function
@@ -1170,6 +1408,37 @@ tools:
     root: /scratch/project_465003168/hui/gvs
     tables_dir: ${.root}/vsm_stability_state/2017_2026
     out_dir: docs/reports/figures/vsm_stability_2017_2026
+
+  # fig7(5 个 2024 偏高最多的 tile,2022-2025 单景预测随季节的偏移):
+  #   python -m tools.run run=plot_stability_per_image
+  plot_stability_per_image:
+    _target_: tools.vsm_stability_plots.plot_stability_per_image
+    target_type: function
+    root: /scratch/project_465003168/hui/gvs
+    tables_dir: ${.root}/vsm_stability_state/2017_2026
+    out_file: docs/reports/figures/vsm_stability_2017_2026/fig7_per_image_season.png
+    tiles: [49UFS, 19TFN, 49UDT, 33PZL, 48QYK]   # the five tiles with the largest 2024 offsets
+
+  # fig7b:单景同季节比较,偏高 tile vs 对照 tile
+  #   python -m tools.run run=plot_stability_per_image_controls
+  plot_stability_per_image_controls:
+    _target_: tools.vsm_stability_plots.plot_stability_per_image_controls
+    target_type: function
+    root: /scratch/project_465003168/hui/gvs
+    tables_dir: ${.root}/vsm_stability_state/2017_2026
+    out_file: docs/reports/figures/vsm_stability_2017_2026/fig7b_per_image_controls.png
+    strong_tiles: [49UFS, 19TFN, 49UDT, 33PZL, 48QYK]
+
+  # fig8-fig10(2024 输入:S2 同季节光谱、MODIS/ERA5 对照、单景 reflectance 预测 RH98):
+  #   python -m tools.run run=plot_stability_inputs_2024
+  plot_stability_inputs_2024:
+    _target_: tools.vsm_stability_plots.plot_stability_inputs_2024
+    target_type: function
+    root: /scratch/project_465003168/hui/gvs
+    tables_dir: ${.root}/vsm_stability_state/2017_2026
+    out_dir: docs/reports/figures/vsm_stability_2017_2026
+    strong_tiles: [49UFS, 49UDT, 33PZL, 19TFN]
+    image_tiles: [49UFS, 49UDT, 33PZL, 19TFN, 48QYK]
 
   # fig0(指标示意图,用一个 tile 的真实采样值):
   #   python -m tools.run run=plot_stability_schematic

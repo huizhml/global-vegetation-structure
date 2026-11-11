@@ -26,6 +26,8 @@ years with GEDI. The prediction keeps only these points and writes no GeoTIFF
     sample_stability_tile         prediction at the pixels / GEDI shots of one tile-year
     summarize_stability_years     year offsets, per-pixel SD, GEDI accuracy per biome
 """
+import json
+import time
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -763,6 +765,578 @@ def sample_stability_cloudscore(selected_file: str, pixels_dir: str, out_dir: st
                 print(f'[{i + 1}/{len(todo)}] {t} {y}: FAILED {str(e)[:200]}', flush=True)
 
 
+MODIS_BANDS = {'NDVI': 'ndvi', 'EVI': 'evi', 'sur_refl_b01': 'red', 'sur_refl_b02': 'nir', 'sur_refl_b07': 'swir2'}
+ERA5_BANDS = {'total_precipitation_sum': 'precip_m', 'temperature_2m': 't2m_k',
+              'volumetric_soil_water_layer_1': 'swvl1'}
+
+
+def _vegetated_points(tile, biome, values_dir, pixels_dir, vegetated_rh98, n_points, seed=42):
+    """lon/lat of up to n_points vegetated own-biome sample pixels (multi-year median RH98 Q1 >= vegetated_rh98)."""
+    px = pd.read_parquet(pixels_dir / f'{tile}.parquet').set_index('point_id')
+    files = sorted((values_dir / 'pixel_values').glob(f'*/{tile}.parquet'))
+    q1 = pd.DataFrame({int(f.parent.name): pd.read_parquet(f).set_index('point_id').RH98_Q1 for f in files}).reindex(px.index)
+    med = q1.loc[:, q1.notna().mean() >= 0.5].median(axis=1)
+    p = px[(px.BIOME == biome) & (med >= vegetated_rh98)]
+    return p.sample(min(n_points, len(p)), random_state=seed) if len(p) else p
+
+
+def _external_tile(ee, tile, pts, start, end):
+    """MODIS MOD13Q1 (median over the points per 16-day composite, QA good/marginal) and ERA5-Land
+    monthly (mean over the points' bounding box) for one tile."""
+    geom = ee.Geometry.MultiPoint([[float(x), float(y)] for x, y in zip(pts.lon, pts.lat)])
+
+    def modis(img):
+        ok = img.select('SummaryQA').lte(1)
+        v = img.select(list(MODIS_BANDS)).updateMask(ok)
+        r = v.reduceRegion(ee.Reducer.median(), geom, 250, maxPixels=1e8)
+        n = img.select('NDVI').updateMask(ok).reduceRegion(ee.Reducer.count(), geom, 250, maxPixels=1e8)
+        return ee.Feature(None, r).set('date', img.date().format('YYYY-MM-dd')).set('n', n.get('NDVI'))
+
+    col = ee.ImageCollection('MODIS/061/MOD13Q1').filterDate(start, end)
+    m = pd.DataFrame([f['properties'] for f in col.map(modis).getInfo()['features']])
+    m = m.rename(columns=MODIS_BANDS)
+    for c in MODIS_BANDS.values():
+        m[c] = pd.to_numeric(m.get(c), errors='coerce') * 1e-4
+    m.insert(0, 'tile', tile)
+
+    box = geom.bounds().buffer(5000)
+
+    def era5(img):
+        r = img.select(list(ERA5_BANDS)).reduceRegion(ee.Reducer.mean(), box, 11132, maxPixels=1e8)
+        return ee.Feature(None, r).set('month', img.date().format('YYYY-MM'))
+
+    e = pd.DataFrame([f['properties'] for f in ee.ImageCollection('ECMWF/ERA5_LAND/MONTHLY_AGGR')
+                      .filterDate(start, end).map(era5).getInfo()['features']]).rename(columns=ERA5_BANDS)
+    e.insert(0, 'tile', tile)
+    return m, e
+
+
+def sample_stability_external(tiles_file: str, values_dir: str, pixels_dir: str, out_dir: str, key_file: str,
+                              start: str = '2018-01-01', end: str = '2026-01-01', n_points: int = 300,
+                              vegetated_rh98: float = 5., n_workers: int = 8, **kwargs):
+    """Independent data for the stability tiles, to tell a real vegetation/climate anomaly from an
+    S2 input artefact: MODIS Terra MOD13Q1 (250 m, 16-day; NDVI, EVI, red, NIR, SWIR2 2.1 um) as
+    the median over up to n_points vegetated own-biome sample pixels per composite, and ERA5-Land
+    monthly precipitation, 2 m temperature and top-layer soil moisture over the points' bounding box.
+      out_dir/modis.parquet  tile, date, ndvi, evi, red, nir, swir2 (reflectance), n (points with good QA)
+      out_dir/era5.parquet   tile, month, precip_m, t2m_k, swvl1"""
+    import ee
+    from download.core.utils import authenticate
+    authenticate(key_file)
+    tiles = pd.read_csv(Path(tiles_file).expanduser(), sep='\t')
+    values_dir, pixels_dir, out_dir = (Path(d).expanduser() for d in (values_dir, pixels_dir, out_dir))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    pts = {t.tile: _vegetated_points(t.tile, t.biome, values_dir, pixels_dir, vegetated_rh98, n_points)
+           for t in tiles.itertuples()}
+    pts = {k: v for k, v in pts.items() if len(v) >= 20}
+    ms, es = [], []
+    with ThreadPoolExecutor(n_workers) as ex:
+        futs = {ex.submit(_external_tile, ee, t, p, start, end): t for t, p in pts.items()}
+        for i, f in enumerate(as_completed(futs)):
+            try:
+                m, e = f.result()
+                ms.append(m)
+                es.append(e)
+                print(f'[{i + 1}/{len(futs)}] {futs[f]}: {len(m)} MODIS composites, {len(e)} ERA5 months', flush=True)
+            except Exception as e:
+                print(f'[{i + 1}/{len(futs)}] {futs[f]}: FAILED {str(e)[:300]}', flush=True)
+    pd.concat(ms).to_parquet(out_dir / 'modis.parquet', index=False)
+    pd.concat(es).to_parquet(out_dir / 'era5.parquet', index=False)
+    print(f'-> {out_dir}')
+
+
+DISTURBANCE_COLS = ['hansen_lossyear', 'hansen_loss_buffer', 'hansen_gain', 'burned_months', 'tmf_disturbed']
+
+
+def _disturbance_image(ee, burn_start: int, burn_end: int, tmf_start: int):
+    """Two (image, projection) pairs, each sampled on its own grid (MCD64A1 on the 30 m grid is ~10x slower):
+    1) Hansen GFC v1.13 loss year (0 = none, 1-25 = 2001-2025), any loss within the 3x3 Hansen pixels
+       (~30 m buffer), gain 2000-2012, and JRC TMF v1_2024 degraded/deforested/regrowth (classes 2-4)
+       in any year tmf_start..2024 (0 outside the tropical moist forest), on the Hansen grid;
+    2) MODIS MCD64A1 months burned in burn_start..burn_end, on its 500 m grid."""
+    h = ee.Image('UMD/hansen/global_forest_change_2025_v1_13')
+    loss = h.select('lossyear').unmask(0)
+    buf = loss.gt(0).focalMax(1, 'square', 'pixels').reproject(h.projection())
+    tmf = ee.ImageCollection('projects/JRC/TMF/v1_2024/AnnualChanges').mosaic()
+    tmf = tmf.select([f'Dec{y}' for y in range(tmf_start, 2025)])
+    tmf = tmf.gte(2).And(tmf.lte(4)).reduce(ee.Reducer.max()).unmask(0)
+    fine_names = ['hansen_lossyear', 'hansen_loss_buffer', 'hansen_gain', 'tmf_disturbed']
+    fine = ee.Image.cat([loss, buf.unmask(0), h.select('gain').unmask(0), tmf]).rename(fine_names)
+    col = ee.ImageCollection('MODIS/061/MCD64A1').filterDate(f'{burn_start}-01-01', f'{burn_end + 1}-01-01')
+    burned = col.select('BurnDate').count().unmask(0).rename('burned_months')
+    return [(fine, h.projection(), fine_names), (burned, col.first().projection(), ['burned_months'])]
+
+
+def _disturbance_tile(ee, images, f, out_file, batch):
+    px = pd.read_parquet(f)
+    parts = []
+    for img, proj, names in images:
+        rows = []
+        for i in range(0, len(px), batch):
+            b = px.iloc[i:i + batch]
+            fc = ee.FeatureCollection([ee.Feature(ee.Geometry.Point([float(x), float(y)]), {'point_id': int(p)})
+                                       for p, x, y in zip(b.point_id, b.lon, b.lat)])
+            for tries in range(4):
+                try:
+                    feats = img.reduceRegions(fc, ee.Reducer.first(), crs=proj).getInfo()['features']
+                    break
+                except Exception:
+                    if tries == 3:
+                        raise
+                    time.sleep(30 * (tries + 1))
+            rows += [x['properties'] for x in feats]
+        part = pd.DataFrame(rows).set_index('point_id')
+        parts.append(part.rename(columns={'first': names[0]}) if len(names) == 1 else part)   # one band: 'first'
+    d = pd.concat(parts, axis=1).reindex(px.point_id)
+    for c in DISTURBANCE_COLS:
+        d[c] = pd.to_numeric(d.get(c), errors='coerce').fillna(0).astype(np.int16)
+    d = d[DISTURBANCE_COLS].reset_index()
+    d.to_parquet(out_file, index=False)
+    return d
+
+
+def sample_stability_disturbance(pixels_dir: str, out_dir: str, key_file: str, burn_start: int = 2016,
+                                 burn_end: int = 2025, tmf_start: int = 2001, batch: int = 5000,
+                                 n_workers: int = 8, **kwargs):
+    """Disturbance at every sample pixel (all tiles in pixels_dir), to restrict the year comparisons to
+    undisturbed pixels: Hansen loss 2001-2025 (+ ~30 m buffer) and gain, MCD64A1 burned months,
+    JRC TMF degradation/deforestation (see _disturbance_image). Done tiles are skipped.
+      out_dir/<tile>.parquet: point_id + DISTURBANCE_COLS"""
+    import ee
+    from download.core.utils import authenticate
+    authenticate(key_file)
+    out_dir = Path(out_dir).expanduser()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    images = _disturbance_image(ee, burn_start, burn_end, tmf_start)
+    files = [f for f in sorted(Path(pixels_dir).expanduser().glob('*.parquet')) if not (out_dir / f.name).exists()]
+    with ThreadPoolExecutor(n_workers) as ex:
+        futs = {ex.submit(_disturbance_tile, ee, images, f, out_dir / f.name, batch): f.stem for f in files}
+        for i, fu in enumerate(as_completed(futs)):
+            try:
+                d = fu.result()
+                print(f'[{i + 1}/{len(futs)}] {futs[fu]}: loss {(d.hansen_lossyear > 0).mean():.3f}, '
+                      f'buffer {d.hansen_loss_buffer.mean():.3f}, burned {(d.burned_months > 0).mean():.3f}, '
+                      f'tmf {d.tmf_disturbed.mean():.3f}', flush=True)
+            except Exception as e:
+                print(f'[{i + 1}/{len(futs)}] {futs[fu]}: FAILED {str(e)[:300]}', flush=True)
+    print(f'-> {out_dir}')
+
+
+def _undisturbed(tile: str, index: pd.Index, disturbance_dir) -> np.ndarray:
+    """True where a sample pixel has no Hansen loss (incl. buffer) or gain, no MCD64A1 burn and no TMF
+    disturbance (sample_stability_disturbance); all True if disturbance_dir is None."""
+    if disturbance_dir is None:
+        return np.ones(len(index), bool)
+    d = pd.read_parquet(Path(disturbance_dir).expanduser() / f'{tile}.parquet').set_index('point_id').reindex(index)
+    return ((d.hansen_loss_buffer == 0) & (d.hansen_gain == 0) & (d.burned_months == 0)
+            & (d.tmf_disturbed == 0)).to_numpy()
+
+
+def _ndvi_anomaly_image(ee, year: int, ref_years):
+    """12 bands d01..d12: MODIS Terra MOD13Q1 NDVI (QA good/marginal) monthly mean of `year` minus the
+    mean of the same month in ref_years, on WorldCover tree pixels; band 'tree' = tree cover (0/1)."""
+    col = ee.ImageCollection('MODIS/061/MOD13Q1')
+
+    def month_mean(y, m):
+        start = ee.Date.fromYMD(y, m, 1)
+        c = col.filterDate(start, start.advance(1, 'month'))
+        return c.map(lambda i: i.select('NDVI').updateMask(i.select('SummaryQA').lte(1))).mean().multiply(1e-4)
+
+    tree = ee.ImageCollection('ESA/WorldCover/v200').first().eq(10).rename('tree')
+    bands = []
+    for m in range(1, 13):
+        ref = ee.ImageCollection([month_mean(y, m) for y in ref_years]).mean()
+        bands.append(month_mean(year, m).subtract(ref).updateMask(tree).rename(f'd{m:02d}'))
+    return ee.Image.cat(bands + [tree])
+
+
+def screen_ndvi_anomaly_tiles(grid_file: str, out_file: str, key_file: str, year: int = 2024,
+                              ref_years=(2023, 2025), scale: int = 1000, batch: int = 300, n_workers: int = 6,
+                              tiles=None, **kwargs):
+    """Every S2 tile: MODIS NDVI anomaly of `year` against ref_years on tree pixels, per month and as
+    the mean over the tile's growing months, plus tree cover share and RESOLVE majority biome.
+    Used to pick test tiles by the strength and sign of the 2024 greening (select_anomaly_tiles).
+      <out_file> (tsv): tile, tree_share, biome_resolve, d01..d12, n_months, ndvi_anomaly
+    tiles: only these tiles (a quick test)."""
+    import ee
+    from download.core.utils import authenticate
+    authenticate(key_file)
+    grid = gpd.read_parquet(Path(grid_file).expanduser(), columns=['Name', 'growing_months', 'geometry'])
+    if tiles is not None:   # e.g. a quick test on a few tiles
+        grid = grid[grid.Name.isin(list(tiles))]
+    grid = grid.dissolve('Name', aggfunc='first').reset_index()
+    img = _ndvi_anomaly_image(ee, year, list(ref_years))
+    biome = (ee.FeatureCollection('RESOLVE/ECOREGIONS/2017')
+             .reduceToImage(['BIOME_NUM'], ee.Reducer.first()).rename('biome_resolve'))
+
+    def run(sub):
+        fc = ee.FeatureCollection([ee.Feature(ee.Geometry(json.loads(shapely.to_geojson(g)), None, False), {'tile': n})
+                                   for n, g in zip(sub.Name, shapely.force_2d(sub.geometry.simplify(0.01).values))])
+        a = img.reduceRegions(fc, ee.Reducer.mean(), scale, tileScale=4).getInfo()['features']
+        b = biome.reduceRegions(fc, ee.Reducer.mode(), scale * 5, tileScale=4).getInfo()['features']
+        bm = {f['properties']['tile']: f['properties'].get('mode') for f in b}
+        return [dict(f['properties'], biome_resolve=bm.get(f['properties']['tile'])) for f in a]
+
+    rows, chunks = [], [grid.iloc[i:i + batch] for i in range(0, len(grid), batch)]
+    with ThreadPoolExecutor(n_workers) as ex:
+        futs = {ex.submit(run, c): i for i, c in enumerate(chunks)}
+        for k, f in enumerate(as_completed(futs)):
+            try:
+                rows += f.result()
+            except Exception as e:
+                print(f'chunk {futs[f]} FAILED {str(e)[:300]}', flush=True)
+            print(f'[{k + 1}/{len(chunks)}] {len(rows)} tiles', flush=True)
+    out = pd.DataFrame(rows).rename(columns={'tree': 'tree_share'})
+    gm = grid.set_index('Name').growing_months
+    d = [f'd{m:02d}' for m in range(1, 13)]
+    for c in d:
+        out[c] = pd.to_numeric(out.get(c), errors='coerce')
+    vals = out[d].to_numpy()
+    grow = np.array([[m in set(int(x) for x in gm[t]) for m in range(1, 13)] for t in out.tile])
+    v = np.where(grow, vals, np.nan)
+    out['n_months'] = np.isfinite(v).sum(1)
+    with np.errstate(all='ignore'):
+        out['ndvi_anomaly'] = np.nanmean(v, axis=1)
+    out = out[['tile', 'tree_share', 'biome_resolve'] + d + ['n_months', 'ndvi_anomaly']].sort_values('tile')
+    out_file = Path(out_file).expanduser()
+    out_file.parent.mkdir(parents=True, exist_ok=True)
+    out.to_csv(out_file, sep='\t', index=False)
+    print(out[['tree_share', 'ndvi_anomaly']].describe().round(3).to_string())
+    print(f'{len(out)} tiles -> {out_file}')
+
+
+def select_anomaly_tiles(screen_file: str, out_file: str, exclude_file: str = None, per_group: int = 20,
+                         min_tree_share: float = 0.4, min_months: int = 3, quantile: float = 0.1,
+                         seed: int = 42, **kwargs):
+    """Test tiles by the 2024 MODIS NDVI anomaly (screen_ndvi_anomaly_tiles), among tiles with
+    tree cover >= min_tree_share: 'green' (top `quantile`), 'brown' (bottom `quantile`) and
+    'neutral' (smallest |anomaly|, same share), per_group each, spread over RESOLVE biomes
+    (random order, then round-robin by biome). exclude_file: tiles already tested (tsv with 'tile').
+      <out_file> (tsv): tile, group, biome_resolve, tree_share, ndvi_anomaly; tile list next to it (.txt)"""
+    s = pd.read_csv(Path(screen_file).expanduser(), sep='\t')
+    s = s[(s.tree_share >= min_tree_share) & (s.n_months >= min_months) & s.ndvi_anomaly.notna()]
+    s = s.assign(biome_resolve=s.biome_resolve.round().astype('Int64'))   # mode at coarse scale can carry float noise
+    if exclude_file:
+        s = s[~s.tile.isin(pd.read_csv(Path(exclude_file).expanduser(), sep='\t').tile)]
+    lo, hi = s.ndvi_anomaly.quantile([quantile, 1 - quantile])
+    groups = {'green': s[s.ndvi_anomaly >= hi], 'brown': s[s.ndvi_anomaly <= lo],
+              'neutral': s[s.ndvi_anomaly.abs() <= s.ndvi_anomaly.abs().quantile(quantile)]}
+    rng = np.random.default_rng(seed)
+    picked = []
+    for name, g in groups.items():
+        g = g.iloc[rng.permutation(len(g))].copy()
+        g['rank'] = g.groupby('biome_resolve').cumcount()
+        picked.append(g.sort_values(['rank', 'biome_resolve']).head(per_group).assign(group=name))
+        print(f'{name}: {len(g)} candidates, anomaly {g.ndvi_anomaly.min():+.3f}..{g.ndvi_anomaly.max():+.3f}')
+    sel = pd.concat(picked)[['tile', 'group', 'biome_resolve', 'tree_share', 'ndvi_anomaly']]
+    out_file = Path(out_file).expanduser()
+    out_file.parent.mkdir(parents=True, exist_ok=True)
+    sel.to_csv(out_file, sep='\t', index=False)
+    out_file.with_suffix('.txt').write_text('\n'.join(sel.tile) + '\n')
+    print(sel.groupby(['group', 'biome_resolve']).size().unstack(fill_value=0).to_string())
+    print(f'{len(sel)} tiles (tree share >= {min_tree_share}) -> {out_file}')
+
+
+def summarize_anomaly_test(screen_file: str, pixels_dir: str, values_dirs, report_file: str,
+                           anomaly_tiles_file: str = None, year: int = 2024, ref_years=(2023, 2025),
+                           vegetated_rh98: float = 5., min_pixels: int = 100, disturbance_dir: str = None,
+                           **kwargs):
+    """Does the yearly RH98 follow the 2024 MODIS NDVI anomaly? Per tile with predictions of `year`
+    and ref_years in any of values_dirs (pixel_values/<year>/<tile>.parquet): RH98 Q1 change =
+    median over vegetated pixels of any biome (median of the three years >= vegetated_rh98) of
+    (year - mean of ref_years); also for RH50. biome = majority WWF biome of the tile's pixels (label). Joined with the
+    screening anomaly of the same definition (screen_ndvi_anomaly_tiles). With disturbance_dir only
+    undisturbed pixels count (_undisturbed).
+      <report_file> (tsv): tile, group (green/brown/neutral or 'stability' for the 69-tile test),
+                           biome, n_pixels, rh98_change, rh50_change, ndvi_anomaly, tree_share"""
+    scr = pd.read_csv(Path(screen_file).expanduser(), sep='\t').set_index('tile')
+    groups = (pd.read_csv(Path(anomaly_tiles_file).expanduser(), sep='\t').set_index('tile').group
+              if anomaly_tiles_file else pd.Series(dtype=str))
+    years = [year] + list(ref_years)
+    rows = []
+    for vd in values_dirs:
+        vd = Path(vd).expanduser()
+        for f in sorted((vd / 'pixel_values' / str(year)).glob('*.parquet')):
+            tile = f.stem
+            fs = [vd / 'pixel_values' / str(y) / f'{tile}.parquet' for y in years]
+            if not all(p.exists() for p in fs):
+                continue
+            px = pd.read_parquet(Path(pixels_dir).expanduser() / f'{tile}.parquet').set_index('point_id')
+            b = px.BIOME[px.BIOME.between(1, 14)]
+            if not len(b):
+                continue
+            biome = int(b.mode().iloc[0])
+            v = {y: pd.read_parquet(p).set_index('point_id').reindex(px.index) for y, p in zip(years, fs)}
+            keep = _undisturbed(tile, px.index, disturbance_dir)        # all biomes of the tile; biome is a label
+            r = dict(tile=tile, group=groups.get(tile, 'stability'), biome=biome)
+            for rh in (98, 50):
+                q = np.stack([v[y][f'RH{rh}_Q1'].to_numpy(float) for y in years])     # year, pixel
+                if rh == 98:
+                    veg = keep & np.isfinite(q).all(0) & (np.median(q, 0) >= vegetated_rh98)
+                    r['n_pixels'] = int(veg.sum())
+                d = q[0] - q[1:].mean(0)
+                r[f'rh{rh}_change'] = float(np.median(d[veg])) if veg.sum() >= min_pixels else np.nan
+            rows.append(r)
+    out = pd.DataFrame(rows).drop_duplicates('tile', keep='last')
+    out = out.join(scr[['ndvi_anomaly', 'tree_share']], on='tile')
+    report_file = Path(report_file).expanduser()
+    report_file.parent.mkdir(parents=True, exist_ok=True)
+    out.to_csv(report_file, sep='\t', index=False)
+    ok = out.dropna(subset=['rh98_change', 'ndvi_anomaly'])
+    print(ok.groupby('group')[['ndvi_anomaly', 'rh98_change', 'rh50_change']].median().round(3)
+          .assign(n=ok.groupby('group').size()).to_string())
+    print('Spearman ndvi_anomaly vs rh98_change: %.2f (n=%d)' % (ok[['ndvi_anomaly', 'rh98_change']]
+                                                                  .corr(method='spearman').iloc[0, 1], len(ok)))
+    print(f'-> {report_file}')
+
+
+def summarize_neighbour_change(pixels_dir: str, values_dir: str, screen_file: str, out_file: str,
+                               years=range(2018, 2025), vegetated_rh98: float = 5., min_pixels: int = 100,
+                               forest_tree_share: float = 0.4, exclude_tile_years=(), anomaly_report_file: str = None,
+                               disturbance_dir: str = None, **kwargs):
+    """Reference distribution for the 2024 anomaly test: per tile of the multi-year test and per year y,
+    RH98 Q1 change = median over vegetated pixels of (y - mean of y-1 and y+1), the same
+    measure as summarize_anomaly_test uses for 2024. Tiles with WorldCover tree share >= forest_tree_share
+    (screen_ndvi_anomaly_tiles) count as forest, like the 60 picked tiles. With disturbance_dir only
+    undisturbed pixels count (_undisturbed).
+      <out_file> (tsv): tile, year, biome, tree_share, forest, n_pixels, rh98_change"""
+    vd = Path(values_dir).expanduser()
+    scr = pd.read_csv(Path(screen_file).expanduser(), sep='\t').set_index('tile')
+    skip = set(exclude_tile_years)
+    rows = []
+    for f in sorted((vd / 'pixel_values' / str(max(years))).glob('*.parquet')):
+        tile = f.stem
+        px = pd.read_parquet(Path(pixels_dir).expanduser() / f'{tile}.parquet').set_index('point_id')
+        b = px.BIOME[px.BIOME.between(1, 14)]
+        if not len(b):
+            continue
+        biome = int(b.mode().iloc[0])
+        keep = _undisturbed(tile, px.index, disturbance_dir)            # all biomes of the tile; biome is a label
+        q = {}
+        for y in range(min(years) - 1, max(years) + 2):
+            fy = vd / 'pixel_values' / str(y) / f'{tile}.parquet'
+            if fy.exists():
+                q[y] = pd.read_parquet(fy).set_index('point_id').reindex(px.index)['RH98_Q1'].to_numpy(float)
+        for y in years:
+            if f'{tile}_{y}' in skip or not all(k in q for k in (y - 1, y, y + 1)):
+                continue
+            a = np.stack([q[y - 1], q[y], q[y + 1]])
+            veg = keep & np.isfinite(a).all(0) & (np.median(a, 0) >= vegetated_rh98)
+            if veg.sum() < min_pixels:
+                continue
+            ts = scr.tree_share.get(tile, np.nan)
+            rows.append(dict(tile=tile, year=y, biome=biome, tree_share=ts, forest=bool(ts >= forest_tree_share),
+                             n_pixels=int(veg.sum()), rh98_change=float(np.median(q[y][veg] - (q[y - 1][veg] + q[y + 1][veg]) / 2))))
+    out = pd.DataFrame(rows)
+    out_file = Path(out_file).expanduser()
+    out_file.parent.mkdir(parents=True, exist_ok=True)
+    out.to_csv(out_file, sep='\t', index=False)
+    for name, d in (('forest tiles', out[out.forest]), ('all tiles', out)):
+        g = d.groupby('year').rh98_change
+        print(f'{name}:')
+        print(pd.DataFrame(dict(median=g.median(), q25=g.quantile(.25), q75=g.quantile(.75),
+                                frac_pos=g.apply(lambda x: (x > 0).mean()), n=g.size())).round(2).to_string())
+    if anomaly_report_file:
+        a = pd.read_csv(Path(anomaly_report_file).expanduser(), sep='\t')
+        a = a[a.group != 'stability'].dropna(subset=['rh98_change'])
+        print('60 picked tiles, 2024: median %.2f, q25 %.2f, q75 %.2f, frac_pos %.2f, n %d' % (
+            a.rh98_change.median(), a.rh98_change.quantile(.25), a.rh98_change.quantile(.75),
+            (a.rh98_change > 0).mean(), len(a)))
+    print(f'-> {out_file}')
+
+
+def _harmonize_affected(images_file) -> set:
+    """(tile, year) whose selected images include reprocessed pre-2022 products (baseline >= 04.00),
+    i.e. inputs hit by the old harmonize_to_old (stability_images.tsv of count_stability_images)."""
+    if images_file is None:
+        return set()
+    im = pd.read_csv(Path(images_file).expanduser(), sep='\t', dtype={'baselines': str})
+    im = im[(im.year < 2022) & im.baselines.fillna('').str.contains(r'0[45]\.')]
+    return set(zip(im.tile, im.year))
+
+
+def summarize_year_to_year_change(pixels_dir: str, values_dir: str, screen_file: str, out_file: str,
+                                  disturbance_dir: str = None, images_file: str = None, years=range(2017, 2026),
+                                  vegetated_rh98: float = 5., min_pixels: int = 100, forest_tree_share: float = 0.4,
+                                  exclude_tile_years=(), **kwargs):
+    """Year-to-year change of the yearly RH98 Q1 at fixed pixels: per tile and year t, median over
+    vegetated (median over all years >= vegetated_rh98), undisturbed pixels of (t - (t-1)), whatever
+    their WWF biome (the tile's majority biome is only a label).
+    Is 2023 -> 2024 larger than the other one-year changes? Forest = WorldCover tree share of the
+    tile >= forest_tree_share (screen_ndvi_anomaly_tiles). `affected` marks changes that involve a
+    tile-year hit by the old harmonize rule (images_file); `release` those that involve 2020 (taken
+    from the released product, not from the current code). exclude_tile_years ('<tile>_<year>')
+    drops the changes into and out of that tile-year.
+      <out_file> (tsv): tile, year (end of the change), biome, tree_share, forest, n_pixels, change,
+                        affected, release"""
+    vd = Path(values_dir).expanduser()
+    scr = pd.read_csv(Path(screen_file).expanduser(), sep='\t').set_index('tile')
+    bad, skip, years = _harmonize_affected(images_file), set(exclude_tile_years), list(years)
+    rows = []
+    for f in sorted((vd / 'pixel_values' / str(years[-1])).glob('*.parquet')):
+        tile = f.stem
+        fs = [vd / 'pixel_values' / str(y) / f'{tile}.parquet' for y in years]
+        if not all(p.exists() for p in fs):
+            continue
+        px = pd.read_parquet(Path(pixels_dir).expanduser() / f'{tile}.parquet').set_index('point_id')
+        b = px.BIOME[px.BIOME.between(1, 14)]
+        if not len(b):
+            continue
+        biome = int(b.mode().iloc[0])
+        keep = _undisturbed(tile, px.index, disturbance_dir)
+        q = np.stack([pd.read_parquet(p).set_index('point_id').reindex(px.index)['RH98_Q1'].to_numpy(float) for p in fs])
+        veg = keep & np.isfinite(q).all(0) & (np.median(q, 0) >= vegetated_rh98)
+        if veg.sum() < min_pixels:
+            continue
+        ts = scr.tree_share.get(tile, np.nan)
+        for i in range(1, len(years)):
+            y0, y1 = years[i - 1], years[i]
+            if f'{tile}_{y0}' in skip or f'{tile}_{y1}' in skip:
+                continue
+            rows.append(dict(tile=tile, year=y1, biome=biome, tree_share=ts, forest=bool(ts >= forest_tree_share),
+                             n_pixels=int(veg.sum()), change=float(np.median(q[i, veg] - q[i - 1, veg])),
+                             affected=(tile, y0) in bad or (tile, y1) in bad, release=2020 in (y0, y1)))
+    out = pd.DataFrame(rows)
+    out_file = Path(out_file).expanduser()
+    out_file.parent.mkdir(parents=True, exist_ok=True)
+    out.to_csv(out_file, sep='\t', index=False)
+    for name, d in (('forest tiles', out[out.forest]), ('forest tiles, not harmonize-affected', out[out.forest & ~out.affected]),
+                    ('all tiles', out)):
+        g = d.groupby('year').change
+        print(f'{name} (change from the year before; 2020 = released product):')
+        print(pd.DataFrame(dict(median=g.median(), q25=g.quantile(.25), q75=g.quantile(.75),
+                                frac_pos=g.apply(lambda x: (x > 0).mean()), n=g.size())).round(2).T.to_string())
+    print(f'-> {out_file}')
+
+
+def _lower_nanmedian(a: np.ndarray) -> np.ndarray:
+    """Per row the lower middle of the non-NaN values, as torch.nanmedian (used for the yearly
+    composite) returns for an even count; np.nanmedian would average the two middle values."""
+    n = np.isfinite(a).sum(1)
+    s = np.sort(a, 1)                      # NaN last
+    k = np.maximum(n - 1, 0) // 2
+    out = s[np.arange(len(a)), k]
+    out[n == 0] = np.nan
+    return out
+
+
+def summarize_image_bootstrap(tiles_file: str, values_dir: str, per_image_dir: str, pixels_dir: str, out_file: str,
+                              disturbance_dir: str = None, var: str = 'RH98_Q1', n_boot: int = 500,
+                              vegetated_rh98: float = 5., nodata: int = 32767, seed: int = 0, **kwargs):
+    """Image-selection sensitivity of the year-to-year change on the per-image test tiles: the yearly
+    value is the per-pixel median over the ~20 selected images; resample these images with
+    replacement (n_boot times, per year independently), recompute the yearly medians and the
+    year-to-year change (median over vegetated undisturbed pixels, any biome). The per-pixel median
+    is the lower middle value, as in the product (torch.nanmedian). Boot 0 = all images as selected
+    (checked against the yearly product).
+      <out_file> (tsv): tile, biome, year (end of the change), boot, change"""
+    tiles = pd.read_csv(Path(tiles_file).expanduser(), sep='\t').set_index('tile')
+    vd, per_dir = Path(values_dir).expanduser(), Path(per_image_dir).expanduser()
+    rng = np.random.default_rng(seed)
+    rows = []
+    for tile in sorted({f.stem.replace('_per_image', '') for f in per_dir.glob('point_samples/*/*_per_image.parquet')}):
+        biome = int(tiles.loc[tile, 'biome'])
+        px = pd.read_parquet(Path(pixels_dir).expanduser() / f'{tile}.parquet').set_index('point_id')
+        keep = _undisturbed(tile, px.index, disturbance_dir)
+        q1 = pd.DataFrame({int(g.parent.name): pd.read_parquet(g).set_index('point_id')[var]
+                           for g in sorted((vd / 'pixel_values').glob(f'*/{tile}.parquet'))}).reindex(px.index)
+        q1 = q1.loc[:, q1.notna().mean() >= 0.5]
+        veg = keep & q1.notna().all(1).to_numpy() & (q1.median(axis=1) >= vegetated_rh98).to_numpy()
+        imgs = {}
+        for f in sorted(per_dir.glob(f'point_samples/*/{tile}_per_image.parquet')):
+            per = pd.read_parquet(f)
+            per = per[per.kind == 'pixel'].set_index('point_id').reindex(px.index[veg])
+            a = per[[c for c in per.columns if c.startswith(f'{var}:')]].to_numpy(float)
+            a[a == nodata] = np.nan
+            imgs[int(f.parent.name)] = a / 10
+        ys = sorted(imgs)
+        full = {y: _lower_nanmedian(imgs[y]) for y in ys}
+        for y in ys:
+            same = np.isclose(full[y], q1.loc[px.index[veg], y].to_numpy(), atol=0.051, equal_nan=True).mean()
+            print(f'{tile} {y}: {imgs[y].shape[1]} images, median of images equals the yearly product at {same:.3f} of pixels')
+        for b in range(n_boot + 1):
+            yv = full if b == 0 else {y: _lower_nanmedian(imgs[y][:, rng.integers(0, imgs[y].shape[1], imgs[y].shape[1])])
+                                      for y in ys}
+            for y0, y1 in zip(ys[:-1], ys[1:]):
+                rows.append(dict(tile=tile, biome=biome, year=y1, boot=b, change=float(np.nanmedian(yv[y1] - yv[y0]))))
+    out = pd.DataFrame(rows)
+    out_file = Path(out_file).expanduser()
+    out_file.parent.mkdir(parents=True, exist_ok=True)
+    out.to_csv(out_file, sep='\t', index=False)
+    obs = out[out.boot == 0].set_index(['tile', 'year']).change
+    bs = out[out.boot > 0].groupby(['tile', 'year']).change
+    t = pd.DataFrame(dict(observed=obs, lo=bs.quantile(.025), hi=bs.quantile(.975),
+                          frac_pos=bs.apply(lambda x: (x > 0).mean()))).round(2)
+    print(t.unstack('year').to_string())
+    print(f'-> {out_file}')
+
+
+def _same_season_offsets(df: pd.DataFrame, cols, ref_years, win: int = 20) -> pd.DataFrame:
+    """Per tile-year: median over its images of (image value - median of the other ref_years'
+    images of the tile within +-win days of the same day of year)."""
+    df = df.assign(doy=pd.to_datetime(df.date).dt.dayofyear)
+    rows = []
+    for (tile, year), cur in df.groupby(['tile', 'year']):
+        oth = df[(df.tile == tile) & (df.year != year) & df.year.isin(ref_years)]
+        r = dict(tile=tile, year=year)
+        for c in cols:
+            d = [v - oth.loc[(oth.doy - doy).abs() <= win, c].median() for doy, v in zip(cur.doy, cur[c])]
+            r[c] = float(np.nanmedian(d)) if np.isfinite(d).any() else np.nan
+        rows.append(r)
+    return pd.DataFrame(rows)
+
+
+def summarize_stability_external(tiles_file: str, external_dir: str, report_dir: str, s2_grid_file: str,
+                                 years=tuple(range(2018, 2026)), **kwargs):
+    """Tile-year anomalies of the independent data next to the S2 inputs and the RH98 offset.
+    MODIS: each 16-day composite minus the tile's median of the same composite over `years`,
+    then the median over the composites in the tile's growing months. ERA5-Land: growing-month
+    sum (precipitation, % of the tile's mean over `years`) or mean (temperature K, soil moisture
+    m3/m3) minus the tile's mean over `years`. S2: same-season offset of the selected images
+    (stability_reflectance_per_image.tsv, reference years `years`).
+      stability_external_tiles.tsv  tile, biome, year, rh98_offset, modis_*, era5_*, s2_*"""
+    ext, rep = Path(external_dir).expanduser(), Path(report_dir).expanduser()
+    tiles = pd.read_csv(Path(tiles_file).expanduser(), sep='\t').set_index('tile')
+    grid = pd.read_parquet(Path(s2_grid_file).expanduser(), columns=['Name', 'growing_months']).set_index('Name')
+    years = list(years)
+    gm = {t: set(int(m) for m in grid.loc[t, 'growing_months']) for t in tiles.index if t in grid.index}
+
+    m = pd.read_parquet(ext / 'modis.parquet')
+    m['date'] = pd.to_datetime(m.date)
+    m['year'], m['doy'], m['month'] = m.date.dt.year, m.date.dt.dayofyear, m.date.dt.month
+    m = m[m.year.isin(years) & (m.n >= 20)]
+    mc = list(MODIS_BANDS.values())
+    m[mc] = m[mc] - m.groupby(['tile', 'doy'])[mc].transform('median')
+    m = m[[mo in gm.get(t, set()) for t, mo in zip(m.tile, m.month)]]
+    mod = m.groupby(['tile', 'year'])[mc].median().add_prefix('modis_')
+
+    e = pd.read_parquet(ext / 'era5.parquet')
+    e['year'], e['mo'] = e.month.str[:4].astype(int), e.month.str[5:7].astype(int)
+    e = e[e.year.isin(years)]
+    e = e[[mo in gm.get(t, set()) for t, mo in zip(e.tile, e.mo)]]
+    ey = e.groupby(['tile', 'year']).agg(precip=('precip_m', 'sum'), t2m=('t2m_k', 'mean'), swvl1=('swvl1', 'mean'))
+    clim = ey.groupby('tile').transform('mean')
+    era = pd.DataFrame({'era5_precip_pct': 100 * (ey.precip / clim.precip - 1),
+                        'era5_t2m': ey.t2m - clim.t2m, 'era5_swvl1': ey.swvl1 - clim.swvl1})
+
+    r = pd.read_csv(rep / 'stability_reflectance_per_image.tsv', sep='\t')
+    r = r[r.year.isin(years)]
+    s2c = ['veg_B04', 'veg_B08', 'veg_B11', 'veg_B12', 'veg_NDVI', 'water_B04', 'p2_B04']
+    s2 = _same_season_offsets(r, s2c, years).set_index(['tile', 'year']).add_prefix('s2_') * 1e-4  # x1e4 -> reflectance, NDVI
+
+    yt = pd.read_csv(rep / 'stability_years_tiles.tsv', sep='\t')
+    yt = yt[(yt.rh == 98) & (yt.status == 'ok')].set_index(['tile', 'year']).offset_vegetated.rename('rh98_offset')
+    out = pd.concat([yt, mod, era, s2], axis=1).reset_index()
+    out = out[out.year.isin(years)]
+    out.insert(1, 'biome', out.tile.map(tiles.biome))
+    out.to_csv(rep / 'stability_external_tiles.tsv', sep='\t', index=False)
+    num = out.drop(columns=['tile', 'biome'])
+    print(num.groupby('year').median().round(3).T.to_string())
+    print('Spearman with rh98_offset:')
+    print(num.drop(columns='year').corr(method='spearman').rh98_offset.round(2).to_string())
+    print(f'-> {rep}')
+
+
 def summarize_stability_clouds(tiles_file: str, values_dir: str, scl_dir: str, cloudscore_dir: str,
                                report_dir: str, pixels_dir: str, cs_clear: float = 0.6,
                                vegetated_rh98: float = 5., **kwargs):
@@ -1011,6 +1585,96 @@ def summarize_stability_reflectance(tiles_file: str, values_dir: str, scl_dir: s
     report_dir = Path(report_dir).expanduser()
     out.to_csv(report_dir / 'stability_reflectance_tiles.tsv', sep='\t', index=False)
     print(out[out['mask'] == 'scl'].groupby('year')[['rh98_offset', 'B02', 'B04', 'B08', 'B11', 'NDVI', 'sun_zenith']]
+          .median().round(1))
+    print(f'-> {report_dir}')
+
+
+def _reflectance_per_image_tile(tile, biome, values_dir, scl_dir, cs_dir, rf_dir, pixels_dir, excl,
+                                cs_clear, vegetated_rh98, water_scl):
+    """One tile of summarize_stability_reflectance_per_image."""
+    files = sorted((values_dir / 'pixel_values').glob(f'*/{tile}.parquet'))
+    px = pd.read_parquet(pixels_dir / f'{tile}.parquet').set_index('point_id')
+    if not files:
+        return []
+    q1 = pd.DataFrame({int(f.parent.name): pd.read_parquet(f).set_index('point_id').RH98_Q1 for f in files})
+    q1 = q1.reindex(px.index)
+    med = q1.loc[:, q1.notna().mean() >= 0.5].median(axis=1)
+    veg = ((px.BIOME == biome) & (med >= vegetated_rh98)).to_numpy()
+    feats = list(S2_BANDS) + ['NDVI']
+    meta, arrs, clears, waters = [], [], [], []
+    for y in sorted(int(f.parent.name) for f in files):
+        fr, fs, fc = (d / str(y) / f'{tile}.parquet' for d in (rf_dir, scl_dir, cs_dir))
+        if not (fr.exists() and fs.exists() and fc.exists()):
+            continue
+        img = pd.read_csv(fr.with_suffix('.images.tsv'), sep='\t')
+        rf = pd.read_parquet(fr).set_index('point_id').reindex(px.index)
+        scl = pd.read_parquet(fs).set_index('point_id').reindex(px.index)
+        cs = pd.read_parquet(fc).set_index('point_id').reindex(px.index)
+        iids = [i for i in img.item_id if i in scl.columns and f'B04:{i}' in rf.columns]
+        if not iids:
+            continue
+        a = np.stack([rf[[f'{b}:{i}' for i in iids]].to_numpy(np.float32) for b in S2_BANDS], -1)  # px, img, band
+        a[a == 0] = np.nan
+        with np.errstate(all='ignore'):
+            ndvi = (a[..., 7] - a[..., 3]) / (a[..., 7] + a[..., 3]) * 1e4
+        arrs.append(np.concatenate([a, ndvi[..., None]], -1))
+        s = scl[iids].to_numpy()
+        ok = cs.reindex(columns=iids).to_numpy() >= cs_clear
+        clears.append(~np.isin(s, excl) & ok)
+        waters.append((s == water_scl) & ok)
+        info = img.set_index('item_id').reindex(iids)
+        meta += [dict(tile=tile, biome=biome, year=y, item_id=i, date=pd.to_datetime(i.split('_')[2][:8]).date(),
+                      platform=i[:3], sun_zenith=z, relative_orbit=o)
+                 for i, z, o in zip(iids, info.sun_zenith, info.relative_orbit)]
+    if not arrs:
+        return []
+    a, clear, water = np.concatenate(arrs, 1), np.concatenate(clears, 1), np.concatenate(waters, 1)
+    with np.errstate(all='ignore'):
+        base = np.nanmedian(np.where(clear[..., None], a, np.nan), axis=1)        # pixel x feat, all years
+        base_w = np.nanmedian(np.where(water[..., None], a, np.nan), axis=1)
+    rows = []
+    for j, m in enumerate(meta):
+        cv, w, c = clear[:, j] & veg, water[:, j], clear[:, j]
+        with np.errstate(all='ignore'):
+            dv = np.nanmedian(a[cv, j] - base[cv], axis=0) if cv.sum() >= 50 else np.full(len(feats), np.nan)
+            dw = np.nanmedian(a[w, j] - base_w[w], axis=0) if w.sum() >= 20 else np.full(len(feats), np.nan)
+            p2 = np.nanpercentile(a[c, j], 2, axis=0) if c.sum() >= 50 else np.full(len(feats), np.nan)
+        rows.append(dict(m, n_veg=int(cv.sum()), n_water=int(w.sum()), n_clear=int(c.sum()),
+                         **{f'veg_{f}': float(v) for f, v in zip(feats, dv)},
+                         **{f'water_{f}': float(v) for f, v in zip(feats, dw)},
+                         **{f'p2_{f}': float(v) for f, v in zip(feats, p2)}))
+    return rows
+
+
+def summarize_stability_reflectance_per_image(tiles_file: str, values_dir: str, scl_dir: str, cloudscore_dir: str,
+                                              reflectance_dir: str, report_dir: str, pixels_dir: str,
+                                              cs_clear: float = 0.6, vegetated_rh98: float = 5.,
+                                              water_scl: int = 6, n_workers: int = 8, **kwargs):
+    """Reflectance offset of every selected image, to look for an image- or tile-level shift
+    (e.g. a radiometric shift of the 2024 inputs) rather than the yearly medians of
+    summarize_stability_reflectance. Clear = SCL not excluded and cs_cdf >= cs_clear.
+      veg_<band>    median over the clear vegetated own-biome pixels of (value - the pixel's median
+                    over the clear observations of all years); like the RH98 image offset
+      water_<band>  the same over SCL water pixels (a dark target that greening does not change)
+      p2_<band>     2nd percentile of the raw value over all clear pixels (dark-object level)
+    Reflectance x 1e4 (harmonized as in the deploy), NDVI x 1e4.
+      stability_reflectance_per_image.tsv  one row per tile x image"""
+    from const import SCL_EXCLUDE_LABELS
+    tiles = pd.read_csv(Path(tiles_file).expanduser(), sep='\t')
+    dirs = [Path(d).expanduser() for d in (values_dir, scl_dir, cloudscore_dir, reflectance_dir, pixels_dir)]
+    excl = np.array(SCL_EXCLUDE_LABELS)
+    rows = []
+    with ProcessPoolExecutor(n_workers) as ex:
+        futs = {ex.submit(_reflectance_per_image_tile, t.tile, t.biome, *dirs, excl, cs_clear,
+                          vegetated_rh98, water_scl): t.tile for t in tiles.itertuples()}
+        for f in as_completed(futs):
+            r = f.result()
+            print(f'{futs[f]}: {len(r)} images', flush=True)
+            rows += r
+    out = pd.DataFrame(rows).sort_values(['tile', 'date'])
+    report_dir = Path(report_dir).expanduser()
+    out.to_csv(report_dir / 'stability_reflectance_per_image.tsv', sep='\t', index=False)
+    print(out.groupby('year')[['veg_B02', 'veg_B04', 'veg_B08', 'veg_B12', 'veg_NDVI', 'water_B04', 'p2_B04']]
           .median().round(1))
     print(f'-> {report_dir}')
 
