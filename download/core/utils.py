@@ -715,9 +715,47 @@ cfg = {
     "*": {"warnings": "ignore"},
 }
 
+# Processing baseline 04.00 (deployed 2022-01-25) added BOA_ADD_OFFSET = -1000 to the L2A bands.
+# Older acquisitions reprocessed later (baseline 04.00/05.xx) carry the offset too, so the decision
+# is per product, not per acquisition date.
+BOA_OFFSET = 1000
+BOA_OFFSET_BASELINE = 4.0
+BOA_OFFSET_PROCESSED_FROM = '20220126'   # products processed from this day on are baseline >= 04.00
+BOA_OFFSET_ACQUIRED_FROM = datetime(2022, 1, 25)   # last resort: acquisition date (the original PC rule)
+BOA_OFFSET_BANDS = ["B01", "B02", "B03", "B04", "B05", "B06", "B07", "B08", "B8A", "B09", "B10", "B11", "B12"]
+
+
+def has_boa_offset(data) -> np.ndarray:
+    """Per time step of a stacked S2 L2A DataArray: True if the product carries BOA_ADD_OFFSET.
+
+    Uses, in this order: the 's2:processing_baseline' coordinate (>= 04.00); the processing time,
+    the last token of the item id (S2B_MSIL2A_20211203T172659_R012_T13QFC_20230131T063507 ->
+    2023-01-31, >= 2022-01-26); the acquisition date (>= 2022-01-25)."""
+    n = data.sizes['time']
+    by_date = pd.to_datetime(data.time.values) >= BOA_OFFSET_ACQUIRED_FROM
+    if 's2:processing_baseline' in data.coords:
+        pb = pd.to_numeric(pd.Series(np.broadcast_to(data.coords['s2:processing_baseline'].values, n)),
+                           errors='coerce').to_numpy()
+        if np.isfinite(pb).all():
+            return pb >= BOA_OFFSET_BASELINE
+    if 'id' in data.coords:
+        ids = np.broadcast_to(data.coords['id'].values, n)
+        out = []
+        for i, d in zip(ids, by_date):
+            proc = str(i).split('_')[-1][:8]
+            out.append(proc >= BOA_OFFSET_PROCESSED_FROM if proc.isdigit() and len(proc) == 8 else d)
+        return np.array(out, dtype=bool)
+    logging.warning('harmonize_to_old: no processing baseline or item id, deciding by acquisition date')
+    return by_date
+
+
 def harmonize_to_old(data):
     """
-    Harmonize new Sentinel-2 data to the old baseline.
+    Harmonize Sentinel-2 L2A data with BOA_ADD_OFFSET (processing baseline >= 04.00) to the old scale:
+    reflectance bands clipped at 1000, minus 1000; other bands (e.g. SCL) unchanged.
+
+    Adapted from the Planetary Computer example, which decides by acquisition date only and so
+    misses older acquisitions reprocessed with a new baseline (see has_boa_offset).
 
     Parameters
     ----------
@@ -727,37 +765,18 @@ def harmonize_to_old(data):
     Returns
     -------
     harmonized: xarray.DataArray
-        A DataArray with all values harmonized to the old
-        processing baseline.
+        The same DataArray (same time and band order) on the old processing-baseline scale.
     """
-    cutoff = datetime(2022, 1, 25)
-    offset = 1000
-    bands = [
-        "B01",
-        "B02",
-        "B03",
-        "B04",
-        "B05",
-        "B06",
-        "B07",
-        "B08",
-        "B8A",
-        "B09",
-        "B10",
-        "B11",
-        "B12",
-    ]
-
-    old = data.sel(time=slice(cutoff))
-
-    to_process = list(set(bands) & set(data.band.data.tolist()))
-    new = data.sel(time=slice(cutoff, None)).drop_sel(band=to_process)
-
-    new_harmonized = data.sel(time=slice(cutoff, None), band=to_process).clip(offset)
-    new_harmonized -= offset
-
-    new = xr.concat([new, new_harmonized], "band").sel(band=data.band.data.tolist())
-    return xr.concat([old, new], dim="time")
+    new = xr.DataArray(has_boa_offset(data), dims='time', coords={'time': data.time})
+    bands = data.band.data.tolist()
+    to_process = [b for b in bands if b in BOA_OFFSET_BANDS]
+    if not to_process or not bool(new.any()):
+        return data
+    refl = data.sel(band=to_process)
+    refl = xr.where(new, refl.clip(BOA_OFFSET) - BOA_OFFSET, refl, keep_attrs=True)
+    rest = data.drop_sel(band=to_process)
+    out = xr.concat([refl, rest], 'band') if rest.sizes['band'] else refl
+    return out.sel(band=bands).astype(data.dtype)
 
 
 def get_s2_tiles_by_landmass(s2_shfile):
