@@ -169,13 +169,21 @@ upload)
 #   resubmit continues from <year>/calibrated/source_coop_upload.tsv (one row per
 #   file: key, status, time, bytes; no per-file flag files).
 # ---------------------------------------
-# Args: year (default: 2020), workers (default: 128, the benchmarked knee)
+# Args: year (default: 2020), workers (default: 128, the benchmarked knee),
+#       only_tiles (optional file, one tile per line: upload only these, e.g.
+#       calibrated/tiles_not_repredicted.txt while the repredicted tiles are redone)
 parse_kv_args "${@:2}" || exit $?
 year=${year:-2020}
 cal_dir=$HOME/data/gvs/products/vsm/$year/calibrated
 [ -n "${CONDA_PREFIX:-}" ] || { echo "CONDA_PREFIX is empty: activate the env before submitting" >&2; exit 1; }
 
 python -m tools.run run=cp_upload_tiles run.year=$year || exit $?
+if [ -n "${only_tiles:-}" ]; then
+    [ -s "$only_tiles" ] || { echo "only_tiles=$only_tiles is missing or empty" >&2; exit 1; }
+    grep -Fxf "$only_tiles" $cal_dir/upload_tiles.txt > $cal_dir/upload_tiles.txt.tmp
+    mv $cal_dir/upload_tiles.txt.tmp $cal_dir/upload_tiles.txt
+    echo "only_tiles: $(wc -l < $cal_dir/upload_tiles.txt) tiles to upload"
+fi
 if [ ! -s $cal_dir/upload_tiles.txt ]; then
     echo "nothing to upload"
     exit 0

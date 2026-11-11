@@ -10,6 +10,14 @@ half-converted collection is the normal state during a quantile-by-quantile
 rollout, so an item can legitimately end up with Q1 pointing at cog/ while
 Q0/Q2 still point at geotiff/. Anything else in the item is left alone.
 
+Existing is not enough: the COG must be a conversion of the same file. 2020
+had COGs of an older prediction (2025-07/08) next to repredicted GeoTIFFs
+(2025-10), and a version of this tool that only checked existence pointed 3093
+tiles' Q1 at the old prediction, which then went to Source Coop. So an item is
+left alone (outcome "cog older than source" / "cog differs from source") when
+any target COG is older than its source, or when one window of pixels of the
+first asset to move differs between the two files.
+
 Defaults to dry_run=true: it prints what it would change and touches nothing.
 """
 
@@ -27,6 +35,20 @@ from pathlib import Path
 from typing import Any, Dict, Tuple
 
 FILE_URI = "file://"
+STALE, DIFFERS = "cog older than source", "cog differs from source"
+
+
+def _same_pixels(src: Path, cog: Path, size: int = 512) -> bool:
+    """One size x size window at the centre of both files is identical (nodata too)."""
+    import numpy as np
+    import rasterio
+    from rasterio.windows import Window
+    with rasterio.open(src) as a, rasterio.open(cog) as b:
+        if (a.width, a.height) != (b.width, b.height):
+            return False
+        w = Window(max(a.width // 2 - size // 2, 0), max(a.height // 2 - size // 2, 0),
+                   min(size, a.width), min(size, a.height))
+        return bool(np.array_equal(a.read(1, window=w), b.read(1, window=w)))
 
 
 def _retarget_item(item_path: Path, product_root: Path, raw_dirname: str,
@@ -53,6 +75,7 @@ def _retarget_item(item_path: Path, product_root: Path, raw_dirname: str,
 
     raw_seg, cog_seg = f"{os.sep}{raw_dirname}{os.sep}", f"{os.sep}{cog_dirname}{os.sep}"
     moved = missing = 0
+    first = None                       # (source, target) of the first asset to move
 
     for asset in item.get("assets", {}).values():
         href = asset.get("href", "")
@@ -69,8 +92,18 @@ def _retarget_item(item_path: Path, product_root: Path, raw_dirname: str,
         if not target.is_file() or target.stat().st_size == 0:
             missing += 1
             continue
+        # A COG older than its source cannot be a conversion of it; with the
+        # source gone there is nothing to check it against.
+        if not Path(path).is_file():
+            return "source missing", 0, missing
+        if target.stat().st_mtime < Path(path).stat().st_mtime:
+            return STALE, 0, missing
+        first = first or (Path(path), target)
         asset["href"] = FILE_URI + str(target)
         moved += 1
+
+    if first and not _same_pixels(*first):
+        return DIFFERS, 0, missing
 
     if not moved:
         return ("nothing to move" if not missing else "target missing"), 0, missing
@@ -150,16 +183,22 @@ def retarget_stac_assets(
 
     outcomes: Counter = Counter()
     moved = missing = 0
+    refused = []
     with ThreadPoolExecutor(workers) as pool:
-        for outcome, n_moved, n_missing in pool.map(one, items):
+        for item_id, (outcome, n_moved, n_missing) in zip(items, pool.map(one, items)):
             outcomes[outcome] += 1
             moved += n_moved
             missing += n_missing
+            if outcome in (STALE, DIFFERS):
+                refused.append(item_id)
 
     for outcome, n in outcomes.most_common():
         print(f"  {outcome:<20s} {n:6d} items")
     print(f"  assets repointed     {moved:6d}")
     print(f"  assets with no COG   {missing:6d}  (left on {raw_dirname}/)")
+    if refused:
+        print(f"  [warn] {len(refused)} items NOT repointed because the COG is not a "
+              f"conversion of the source (older or different pixels), e.g. {refused[:5]}")
     if dry_run:
         print("  dry run — nothing written; re-run with run.dry_run=false")
     else:
@@ -167,4 +206,5 @@ def retarget_stac_assets(
 
     return {"items": len(items), "outcomes": dict(outcomes),
             "assets_repointed": moved, "assets_missing_cog": missing,
+            "items_refused": refused,
             "backup_dir": str(backup_dir), "dry_run": dry_run}

@@ -39,7 +39,9 @@ postprocessing:
     data_source: local
     data_dir: ~/data/gvs/products/vsm
     original_predictions_dir: ~/data/gvs/products/vsm/{year}/original/tiles/cog
-    new_predictions_dir: ~/data/gvs/products/vsm/{year}/original/tiles/geotiff
+    # 2020 年重新预测(2025-10)的 tile 在 repredicted/,2026-11-05 从 original/tiles/geotiff 挪过来;
+    # original/ 只剩第一次预测(2025-07/08)。
+    new_predictions_dir: ~/data/gvs/products/vsm/{year}/repredicted/tiles/geotiff
 
   create_updated_stac_collection:
     _target_: postprocessing.core.stac_collection.StacCatalog
@@ -56,7 +58,7 @@ postprocessing:
       new_collection_id: vsm_local_masked
       prediction_sources:
         - ~/data/gvs/products/vsm/{year}/masked/tiles/geotiff
-        - ~/data/gvs/products/vsm/{year}/original/tiles/geotiff
+        - ~/data/gvs/products/vsm/{year}/repredicted/tiles/geotiff
         - ~/data/gvs/products/vsm/{year}/original/tiles/cog
 
   # =========================================================================
@@ -140,8 +142,9 @@ postprocessing:
   translate_predictions:
     _target_: postprocessing.core.translate.translate_tile
     target_type: function
-    src_dir: ~/data/gvs/products/vsm/2020/original/tiles/geotiff
-    dst_dir: ~/data/gvs/products/vsm/2020/original/tiles/cog
+    # 不要再写进 original/tiles/cog:那里是第一次预测,重新预测的 COG 放 repredicted/tiles/cog
+    src_dir: ~/data/gvs/products/vsm/2020/repredicted/tiles/geotiff
+    dst_dir: ~/data/gvs/products/vsm/2020/repredicted/tiles/cog
     # LERC_ZSTD is what every COG already in original/tiles/cog uses (1024
     # blocks, 5 NEAREST overviews, lossless via MAX_Z_ERROR=0). The function
     # signature defaults to plain ZSTD, which is ~40% larger — pin it here so

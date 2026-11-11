@@ -45,7 +45,7 @@ deploy:
       # kind=local 时改为从本地目录读(2020 年的数据在 hendrix 本地盘上),
       # 此时 bucket/prefix/rclone_remote 全部忽略,key 就是相对 dir 的路径。
       # kind=stac 时从 STAC collection 读:2020 年的 tile 分散在三个 root 下
-      # (original/tiles/cog、original/tiles/geotiff、masked/tiles/geotiff),
+      # (original/tiles/cog、masked/tiles/*、repredicted/tiles/*;2026-11-05 前 repredicted 在 original/tiles/geotiff),
       # 只有 item JSON 知道每个 tile 在哪,拿一个 dir + glob 去扫会挑错副本。
       kind: s3                 # s3 | local | stac
       dir: null                # kind=local 时必填,例: ~/data/gvs/2020
