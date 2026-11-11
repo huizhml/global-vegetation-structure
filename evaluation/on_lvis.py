@@ -643,6 +643,9 @@ def evaluate_on_lvis_pairs(
         control_rh: str = 'RH98',
         control_rh_min: float = None,
         control_rh_max: float = None,
+        sensitivity_col: str = 'gedi_sensitivity',
+        sensitivity_min: float = None,
+        sensitivity_max: float = None,
         max_distance_m: float = None,
         make_plot: bool = True,
         plot_metrics: list = None,
@@ -701,6 +704,11 @@ def evaluate_on_lvis_pairs(
             e.g. `control_rh_min=20` to keep only tall-canopy pixels.
             The filename suffix (`_filter_<control>_gt<min>_lt<max>`) keeps
             multiple bounds runnable into the same `save_dir`.
+        sensitivity_col, sensitivity_min, sensitivity_max: optional GEDI
+            sensitivity filter (typically on `gedi_sensitivity`, the GEDI
+            beam sensitivity carried through by extract_lvis_gedi_pairs).
+            Silently skipped if the column is missing (e.g. VSM pair
+            parquets). Filename suffix mirrors the control_rh one.
         max_distance_m: post-extraction tightening — drop pairs whose
             `match_distance_m` column exceeds this. Only relevant for the
             footprint-pairing pipeline (LVIS-vs-GEDI); silently ignored
@@ -758,6 +766,9 @@ def evaluate_on_lvis_pairs(
     has_distance = 'match_distance_m' in first_schema
     if has_distance:
         cols_needed.append('match_distance_m')
+    has_sensitivity = sensitivity_col in first_schema
+    if has_sensitivity:
+        cols_needed.append(sensitivity_col)
 
     df = pd.concat([pd.read_parquet(f, columns=cols_needed) for f in files],
                    ignore_index=True)
@@ -790,6 +801,23 @@ def evaluate_on_lvis_pairs(
         suffix_parts.append(f'{control_rh}lt{control_rh_max:g}')
         print(f'Filter LVIS {control_rh} <= {control_rh_max}: '
               f'{n_before} -> {len(df)} rows')
+    if sensitivity_min is not None or sensitivity_max is not None:
+        if not has_sensitivity:
+            print(f'sensitivity_min/max ignored: no {sensitivity_col} '
+                  f'column in {files[0].name}')
+        else:
+            if sensitivity_min is not None:
+                n_before = len(df)
+                df = df[df[sensitivity_col] >= sensitivity_min]
+                suffix_parts.append(f'sensgt{sensitivity_min:g}')
+                print(f'Filter {sensitivity_col} >= {sensitivity_min}: '
+                      f'{n_before} -> {len(df)} rows')
+            if sensitivity_max is not None:
+                n_before = len(df)
+                df = df[df[sensitivity_col] <= sensitivity_max]
+                suffix_parts.append(f'senslt{sensitivity_max:g}')
+                print(f'Filter {sensitivity_col} <= {sensitivity_max}: '
+                      f'{n_before} -> {len(df)} rows')
     suffix = f'_filter_{"_".join(suffix_parts)}' if suffix_parts else ''
 
     overall_rows = []

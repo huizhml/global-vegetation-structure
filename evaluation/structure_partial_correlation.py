@@ -29,6 +29,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 import pandas as pd
+import pingouin as pg
 from scipy import stats
 
 from const import BIOMES_BY_VALUE
@@ -153,24 +154,19 @@ def bootstrap_binned_correlation(df, true_col, pred_col, rh98_col,
 # METHOD B: PARTIAL CORRELATION
 # =============================================================================
 def partial_correlation(x, y, z):
-    """Partial correlation between x and y controlling for z, computed as the
-    correlation of residuals after regressing each on z. The design uses z and
-    z**2 so the control absorbs a nonlinear height dependence, not just a
-    linear trend. Returns (r, p, n)."""
+    """Partial correlation between x and y controlling for z and z**2 (so the
+    control absorbs a nonlinear height dependence, not just a linear trend).
+    Wraps `pingouin.partial_corr`; p-value uses df = n - 2 - 2 (two covariates).
+    Returns (r, p, n)."""
     valid = np.isfinite(x) & np.isfinite(y) & np.isfinite(z)
     x, y, z = x[valid], y[valid], z[valid]
     n = len(x)
     if n < 10:
         return np.nan, np.nan, n
 
-    Z = np.column_stack([np.ones(n), z, z ** 2])
-    beta_x, _, _, _ = np.linalg.lstsq(Z, x, rcond=None)
-    beta_y, _, _, _ = np.linalg.lstsq(Z, y, rcond=None)
-    res_x = x - Z @ beta_x
-    res_y = y - Z @ beta_y
-
-    r, p = stats.pearsonr(res_x, res_y)
-    return r, p, n
+    df = pd.DataFrame({'x': x, 'y': y, 'z': z, 'z2': z ** 2})
+    res = pg.partial_corr(data=df, x='x', y='y', covar=['z', 'z2'], method='pearson')
+    return float(res['r'].iloc[0]), float(res['p_val'].iloc[0]), n
 
 
 # =============================================================================
