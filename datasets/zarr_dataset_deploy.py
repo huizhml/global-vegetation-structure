@@ -274,7 +274,9 @@ class BaseDeployDataset(Dataset):
         if self.mask_with_scl:
             # mask snow and cloud (medium and high density). In some cases the probability cloud mask might miss some clouds
             scl_mask = torch.isin(scl, self.scl_exclude_labels)
-            
+        else:  # e.g. per-image time series masked later with SCL / Cloud Score+ at the points
+            scl_mask = torch.zeros_like(scl, dtype=torch.bool)
+
         # 1. do majority vote for scl water, esa built-up, esa water, and apply these masks to the final aggregated prediction
         # 2. apply image specific masks from scl about cloud and snow, and esa wc snow mask
         nodata_mask = scl == 0
@@ -991,7 +993,8 @@ class S2DatasetStream(BaseDeployDataset):
             if (df['s2:nodata_pixel_percentage']==0).sum() > 0:
                 df = df.head(self.n_iamges_per_tile)
             else:
-                idx = df.groupby('orbit')['eo:cloud_cover'].nsmallest(self.n_iamges_per_tile//2).index.get_level_values(1)
+                # API items have sat:relative_orbit ('orbit' exists only in the parquet tables)
+                idx = df.groupby('sat:relative_orbit')['eo:cloud_cover'].nsmallest(self.n_iamges_per_tile//2).index.get_level_values(1)
                 df = df.loc[idx]
         return df
 
