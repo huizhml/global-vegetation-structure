@@ -197,6 +197,22 @@ Uploads, benchmarks, and moves the COG products on Source Coop (`python -m deplo
 └── scripts/            # SLURM + data-transfer shell scripts (Hendrix, LUMI)
 ```
 
+## Citation
+
+Zhang, Hui, Nico Lang, Mikolaj Mazurczyk, Stefan Oehmcke, Ke Huang, Martin Brandt, Rasmus Fensholt, Ankit Kariryaa, and Christian Igel. "A vertical vegetation structure model of the Earth." EarthArXiv preprint (2026). [https://doi.org/10.31223/X5M22F](https://doi.org/10.31223/X5M22F)
+
+```bibtex
+@misc{zhang2026vertical,
+  title     = {A vertical vegetation structure model of the {Earth}},
+  author    = {Zhang, Hui and Lang, Nico and Mazurczyk, Mikolaj and Oehmcke, Stefan and Huang, Ke and Brandt, Martin and Fensholt, Rasmus and Kariryaa, Ankit and Igel, Christian},
+  year      = {2026},
+  publisher = {EarthArXiv},
+  note      = {Preprint},
+  doi       = {10.31223/X5M22F},
+  url       = {https://doi.org/10.31223/X5M22F}
+}
+```
+
 ## Contact
 
 huzh@di.ku.dk, nila@di.ku.dk, igel@di.ku.dk (University of Copenhagen)

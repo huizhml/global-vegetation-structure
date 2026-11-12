@@ -56,3 +56,5 @@ logs/
 *.ipynb
 *.h5
 artifacts
+# internal reports, not for GitHub
+docs/reports/
